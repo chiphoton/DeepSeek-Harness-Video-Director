@@ -1,0 +1,139 @@
+{
+  "$schema": "../schemas/video-director-node-v1.schema.json",
+  "protocol": "video-director.node/v1",
+  "type": "example.comfyui-basic-image",
+  "version": "1.0.0",
+  "manifest": {
+    "title": "ComfyUI Basic Image",
+    "description": "A small checkpoint, sampler, and VAE workflow demonstrating primary and Advanced fields.",
+    "category": "image",
+    "inputs": [],
+    "outputs": [
+      { "id": "image", "label": "Image", "types": ["image"] }
+    ],
+    "fields": [
+      {
+        "id": "prompt",
+        "label": "Prompt",
+        "schema": { "type": "string", "maxLength": 100000 },
+        "default": "A production storyboard frame, rainy neon street, cinematic practical lighting",
+        "placement": "primary",
+        "control": "textarea"
+      },
+      {
+        "id": "negativePrompt",
+        "label": "Negative Prompt",
+        "schema": { "type": "string", "maxLength": 100000 },
+        "default": "text, logo, watermark, malformed hands",
+        "placement": "advanced",
+        "control": "textarea"
+      },
+      {
+        "id": "width",
+        "label": "Width",
+        "schema": { "type": "number", "min": 64, "max": 4096, "step": 64, "integer": true },
+        "default": 1024,
+        "placement": "primary",
+        "control": "input"
+      },
+      {
+        "id": "height",
+        "label": "Height",
+        "schema": { "type": "number", "min": 64, "max": 4096, "step": 64, "integer": true },
+        "default": 1024,
+        "placement": "primary",
+        "control": "input"
+      },
+      {
+        "id": "seed",
+        "label": "Seed",
+        "schema": { "type": "number", "min": 0, "integer": true },
+        "default": 1001,
+        "placement": "primary",
+        "control": "input"
+      },
+      {
+        "id": "steps",
+        "label": "Steps",
+        "schema": { "type": "number", "min": 1, "max": 100, "integer": true },
+        "default": 24,
+        "placement": "advanced",
+        "control": "input"
+      },
+      {
+        "id": "cfg",
+        "label": "CFG",
+        "schema": { "type": "number", "min": 0, "max": 30, "step": 0.1 },
+        "default": 7,
+        "placement": "advanced",
+        "control": "input"
+      },
+      {
+        "id": "checkpoint",
+        "label": "Checkpoint",
+        "schema": { "type": "string", "maxLength": 2048 },
+        "default": "REPLACE_WITH_AN_INSTALLED_CHECKPOINT.safetensors",
+        "placement": "advanced",
+        "control": "input"
+      }
+    ]
+  },
+  "implementation": {
+    "kind": "comfyui.workflow",
+    "operation": "image-generation",
+    "workflow": {
+      "1": {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {
+          "ckpt_name": "REPLACE_WITH_AN_INSTALLED_CHECKPOINT.safetensors"
+        }
+      },
+      "2": {
+        "class_type": "CLIPTextEncode",
+        "inputs": { "text": "positive", "clip": ["1", 1] }
+      },
+      "3": {
+        "class_type": "CLIPTextEncode",
+        "inputs": { "text": "negative", "clip": ["1", 1] }
+      },
+      "4": {
+        "class_type": "EmptyLatentImage",
+        "inputs": { "width": 1024, "height": 1024, "batch_size": 1 }
+      },
+      "5": {
+        "class_type": "KSampler",
+        "inputs": {
+          "seed": 1001,
+          "steps": 24,
+          "cfg": 7,
+          "sampler_name": "euler",
+          "scheduler": "normal",
+          "denoise": 1,
+          "model": ["1", 0],
+          "positive": ["2", 0],
+          "negative": ["3", 0],
+          "latent_image": ["4", 0]
+        }
+      },
+      "6": {
+        "class_type": "VAEDecode",
+        "inputs": { "samples": ["5", 0], "vae": ["1", 2] }
+      },
+      "7": {
+        "class_type": "SaveImage",
+        "inputs": { "filename_prefix": "video-director/basic-image", "images": ["6", 0] }
+      }
+    },
+    "bindings": [
+      { "target": { "nodeId": "1", "input": "ckpt_name" }, "source": { "kind": "field", "fieldId": "checkpoint" } },
+      { "target": { "nodeId": "2", "input": "text" }, "source": { "kind": "field", "fieldId": "prompt" } },
+      { "target": { "nodeId": "3", "input": "text" }, "source": { "kind": "field", "fieldId": "negativePrompt" } },
+      { "target": { "nodeId": "4", "input": "width" }, "source": { "kind": "field", "fieldId": "width" } },
+      { "target": { "nodeId": "4", "input": "height" }, "source": { "kind": "field", "fieldId": "height" } },
+      { "target": { "nodeId": "5", "input": "seed" }, "source": { "kind": "field", "fieldId": "seed" } },
+      { "target": { "nodeId": "5", "input": "steps" }, "source": { "kind": "field", "fieldId": "steps" } },
+      { "target": { "nodeId": "5", "input": "cfg" }, "source": { "kind": "field", "fieldId": "cfg" } }
+    ],
+    "output": "auto"
+  }
+}

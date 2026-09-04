@@ -1,0 +1,47 @@
+- insert:
+    - id: video-director
+      name: dsh-video-director
+      config:
+        dataDir: ./.dsh-video-director
+        maxAssetBytes: 209715200
+        minimaxH3LicenseAccepted: true
+        providers:
+          - id: ollama
+            label: Ollama
+            kind: ollama
+            baseUrl: http://127.0.0.1:11434
+            model: qwen3-vl
+          - id: openai
+            label: OpenAI
+            kind: openai-compatible
+            baseUrl: https://api.openai.com/v1
+            model: gpt-5.6-terra
+            imageModel: gpt-image-2
+            requiresApiKey: true
+            apiKey: !!js process.env.OPENAI_API_KEY
+          - id: codex-plan
+            label: Codex Plan
+            kind: codex-plan
+            model: gpt-5.6-sol
+            timeoutMs: 600000
+          - id: comfyui
+            label: ComfyUI
+            kind: comfyui
+            baseUrl: http://127.0.0.1:8188
+            mcpTool: mcp__comfyui__call_tool
+            mcpBaseUrl: http://127.0.0.1:8188
+
+    - id: video-director-comfyui-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      disabled: true
+      config:
+        serverName: comfyui
+        transport: stdio
+        command: npx
+        args:
+          - -y
+          - comfyui-mcp@0.49.3
+          - --comfyui-url
+          - http://127.0.0.1:8188
+        env:
+          COMFYUI_MCP_AUTOUPDATE: '0'

@@ -1,0 +1,79 @@
+{
+  "description": "Generic ComfyUI API workflow with deterministic Video Director bindings.",
+  "nodeData": {
+    "kind": "image-generation",
+    "title": "ComfyUI image",
+    "providerId": "comfyui",
+    "prompt": "A production storyboard frame, rainy neon street, cinematic practical lighting",
+    "negativePrompt": "text, logo, watermark, malformed hands",
+    "width": 1024,
+    "height": 1024,
+    "seed": 1001,
+    "workflow": {
+      "1": {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {
+          "ckpt_name": "REPLACE_WITH_AN_INSTALLED_CHECKPOINT.safetensors"
+        }
+      },
+      "2": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {
+          "text": "replaced by the prompt binding",
+          "clip": ["1", 1]
+        }
+      },
+      "3": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {
+          "text": "replaced by the negativePrompt binding",
+          "clip": ["1", 1]
+        }
+      },
+      "4": {
+        "class_type": "EmptyLatentImage",
+        "inputs": {
+          "width": 1024,
+          "height": 1024,
+          "batch_size": 1
+        }
+      },
+      "5": {
+        "class_type": "KSampler",
+        "inputs": {
+          "seed": 1001,
+          "steps": 24,
+          "cfg": 7,
+          "sampler_name": "euler",
+          "scheduler": "normal",
+          "denoise": 1,
+          "model": ["1", 0],
+          "positive": ["2", 0],
+          "negative": ["3", 0],
+          "latent_image": ["4", 0]
+        }
+      },
+      "6": {
+        "class_type": "VAEDecode",
+        "inputs": {
+          "samples": ["5", 0],
+          "vae": ["1", 2]
+        }
+      },
+      "7": {
+        "class_type": "SaveImage",
+        "inputs": {
+          "filename_prefix": "video-director/example-image",
+          "images": ["6", 0]
+        }
+      }
+    },
+    "bindings": [
+      { "nodeId": "2", "input": "text", "from": "prompt" },
+      { "nodeId": "3", "input": "text", "from": "negativePrompt" },
+      { "nodeId": "4", "input": "width", "from": "width" },
+      { "nodeId": "4", "input": "height", "from": "height" },
+      { "nodeId": "5", "input": "seed", "from": "seed" }
+    ]
+  }
+}

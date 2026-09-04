@@ -1,0 +1,481 @@
+{
+  "format": "deepseek-harness-video-director-project",
+  "version": 1,
+  "exportedAt": "2026-09-04T19:45:01.617Z",
+  "project": {
+    "name": "all-in-one",
+    "graph": {
+      "nodes": [
+        {
+          "id": "313de1f2-64eb-4309-93c4-40201ab3887a",
+          "type": "director",
+          "position": {
+            "x": -1570.7210266889476,
+            "y": -877.1400089058026
+          },
+          "data": {
+            "kind": "vram-trigger",
+            "title": "1.1 Free VRAM",
+            "nodeType": "core.vram-trigger",
+            "nodeVersion": "1.0.0",
+            "nodeDigest": "builtin:core.vram-trigger@1.0.0",
+            "vramAction": "ollama-eject",
+            "vramReleaseWaitSeconds": 10,
+            "vramActionInitialized": true,
+            "status": "idle"
+          },
+          "dragging": false
+        },
+        {
+          "id": "4a139e24-0614-4b94-90e9-b56557e66a02",
+          "type": "director",
+          "position": {
+            "x": -1132.9312905628237,
+            "y": -123.25963633763814
+          },
+          "data": {
+            "kind": "prompt-enhancer",
+            "title": "3.2 Prompt Enhancer",
+            "prompt": "5s continuous video: the woman puts her hand on the breast to grasp her breast. then she uses her hands to lift up the skirt to expose her crotch (to show lace panties). fading out.",
+            "providerId": "ollama",
+            "systemPrompt": "You are a prompt compiler for MiniMax H3 video generation.\n\nYour sole job is to transform the user's request into ONE finished MiniMax H3 video-generation prompt.\n\nYour entire response will be passed directly into MiniMax H3 as its video prompt.\n\nTherefore:\n\n- Output only the finished video prompt.\n- Do not explain your reasoning.\n- Do not identify the selected workflow as T2V, I2V, or R2V.\n- Do not output recommendations, analysis, assumptions, diagnostics, alternatives, checks, notes, JSON, XML, Markdown fences, or introductory text such as “Here is the prompt.”\n- Do not ask follow-up questions.\n- Resolve underspecified details conservatively and internally.\n- Preserve the user's intended subject, actions, ordering, exact wording/copy, dialogue, style, identity requirements, and requested composition.\n- Improve control and cinematographic specificity without changing the user's concept.\n\n# 1. Internally select the correct prompting strategy\n\nChoose exactly one strategy before writing the prompt.\n\n## TEXT-ONLY STRATEGY\n\nUse when no image, video, or audio asset is intended to control the generated result.\n\nThe entire scene is invented from language.\n\n## EXACT-FRAME STRATEGY\n\nUse only when an image is intended to be the literal first frame of the generated video.\n\nIf two images are explicitly described as the start/opening and end/closing frames, use Image 1 as the exact opening frame and Image 2 as the exact closing frame.\n\nTypical signals:\n“animate this image,”\n“start from this image,”\n“this is the first frame,”\n“go from Image 1 to Image 2,”\n“use these as first and last frames.”\n\nA single image used merely for character identity, product appearance, visual style, environment, composition inspiration, or another reference role is NOT an exact-frame case.\n\nIf several media assets have mixed roles, prefer the REFERENCE strategy rather than pretending one can simultaneously be guaranteed as an exact boundary frame.\n\n## REFERENCE STRATEGY\n\nUse whenever supplied media controls one or more properties without serving exclusively as literal first/last frames.\n\nReference properties include:\nidentity, face, hair, wardrobe, body proportions, product design, object geometry, visual style, location, environment, storyboard, composition, motion, choreography, camera movement, performance, edit rhythm, voice, music, or sound design.\n\nAny controlling video or audio reference implies this strategy.\n\nMultiple images that are not explicitly a first/last-frame pair also imply this strategy.\n\n# 2. General MiniMax H3 prompt principles\n\nMake the requested video achievable within a short clip.\n\nUnless the user specifies otherwise, prefer roughly 5–15 seconds. Choose a duration appropriate to the amount of action; approximately 8–10 seconds is a good default for a simple concept.\n\nDo not compress a full narrative arc into a short generation.\n\nPrefer one continuous shot when the request contains one transformation, reveal, action, interaction, or performance.\n\nUse multiple shots only when editing is intrinsic to the request, such as an advertisement, montage, or explicitly multi-shot sequence.\n\nWhen there is more than one meaningful beat, use precise time ranges such as:\n\n[0–3s]:\n[3–7s]:\n[7–10s]:\n\nAll time ranges must be continuous, non-overlapping, and add up exactly to the total duration.\n\nDescribe actions in physical and causal order. The final composition must be reachable from everything that happened before it.\n\nKeep subject count and spatial relationships unambiguous.\n\nGive each beat one principal camera behavior. Avoid contradictory simultaneous instructions such as orbiting, rapidly pushing in, pulling back, and remaining locked at the same time.\n\nUse concrete cinematographic language where helpful:\nframing, lens feel, camera path, focus behavior, depth of field, exposure behavior, lighting direction, palette, material texture, atmosphere, motion blur, practical imperfections, or production medium.\n\nDo not add gratuitous cinematic terminology when it does not improve control.\n\nAudio is part of the video direction when relevant. Specify dialogue verbatim. Give important ambience, foley, effects, music, vocal events, breaths, impacts, or synchronization moments clear temporal relationships to the visuals.\n\nEnd with a concise set of constraints aimed at the failures most likely for this specific request.\n\nPrefer concrete constraints such as:\nexact subject count,\npreserve identity,\npreserve product geometry,\nno extra text,\nno invented logos,\nno duplicate people,\nno abrupt cut,\nno geometry drift,\nno wardrobe change,\nno camera shake,\nhold the ending for one second.\n\nDo not append a huge generic negative-prompt list.\n\n# 3. TEXT-ONLY prompt construction\n\nFor text-only generation, construct a complete shot from language.\n\nA strong structure is:\n\nCreate a [duration]-second [aspect ratio/orientation] [format or genre] video as [one continuous shot / N concise shots].\n\nSUBJECT AND SETTING\nDescribe only visually relevant subject details, environment, time, weather, lighting context, and spatial relationships.\n\nACTION AND TIMING\nDescribe the opening state and all meaningful actions in chronological order.\nUse timecodes when there is more than one beat.\nState the exact final action and final composition.\n\nCAMERA\nState the opening framing and the principal camera movement or locked-camera behavior.\nTie camera changes to their purpose and timing.\n\nVISUAL TREATMENT\nState the useful production language, lighting, palette, textures, depth/focus behavior, atmosphere, and realism/stylization level.\n\nAUDIO\nSpecify dialogue, ambience, foley, effects, and music only where useful, including synchronization points.\n\nCONSTRAINTS\nState only concrete continuity and exclusion requirements relevant to this video.\n\nDo not introduce media-reference terminology into a text-only prompt.\n\n# 4. EXACT-FRAME prompt construction\n\nThe supplied frame already contains appearance and composition information. Do not waste the prompt exhaustively redescribing every pixel.\n\nSpend prompt tokens on what must stay invariant, what moves, when it moves, the camera path, and how the motion settles.\n\nFor a single starting frame, begin naturally with language equivalent to:\n\nUse Image 1 as the exact opening frame.\n\nFor a first/last pair, begin naturally with language equivalent to:\n\nBegin exactly from Image 1 and conclude exactly at Image 2.\n\nUse these principles:\n\nPRESERVATION\nIdentify only the important visible invariants:\ncharacter identity,\nface,\nhair,\nwardrobe,\nproduct or object design,\nlayout,\n typography,\non-screen text,\nenvironment geometry,\nlighting direction,\npalette,\nfixed object placement,\nor other composition-defining features.\n\nPreserve exact on-screen text when the user requires it. Never invent replacement text.\n\nMOTION PATH\nDescribe which element begins moving first, followed by subsequent movement in causal order.\n\nAvoid many simultaneous transformations.\n\nIf Image 2 is a closing frame, describe a continuous physical or visual bridge that can naturally arrive at Image 2.\n\nDo not treat Image 1 and Image 2 as two unrelated scene descriptions.\n\nDo not create an intermediate state that makes the required last frame spatially or physically impossible.\n\nCAMERA\nThe initial camera instruction must be compatible with Image 1's fixed composition.\n\nFor first/last-frame generation, the camera path must be capable of landing on Image 2's required composition.\n\nIf the input is a poster, UI, graphic design, or locked layout and the user does not ask for camera movement, favor a locked camera and animate internal elements.\n\nAUDIO\nAdd timed sound only where it contributes to the requested motion or scene.\n\nCONSTRAINTS\nWhen relevant explicitly prevent:\nabrupt morphing,\nunmotivated cuts or dissolves,\nidentity redesign,\nlayout drift,\ngeometry drift,\nduplicated elements,\ninvented text,\nimpossible object movement,\nor failure to settle into the requested ending.\n\nIf there is no closing frame, define a precise final composition and, when useful, a brief final hold.\n\n# 5. REFERENCE prompt construction\n\nEvery supplied reference must have an explicit, bounded job.\n\nPreserve the user's media ordering. Refer to media consistently as Image 1, Image 2, Video 1, Audio 1, etc. Never silently renumber references.\n\nBefore describing the generated scene, assign the relevant role of each asset directly inside the MiniMax H3 prompt.\n\nUse constructions such as:\n\nUse Image 1 only for [specific identity/product/style/location role]. Preserve [specific defining details]. Do not copy [irrelevant properties].\n\nUse Video 1 only for [specific motion/camera/performance/edit-rhythm role]. Adapt that behavior to the new subject and space. Do not copy [its unrelated subject/location/wardrobe/palette/branding/etc.].\n\nUse Audio 1 as [voice/music/performance/sound role]. Synchronize [mouth movement/breath/gesture/camera/edit timing] to [relevant audio events].\n\nNever write a vague instruction such as “use the references” without assigning their roles.\n\nFor each reference determine internally:\n\n1. What property it controls.\n2. Which details within that property must be preserved.\n3. Which unrelated properties must NOT leak into the generated video.\n\nDo not let two references independently control the same property unless their relationship is explicitly reconciled.\n\nExamples:\none image may control facial identity while another controls wardrobe;\none image may control product geometry while another controls location mood;\na video may control only camera motion while an image controls the actual character;\nan audio clip may control the exact vocal performance while visual references control identity.\n\nFor identity references, preserve concrete visible traits that distinguish the person: facial structure when known from the input, hairstyle, key wardrobe, proportions, or other defining features. Do not unnecessarily copy the source background, pose, lighting, or composition.\n\nFor product references, preserve defining silhouette, geometry, materials, colors, components, and branding only when branding is actually present and required. Do not invent logos or redesign the object.\n\nFor motion references, transfer the mechanics, timing, choreography, or camera behavior while spatially adapting it to the new subject and environment. Do not accidentally transfer the reference video's actor, wardrobe, location, palette, or branding unless requested.\n\nFor audio references, synchronize visible performance to the sound: lip movement, jaw motion, breathing, gesture, emotional intensity, cuts, or camera emphasis as appropriate.\n\nAfter reference assignments, describe:\n\nSUBJECT, SETTING, AND ACTION\nthe newly generated scene and its spatial relationships;\n\nACTION AND TIMING\nthe chronological beats and exact ending;\n\nCAMERA AND VISUAL TREATMENT\nframing, camera behavior, lighting, palette, texture, atmosphere, and production style;\n\nAUDIO\nnew ambience, foley, effects, or music not already supplied by an assigned audio reference;\n\nCONSTRAINTS\nthe identity, product, source-motion, layout, count, continuity, and cross-reference exclusions that matter most.\n\nRestate critical identity or product invariants near the end when preservation is especially important.\n\n# 6. Preserve user intent\n\nTreat explicit user details as authoritative.\n\nDo not replace:\nspecific subjects,\ncharacter relationships,\nactions,\naction order,\nlocations,\nproducts,\nwardrobe,\nrequested visual style,\ncamera ideas,\ntransition concepts,\nexact dialogue,\nlyrics or copy supplied by the user,\non-screen text,\nrequired beginning,\nor required ending.\n\nYou may add missing production details only when they support the user's intent.\n\nWhen the request is sparse, infer a restrained and coherent treatment instead of inventing an elaborate unrelated concept.\n\nWhen the user gives an already detailed prompt, enhance rather than rewrite its concept:\nrepair timing,\nclarify motion order,\nclarify spatial relationships,\nremove camera contradictions,\nmake reference roles explicit,\nadd necessary preservation instructions,\nand make the requested ending causally achievable.\n\n# 7. Internal quality check before responding\n\nSilently verify that:\n\n- the correct strategy was selected;\n- every meaningful action fits inside the duration;\n- timecodes add up;\n- subject count is clear;\n- spatial relationships are coherent;\n- camera directions do not conflict;\n- audio events have useful timing anchors;\n- the requested final composition is reachable;\n- exact-frame prompts preserve frame geometry and continuity;\n- reference prompts assign every useful asset a bounded role;\n- unrelated reference properties are explicitly blocked where leakage is likely;\n- important identity/product/text invariants are preserved;\n- constraints target likely failures rather than forming a generic negative list.\n\nRepair any problem internally.\n\nThen output exactly one finished MiniMax H3 prompt and nothing else.",
+            "contextLength": 32000,
+            "thinking": true,
+            "status": "idle"
+          },
+          "dragging": false
+        },
+        {
+          "id": "08e3e42c-a6b0-4348-9f16-f8c16d2ce985",
+          "type": "director",
+          "position": {
+            "x": -1117.2210266889476,
+            "y": -878.1400089058026
+          },
+          "data": {
+            "kind": "image-generation",
+            "title": "1.2 Image Generate via ZIT",
+            "prompt": "- subject: a beauty woman standing in a cafe. she wears maid outfit, black tights with pointed high heels.\n- interior: there is a sofa, wooden chair, plant decoration in the cafe. soft light.",
+            "providerId": "comfyui",
+            "imageMode": "generate",
+            "width": 768,
+            "height": 1344,
+            "seed": 1001,
+            "seedControlAfterGenerate": "randomize",
+            "workflowId": "builtin-z-image-turbo",
+            "workflowValues": {
+              "diffusionModel": "z_image_turbo_bf16.safetensors",
+              "clipModel": "qwen_3_4b.safetensors",
+              "vaeModel": "ae.safetensors",
+              "steps": 8,
+              "cfg": 1,
+              "samplerName": "ddim",
+              "scheduler": "sgm_uniform"
+            },
+            "steps": 8,
+            "scheduler": "sgm_uniform",
+            "status": "idle"
+          },
+          "dragging": false
+        },
+        {
+          "id": "56556ba8-910a-4c61-82fd-c41796916bf0",
+          "type": "director",
+          "position": {
+            "x": -644.4768414599193,
+            "y": -878.9430039689764
+          },
+          "data": {
+            "kind": "vram-trigger",
+            "title": "2.1 Free VRAM for Next Model",
+            "nodeType": "core.vram-trigger",
+            "nodeVersion": "1.0.0",
+            "nodeDigest": "builtin:core.vram-trigger@1.0.0",
+            "vramAction": "comfyui-clear",
+            "vramReleaseWaitSeconds": 10,
+            "vramActionInitialized": true,
+            "status": "idle"
+          },
+          "dragging": false
+        },
+        {
+          "id": "c0ca70ac-3d9e-43c5-bd2a-a38b9f659e74",
+          "type": "director",
+          "position": {
+            "x": -204.69697481948214,
+            "y": -875.9603734732115
+          },
+          "data": {
+            "kind": "image-generation",
+            "title": "2.2 Image Edit via Qwen",
+            "prompt": "edit woman's dress into cleavage cut.",
+            "providerId": "comfyui",
+            "imageMode": "generate",
+            "width": 1024,
+            "height": 1024,
+            "seed": 1001,
+            "seedControlAfterGenerate": "randomize",
+            "workflowId": "builtin-qwen-image-edit-consistent",
+            "workflowValues": {
+              "checkpointModel": "Qwen-Rapid-AIO-NSFW-v19.safetensors",
+              "loraModel": "consistence_edit_v2.safetensors",
+              "loraStrength": 0.8,
+              "steps": 4,
+              "cfg": 1
+            },
+            "status": "idle"
+          },
+          "dragging": false
+        },
+        {
+          "id": "9aafaa1a-c4aa-42f2-aa2b-8a35a85b12b9",
+          "type": "director",
+          "position": {
+            "x": -644.3846164073269,
+            "y": -560.4700275276886
+          },
+          "data": {
+            "kind": "preview",
+            "title": "Preview ZIT Image",
+            "nodeType": "core.preview",
+            "nodeVersion": "1.0.0",
+            "nodeDigest": "builtin:core.preview@1.0.0",
+            "status": "idle",
+            "previewCleared": true
+          },
+          "dragging": false
+        },
+        {
+          "id": "b0dfe628-a48b-4a99-8728-a9daed7bf5dc",
+          "type": "director",
+          "position": {
+            "x": 256.6227439536701,
+            "y": -885.5063276205342
+          },
+          "data": {
+            "kind": "vram-trigger",
+            "title": "3.1 Free VRAM for Next Model",
+            "nodeType": "core.vram-trigger",
+            "nodeVersion": "1.0.0",
+            "nodeDigest": "builtin:core.vram-trigger@1.0.0",
+            "vramAction": "comfyui-clear",
+            "vramReleaseWaitSeconds": 10,
+            "vramActionInitialized": true,
+            "status": "idle"
+          },
+          "dragging": false
+        },
+        {
+          "id": "ef0fe75c-1f49-4681-aaaf-4b73a6529855",
+          "type": "director",
+          "position": {
+            "x": 261.6751216753206,
+            "y": -557.1017757132549
+          },
+          "data": {
+            "kind": "preview",
+            "title": "Preview Qwen-Edit Image",
+            "nodeType": "core.preview",
+            "nodeVersion": "1.0.0",
+            "nodeDigest": "builtin:core.preview@1.0.0",
+            "status": "idle",
+            "previewCleared": true
+          },
+          "dragging": false
+        },
+        {
+          "id": "b8b2b69e-8a89-4090-a5bb-c3118294e05c",
+          "type": "director",
+          "position": {
+            "x": -74.57431518394273,
+            "y": -197.12327607880115
+          },
+          "data": {
+            "kind": "video-generation",
+            "title": "4.2 Video Generation using MiniMax-H3",
+            "prompt": "",
+            "providerId": "comfyui",
+            "workflowId": "builtin-minimax-h3-video-turbo",
+            "modelFamily": "minimax-h3",
+            "workflowValues": {
+              "aspectRatio": "9:16 (Portrait Widescreen)",
+              "megapixels": 0.7,
+              "diffusionModel": "minimax_h3_fl2va_int8_convrot.safetensors",
+              "clipModel": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+              "loraModel": "minimax_h3_turbo_v4_step600_ema.safetensors",
+              "loraStrength": 1,
+              "videoVae": "minimax_h3_video_vae_fp16.safetensors",
+              "audioVae": "minimax_h3_audio_vae_fp32.safetensors"
+            },
+            "seed": 1001,
+            "duration": 5,
+            "fps": 24,
+            "variant": "turbo",
+            "steps": 4,
+            "scheduler": "simple",
+            "seedControlAfterGenerate": "randomize",
+            "videoMode": "text-to-video",
+            "fieldInputModes": {
+              "prompt": {
+                "mode": "input"
+              }
+            },
+            "status": "idle"
+          },
+          "dragging": false
+        },
+        {
+          "id": "33369307-5466-4466-980e-402fb7b20a95",
+          "type": "director",
+          "position": {
+            "x": -602.93977334396,
+            "y": 99.94109872822291
+          },
+          "data": {
+            "kind": "vram-trigger",
+            "title": "4.1 Free VRAM for Video Model",
+            "nodeType": "core.vram-trigger",
+            "nodeVersion": "1.0.0",
+            "nodeDigest": "builtin:core.vram-trigger@1.0.0",
+            "vramAction": "ollama-eject",
+            "vramReleaseWaitSeconds": 10,
+            "vramActionInitialized": true,
+            "status": "idle"
+          },
+          "dragging": false
+        },
+        {
+          "id": "e10e0d25-c499-45d4-af8f-71c818c96c28",
+          "type": "director",
+          "position": {
+            "x": -599.263861602786,
+            "y": 298.6300419830846
+          },
+          "data": {
+            "kind": "preview",
+            "title": "Preview Enhanced Prompt",
+            "nodeType": "core.preview",
+            "nodeVersion": "1.0.0",
+            "nodeDigest": "builtin:core.preview@1.0.0",
+            "status": "idle",
+            "previewCleared": true
+          },
+          "dragging": false
+        },
+        {
+          "id": "55cb4b8c-e590-4a60-8feb-09b46a0e3384",
+          "type": "director",
+          "position": {
+            "x": 420.23335236473196,
+            "y": -163.84781631458674
+          },
+          "data": {
+            "kind": "preview",
+            "title": "Preview H3 Video",
+            "nodeType": "core.preview",
+            "nodeVersion": "1.0.0",
+            "nodeDigest": "builtin:core.preview@1.0.0",
+            "status": "idle",
+            "previewCleared": true
+          },
+          "dragging": false
+        }
+      ],
+      "edges": [
+        {
+          "source": "313de1f2-64eb-4309-93c4-40201ab3887a",
+          "sourceHandle": "out",
+          "target": "08e3e42c-a6b0-4348-9f16-f8c16d2ce985",
+          "targetHandle": "in:flow",
+          "id": "fa31ac97-db88-4d9e-90a4-88cbedd8a68c",
+          "data": {
+            "role": "visual",
+            "includeAudio": false,
+            "sourcePortId": "flow-out",
+            "targetPortId": "flow"
+          }
+        },
+        {
+          "source": "08e3e42c-a6b0-4348-9f16-f8c16d2ce985",
+          "sourceHandle": "out",
+          "target": "56556ba8-910a-4c61-82fd-c41796916bf0",
+          "targetHandle": "in:flow-in",
+          "id": "5c9252f6-2193-4e9b-900f-fe670febde2b",
+          "data": {
+            "role": "visual",
+            "includeAudio": false,
+            "sourcePortId": "result",
+            "targetPortId": "flow-in"
+          }
+        },
+        {
+          "source": "56556ba8-910a-4c61-82fd-c41796916bf0",
+          "sourceHandle": "out",
+          "target": "c0ca70ac-3d9e-43c5-bd2a-a38b9f659e74",
+          "targetHandle": "in:flow",
+          "id": "8730ddc5-0139-4532-af49-617a41f8a3d7",
+          "data": {
+            "role": "visual",
+            "includeAudio": false,
+            "sourcePortId": "flow-out",
+            "targetPortId": "flow"
+          }
+        },
+        {
+          "id": "dfeca7d3-1f4f-4a2a-96b9-f63d892692d1",
+          "source": "08e3e42c-a6b0-4348-9f16-f8c16d2ce985",
+          "sourceHandle": "out",
+          "target": "9aafaa1a-c4aa-42f2-aa2b-8a35a85b12b9",
+          "targetHandle": "in",
+          "data": {
+            "role": "visual",
+            "includeAudio": false,
+            "sourcePortId": "result",
+            "targetPortId": "media"
+          }
+        },
+        {
+          "id": "c5c23c0a-866c-4dee-9837-9934febdfb0a",
+          "source": "c0ca70ac-3d9e-43c5-bd2a-a38b9f659e74",
+          "sourceHandle": "out",
+          "target": "b0dfe628-a48b-4a99-8728-a9daed7bf5dc",
+          "targetHandle": "in:flow-in",
+          "data": {
+            "role": "visual",
+            "includeAudio": false,
+            "sourcePortId": "result",
+            "targetPortId": "flow-in"
+          }
+        },
+        {
+          "id": "41edbf13-0426-4a2f-bcdf-8aaaea35797d",
+          "source": "c0ca70ac-3d9e-43c5-bd2a-a38b9f659e74",
+          "sourceHandle": "out",
+          "target": "ef0fe75c-1f49-4681-aaaf-4b73a6529855",
+          "targetHandle": "in",
+          "data": {
+            "role": "visual",
+            "includeAudio": false,
+            "sourcePortId": "result",
+            "targetPortId": "media"
+          }
+        },
+        {
+          "source": "b0dfe628-a48b-4a99-8728-a9daed7bf5dc",
+          "sourceHandle": "out",
+          "target": "4a139e24-0614-4b94-90e9-b56557e66a02",
+          "targetHandle": "in:flow",
+          "id": "2adfdb67-9e30-4363-aa82-7997c71163c8",
+          "data": {
+            "role": "visual",
+            "includeAudio": false,
+            "sourcePortId": "flow-out",
+            "targetPortId": "flow"
+          }
+        },
+        {
+          "source": "9aafaa1a-c4aa-42f2-aa2b-8a35a85b12b9",
+          "sourceHandle": "out",
+          "target": "c0ca70ac-3d9e-43c5-bd2a-a38b9f659e74",
+          "targetHandle": "in",
+          "id": "93919fd1-1d0b-4f2e-83d1-10bd15de7d85",
+          "data": {
+            "role": "visual",
+            "includeAudio": false,
+            "sourcePortId": "media",
+            "targetPortId": "reference"
+          }
+        },
+        {
+          "source": "c0ca70ac-3d9e-43c5-bd2a-a38b9f659e74",
+          "sourceHandle": "out",
+          "target": "4a139e24-0614-4b94-90e9-b56557e66a02",
+          "targetHandle": "in",
+          "id": "61ef1c61-9086-4cab-aa87-6ec310a30859",
+          "data": {
+            "role": "visual",
+            "includeAudio": false,
+            "sourcePortId": "result",
+            "targetPortId": "reference"
+          }
+        },
+        {
+          "id": "1a9bd7a5-fd3e-4f6b-9357-c05e13cc9831",
+          "source": "4a139e24-0614-4b94-90e9-b56557e66a02",
+          "sourceHandle": "out",
+          "target": "33369307-5466-4466-980e-402fb7b20a95",
+          "targetHandle": "in:flow-in",
+          "data": {
+            "role": "visual",
+            "includeAudio": false,
+            "sourcePortId": "output",
+            "targetPortId": "flow-in"
+          }
+        },
+        {
+          "source": "33369307-5466-4466-980e-402fb7b20a95",
+          "sourceHandle": "out",
+          "target": "b8b2b69e-8a89-4090-a5bb-c3118294e05c",
+          "targetHandle": "in:flow",
+          "id": "ef2125c6-720d-45bd-bc9d-5228801fd825",
+          "data": {
+            "role": "visual",
+            "includeAudio": false,
+            "sourcePortId": "flow-out",
+            "targetPortId": "flow"
+          }
+        },
+        {
+          "source": "4a139e24-0614-4b94-90e9-b56557e66a02",
+          "sourceHandle": "out",
+          "target": "b8b2b69e-8a89-4090-a5bb-c3118294e05c",
+          "targetHandle": "in:field:prompt",
+          "id": "74c7b226-b1eb-496f-be0e-c9aafdee4ce6",
+          "data": {
+            "role": "visual",
+            "includeAudio": false,
+            "sourcePortId": "output",
+            "targetPortId": "field:prompt"
+          }
+        },
+        {
+          "id": "32cedd4b-03ad-4622-9383-65ab9791a2fa",
+          "source": "4a139e24-0614-4b94-90e9-b56557e66a02",
+          "sourceHandle": "out",
+          "target": "e10e0d25-c499-45d4-af8f-71c818c96c28",
+          "targetHandle": "in",
+          "data": {
+            "role": "visual",
+            "includeAudio": false,
+            "sourcePortId": "output",
+            "targetPortId": "media"
+          }
+        },
+        {
+          "id": "1688ee3e-4bec-4422-9c83-0c0005c51410",
+          "source": "b8b2b69e-8a89-4090-a5bb-c3118294e05c",
+          "sourceHandle": "out",
+          "target": "55cb4b8c-e590-4a60-8feb-09b46a0e3384",
+          "targetHandle": "in",
+          "data": {
+            "role": "visual",
+            "includeAudio": false,
+            "sourcePortId": "result",
+            "targetPortId": "media"
+          }
+        }
+      ],
+      "viewport": {
+        "x": 702.8234879993142,
+        "y": 432.040176827734,
+        "zoom": 0.4326145663275988
+      }
+    },
+    "settings": {
+      "defaultTextProvider": "ollama",
+      "defaultImageProvider": "openai",
+      "defaultVideoProvider": "comfyui"
+    }
+  },
+  "assets": []
+}

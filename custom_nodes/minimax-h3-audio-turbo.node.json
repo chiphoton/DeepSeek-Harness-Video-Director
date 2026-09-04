@@ -1,0 +1,250 @@
+{
+  "description": "MiniMax-H3 Turbo prompt-to-audio workflow with configurable duration, output format, model loaders, seed, and sampling steps.",
+  "provenance": {
+    "referenceIntegration": "https://github.com/chiphoton/MiniMax-H3-Codex-Drama",
+    "turboNodes": "https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo/tree/4274783a23afcfdbea3b4876cb79effd6c510785"
+  },
+  "nodeData": {
+    "kind": "audio-generation",
+    "title": "MiniMax-H3 Audio (Turbo)",
+    "providerId": "comfyui",
+    "modelFamily": "minimax-h3",
+    "prompt": "",
+    "width": 32,
+    "height": 32,
+    "duration": 5,
+    "fps": 24,
+    "seed": 1001,
+    "seedControlAfterGenerate": "randomize",
+    "variant": "turbo",
+    "steps": 4,
+    "scheduler": "simple",
+    "workflow": {
+      "6": {
+        "class_type": "UNETLoader",
+        "inputs": {
+          "unet_name": "minimax_h3_fl2va_int8_convrot.safetensors",
+          "weight_dtype": "default"
+        }
+      },
+      "9": {
+        "class_type": "BasicScheduler",
+        "inputs": {
+          "model": ["134", 0],
+          "scheduler": "simple",
+          "steps": 4,
+          "denoise": 1
+        }
+      },
+      "11": {
+        "class_type": "VAELoader",
+        "inputs": {
+          "vae_name": "minimax_h3_video_vae_fp16.safetensors"
+        }
+      },
+      "13": {
+        "class_type": "CLIPLoader",
+        "inputs": {
+          "clip_name": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+          "type": "minimax",
+          "device": "default"
+        }
+      },
+      "14": {
+        "class_type": "SamplerCustomAdvanced",
+        "inputs": {
+          "noise": ["15", 0],
+          "guider": ["16", 0],
+          "sampler": ["17", 0],
+          "sigmas": ["9", 0],
+          "latent_image": ["104", 1]
+        }
+      },
+      "15": {
+        "class_type": "RandomNoise",
+        "inputs": {
+          "noise_seed": 1001
+        }
+      },
+      "16": {
+        "class_type": "BasicGuider",
+        "inputs": {
+          "model": ["134", 0],
+          "conditioning": ["104", 0]
+        }
+      },
+      "17": {
+        "class_type": "MiniMaxH3TurboSampler",
+        "inputs": {}
+      },
+      "23": {
+        "class_type": "VAEDecodeAudio",
+        "inputs": {
+          "samples": ["14", 0],
+          "vae": ["24", 0]
+        }
+      },
+      "24": {
+        "class_type": "VAELoader",
+        "inputs": {
+          "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+        }
+      },
+      "104": {
+        "class_type": "MiniMaxH3ImageToVideo",
+        "inputs": {
+          "clip": ["13", 0],
+          "vae": ["11", 0],
+          "prompt": "<audio_prompt>",
+          "width": 32,
+          "height": 32,
+          "length": ["136", 1]
+        }
+      },
+      "134": {
+        "class_type": "MiniMaxH3TurboLoRA",
+        "inputs": {
+          "model": ["6", 0],
+          "lora_name": "minimax_h3_turbo_v4_step600_ema.safetensors",
+          "strength": 1,
+          "low_vram": false
+        }
+      },
+      "135": {
+        "class_type": "PrimitiveFloat",
+        "inputs": {
+          "value": 5
+        }
+      },
+      "136": {
+        "class_type": "ComfyMathExpression",
+        "inputs": {
+          "expression": "max(5, round(a * 24)) + (5 - (max(5, round(a * 24)) % 17)) % 17",
+          "values.a": ["135", 0]
+        }
+      },
+      "137": {
+        "class_type": "SaveAudioAdvanced",
+        "inputs": {
+          "audio": ["23", 0],
+          "filename_prefix": "audio-turbo",
+          "format": "flac"
+        }
+      }
+    },
+    "bindings": [
+      {
+        "nodeId": "104",
+        "input": "prompt",
+        "from": "prompt"
+      },
+      {
+        "nodeId": "104",
+        "input": "width",
+        "from": "literal",
+        "value": 32
+      },
+      {
+        "nodeId": "104",
+        "input": "height",
+        "from": "literal",
+        "value": 32
+      },
+      {
+        "nodeId": "135",
+        "input": "value",
+        "from": "duration"
+      },
+      {
+        "nodeId": "15",
+        "input": "noise_seed",
+        "from": "seed"
+      },
+      {
+        "nodeId": "9",
+        "input": "steps",
+        "from": "steps"
+      }
+    ],
+    "parameters": [
+      {
+        "id": "format",
+        "nodeId": "137",
+        "input": "format",
+        "label": "Format",
+        "group": "Output",
+        "type": "text",
+        "default": "flac",
+        "placement": "primary",
+        "control": "input",
+        "description": "SaveAudioAdvanced format. Available choices are discovered from ComfyUI.",
+        "order": 0
+      },
+      {
+        "id": "diffusionModel",
+        "nodeId": "6",
+        "input": "unet_name",
+        "label": "Diffusion model",
+        "group": "Models",
+        "type": "text",
+        "default": "minimax_h3_fl2va_int8_convrot.safetensors",
+        "placement": "advanced",
+        "control": "input",
+        "description": "UNETLoader model. Available choices are discovered from ComfyUI.",
+        "order": 1
+      },
+      {
+        "id": "clipModel",
+        "nodeId": "13",
+        "input": "clip_name",
+        "label": "CLIP",
+        "group": "Models",
+        "type": "text",
+        "default": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+        "placement": "advanced",
+        "control": "input",
+        "description": "CLIPLoader model. Available choices are discovered from ComfyUI.",
+        "order": 2
+      },
+      {
+        "id": "loraModel",
+        "nodeId": "134",
+        "input": "lora_name",
+        "label": "LoRA",
+        "group": "Models",
+        "type": "text",
+        "default": "minimax_h3_turbo_v4_step600_ema.safetensors",
+        "placement": "advanced",
+        "control": "input",
+        "description": "MiniMaxH3TurboLoRA model. Available choices are discovered from ComfyUI.",
+        "order": 3
+      },
+      {
+        "id": "videoVae",
+        "nodeId": "11",
+        "input": "vae_name",
+        "label": "Video VAE",
+        "group": "Models",
+        "type": "text",
+        "default": "minimax_h3_video_vae_fp16.safetensors",
+        "placement": "advanced",
+        "control": "input",
+        "description": "Video VAELoader model. Available choices are discovered from ComfyUI.",
+        "order": 4
+      },
+      {
+        "id": "audioVae",
+        "nodeId": "24",
+        "input": "vae_name",
+        "label": "Audio VAE",
+        "group": "Models",
+        "type": "text",
+        "default": "minimax_h3_audio_vae_fp32.safetensors",
+        "placement": "advanced",
+        "control": "input",
+        "description": "Audio VAELoader model. Available choices are discovered from ComfyUI.",
+        "order": 5
+      }
+    ]
+  }
+}

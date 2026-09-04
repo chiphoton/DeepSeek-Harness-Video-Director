@@ -1,0 +1,290 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deepseek-ai.github.io/deepseek-harness-video-director/schemas/video-director-node-v1.schema.json",
+  "title": "Video Director Custom Node Pack v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "type", "version", "manifest", "implementation"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "protocol": { "const": "video-director.node/v1" },
+    "type": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)*(?:[./][a-z0-9]+(?:-[a-z0-9]+)*)$"
+    },
+    "version": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "manifest": { "$ref": "#/$defs/manifest" },
+    "implementation": {
+      "oneOf": [
+        { "$ref": "#/$defs/comfyWorkflowImplementation" },
+        { "$ref": "#/$defs/clientImplementation" }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "implementation": {
+            "properties": { "kind": { "const": "client" } },
+            "required": ["kind"]
+          }
+        },
+        "required": ["implementation"]
+      },
+      "then": {
+        "properties": { "type": { "const": "core.preview" } }
+      }
+    }
+  ],
+  "$defs": {
+    "mediaType": {
+      "enum": ["text", "image", "audio", "video", "sketch", "mask", "flow"]
+    },
+    "port": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "types"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+        },
+        "label": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "types": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 6,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/mediaType" }
+        },
+        "required": { "type": "boolean" },
+        "multiple": { "type": "boolean" }
+      }
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "schema", "default", "placement"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$"
+        },
+        "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "schema": {
+          "oneOf": [
+            { "$ref": "#/$defs/stringFieldSchema" },
+            { "$ref": "#/$defs/numberFieldSchema" },
+            { "$ref": "#/$defs/booleanFieldSchema" }
+          ]
+        },
+        "default": { "type": ["string", "number", "boolean"] },
+        "placement": { "enum": ["primary", "advanced"] },
+        "control": { "enum": ["input", "textarea", "select", "slider", "checkbox"] },
+        "description": { "type": "string", "maxLength": 1000 }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "schema": { "properties": { "type": { "const": "string" } } } }
+          },
+          "then": { "properties": { "default": { "type": "string" } } }
+        },
+        {
+          "if": {
+            "properties": { "schema": { "properties": { "type": { "const": "number" } } } }
+          },
+          "then": { "properties": { "default": { "type": "number" } } }
+        },
+        {
+          "if": {
+            "properties": { "schema": { "properties": { "type": { "const": "boolean" } } } }
+          },
+          "then": { "properties": { "default": { "type": "boolean" } } }
+        }
+      ]
+    },
+    "stringFieldSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "string" },
+        "enum": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 512,
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "minLength": { "type": "integer", "minimum": 0 },
+        "maxLength": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "numberFieldSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "number" },
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "step": { "type": "number", "exclusiveMinimum": 0 },
+        "integer": { "type": "boolean" }
+      }
+    },
+    "booleanFieldSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "boolean" }
+      }
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "category", "inputs", "outputs", "fields"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 1000 },
+        "category": {
+          "enum": ["input", "text", "image", "audio", "video", "utility", "output"]
+        },
+        "inputs": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/port" }
+        },
+        "outputs": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/port" }
+        },
+        "fields": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/field" }
+        }
+      }
+    },
+    "comfyNode": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["class_type", "inputs"],
+      "properties": {
+        "class_type": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "inputs": { "type": "object" }
+      }
+    },
+    "bindingTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodeId", "input"],
+      "properties": {
+        "nodeId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "input": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "bindingSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "fieldId"],
+          "properties": {
+            "kind": { "const": "field" },
+            "fieldId": { "type": "string", "minLength": 1, "maxLength": 128 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "portId"],
+          "properties": {
+            "kind": { "const": "port" },
+            "portId": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "portIndex": { "type": "integer", "minimum": 0, "maximum": 31 },
+            "index": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 31,
+              "deprecated": true,
+              "description": "Legacy alias for portIndex. New packs should use portIndex."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "const": "runtime" },
+            "value": { "enum": ["seed", "projectId"] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "const": "literal" },
+            "value": true
+          }
+        }
+      ]
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "source"],
+      "properties": {
+        "target": { "$ref": "#/$defs/bindingTarget" },
+        "source": { "$ref": "#/$defs/bindingSource" }
+      }
+    },
+    "comfyWorkflowImplementation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "operation", "workflow", "bindings", "output"],
+      "properties": {
+        "kind": { "const": "comfyui.workflow" },
+        "operation": {
+          "enum": ["image-generation", "image-edit", "video-generation", "audio-generation"]
+        },
+        "workflow": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 4000,
+          "additionalProperties": { "$ref": "#/$defs/comfyNode" }
+        },
+        "bindings": {
+          "type": "array",
+          "maxItems": 512,
+          "items": { "$ref": "#/$defs/binding" }
+        },
+        "output": { "const": "auto" }
+      }
+    },
+    "clientImplementation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "behavior"],
+      "properties": {
+        "kind": { "const": "client" },
+        "behavior": { "const": "preview" }
+      }
+    }
+  }
+}

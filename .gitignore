@@ -1,0 +1,23 @@
+node_modules/
+.pnpm-store/
+.DS_Store
+*.tgz
+lib/
+.dsh-video-director/
+test-results/
+.playwright-cli/
+output/
+
+# Local credentials and signing material
+.env
+.env.*
+!.env.example
+!.env.*.example
+.direnv/
+.npmrc
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore

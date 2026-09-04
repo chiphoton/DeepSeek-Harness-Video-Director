@@ -1,0 +1,209 @@
+{
+  "description": "Z-Image Turbo text-to-image workflow with configurable dimensions, model loaders, and KSampler controls.",
+  "nodeData": {
+    "kind": "image-generation",
+    "title": "Z-Image Turbo",
+    "providerId": "comfyui",
+    "prompt": "",
+    "width": 1024,
+    "height": 1024,
+    "seed": 1001,
+    "seedControlAfterGenerate": "randomize",
+    "steps": 8,
+    "scheduler": "sgm_uniform",
+    "workflow": {
+      "1": {
+        "class_type": "UNETLoader",
+        "inputs": {
+          "unet_name": "z_image_turbo_bf16.safetensors",
+          "weight_dtype": "default"
+        }
+      },
+      "2": {
+        "class_type": "CLIPLoader",
+        "inputs": {
+          "clip_name": "qwen_3_4b.safetensors",
+          "type": "lumina2",
+          "device": "default"
+        }
+      },
+      "3": {
+        "class_type": "VAELoader",
+        "inputs": {
+          "vae_name": "ae.safetensors"
+        }
+      },
+      "4": {
+        "class_type": "EmptySD3LatentImage",
+        "inputs": {
+          "width": 1024,
+          "height": 1024,
+          "batch_size": 1
+        }
+      },
+      "5": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {
+          "text": "<prompt_here>",
+          "clip": ["2", 0]
+        }
+      },
+      "6": {
+        "class_type": "ModelSamplingAuraFlow",
+        "inputs": {
+          "model": ["1", 0],
+          "shift": 3
+        }
+      },
+      "7": {
+        "class_type": "KSampler",
+        "inputs": {
+          "model": ["6", 0],
+          "seed": 1001,
+          "steps": 8,
+          "cfg": 1,
+          "sampler_name": "ddim",
+          "scheduler": "sgm_uniform",
+          "positive": ["5", 0],
+          "negative": ["8", 0],
+          "latent_image": ["4", 0],
+          "denoise": 1
+        }
+      },
+      "8": {
+        "class_type": "ConditioningZeroOut",
+        "inputs": {
+          "conditioning": ["5", 0]
+        }
+      },
+      "9": {
+        "class_type": "VAEDecode",
+        "inputs": {
+          "samples": ["7", 0],
+          "vae": ["3", 0]
+        }
+      },
+      "10": {
+        "class_type": "PreviewImage",
+        "inputs": {
+          "images": ["9", 0]
+        }
+      }
+    },
+    "bindings": [
+      {
+        "nodeId": "5",
+        "input": "text",
+        "from": "prompt"
+      },
+      {
+        "nodeId": "4",
+        "input": "width",
+        "from": "width"
+      },
+      {
+        "nodeId": "4",
+        "input": "height",
+        "from": "height"
+      },
+      {
+        "nodeId": "7",
+        "input": "seed",
+        "from": "seed"
+      }
+    ],
+    "parameters": [
+      {
+        "id": "diffusionModel",
+        "nodeId": "1",
+        "input": "unet_name",
+        "label": "Diffusion model",
+        "group": "Models",
+        "type": "text",
+        "default": "z_image_turbo_bf16.safetensors",
+        "placement": "advanced",
+        "control": "input",
+        "description": "UNETLoader model. Available choices are discovered from ComfyUI.",
+        "order": 0
+      },
+      {
+        "id": "clipModel",
+        "nodeId": "2",
+        "input": "clip_name",
+        "label": "CLIP",
+        "group": "Models",
+        "type": "text",
+        "default": "qwen_3_4b.safetensors",
+        "placement": "advanced",
+        "control": "input",
+        "description": "CLIPLoader model. Available choices are discovered from ComfyUI.",
+        "order": 1
+      },
+      {
+        "id": "vaeModel",
+        "nodeId": "3",
+        "input": "vae_name",
+        "label": "VAE",
+        "group": "Models",
+        "type": "text",
+        "default": "ae.safetensors",
+        "placement": "advanced",
+        "control": "input",
+        "description": "VAELoader model. Available choices are discovered from ComfyUI.",
+        "order": 2
+      },
+      {
+        "id": "steps",
+        "nodeId": "7",
+        "input": "steps",
+        "label": "Steps",
+        "group": "KSampler",
+        "type": "number",
+        "default": 8,
+        "placement": "advanced",
+        "control": "input",
+        "description": "KSampler sampling steps.",
+        "order": 3
+      },
+      {
+        "id": "cfg",
+        "nodeId": "7",
+        "input": "cfg",
+        "label": "CFG",
+        "group": "KSampler",
+        "type": "number",
+        "default": 1,
+        "placement": "advanced",
+        "control": "input",
+        "description": "KSampler classifier-free guidance scale.",
+        "order": 4
+      },
+      {
+        "id": "samplerName",
+        "nodeId": "7",
+        "input": "sampler_name",
+        "label": "Sampler name",
+        "group": "KSampler",
+        "type": "text",
+        "default": "ddim",
+        "placement": "advanced",
+        "control": "input",
+        "description": "KSampler sampler_name. Available choices are discovered from ComfyUI.",
+        "order": 5
+      },
+      {
+        "id": "scheduler",
+        "nodeId": "7",
+        "input": "scheduler",
+        "label": "Scheduler",
+        "group": "KSampler",
+        "type": "text",
+        "default": "sgm_uniform",
+        "placement": "advanced",
+        "control": "input",
+        "description": "KSampler scheduler. Available choices are discovered from ComfyUI.",
+        "order": 6
+      }
+    ]
+  }
+}

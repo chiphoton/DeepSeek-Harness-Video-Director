@@ -1,0 +1,257 @@
+{
+  "description": "Qwen two-reference consistency editing workflow converted from the supplied ComfyUI UI graph.",
+  "nodeManifest": {
+    "title": "Qwen-Image-Edit (Consistent)",
+    "description": "Edit an image with one required and one optional reference while preserving visual consistency.",
+    "category": "image",
+    "inputs": [
+      {
+        "id": "reference",
+        "label": "References",
+        "types": ["image", "sketch"],
+        "required": true,
+        "multiple": true
+      }
+    ],
+    "outputs": [
+      {
+        "id": "result",
+        "label": "Result",
+        "types": ["image"],
+        "required": false,
+        "multiple": true
+      }
+    ],
+    "fields": [
+      {
+        "id": "checkpointModel",
+        "label": "Checkpoint model",
+        "schema": { "type": "string" },
+        "default": "Qwen-Rapid-AIO-NSFW-v19.safetensors",
+        "placement": "advanced",
+        "control": "input",
+        "description": "CheckpointLoaderSimple model. Available choices are discovered from ComfyUI.",
+        "order": 0
+      },
+      {
+        "id": "loraModel",
+        "label": "LoRA model",
+        "schema": { "type": "string" },
+        "default": "consistence_edit_v2.safetensors",
+        "placement": "advanced",
+        "control": "input",
+        "description": "LoraLoaderModelOnly model. Available choices are discovered from ComfyUI.",
+        "order": 1
+      },
+      {
+        "id": "loraStrength",
+        "label": "LoRA strength_model",
+        "schema": { "type": "number", "min": -10, "max": 10, "step": 0.01 },
+        "default": 0.8,
+        "placement": "advanced",
+        "control": "input",
+        "description": "Model strength used by consistence_edit_v2.safetensors.",
+        "order": 2
+      },
+      {
+        "id": "steps",
+        "label": "KSampler steps",
+        "schema": { "type": "number", "min": 1, "max": 1000, "step": 1, "integer": true },
+        "default": 4,
+        "placement": "advanced",
+        "control": "input",
+        "description": "Number of KSampler steps.",
+        "order": 3
+      },
+      {
+        "id": "cfg",
+        "label": "KSampler cfg",
+        "schema": { "type": "number", "min": 0, "max": 100, "step": 0.1 },
+        "default": 1,
+        "placement": "advanced",
+        "control": "input",
+        "description": "KSampler classifier-free guidance scale.",
+        "order": 4
+      }
+    ]
+  },
+  "nodeData": {
+    "kind": "image-generation",
+    "title": "Qwen-Image-Edit (Consistent)",
+    "providerId": "comfyui",
+    "prompt": "",
+    "seed": 1001,
+    "seedControlAfterGenerate": "randomize",
+    "workflow": {
+      "17": {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {
+          "ckpt_name": "Qwen-Rapid-AIO-NSFW-v19.safetensors"
+        }
+      },
+      "13": {
+        "class_type": "LoraLoaderModelOnly",
+        "inputs": {
+          "lora_name": "consistence_edit_v2.safetensors",
+          "strength_model": 0.8,
+          "model": ["17", 0]
+        }
+      },
+      "4": {
+        "class_type": "LoadImage",
+        "inputs": {
+          "image": "<Input_Image-1>"
+        }
+      },
+      "5": {
+        "class_type": "LoadImage",
+        "inputs": {
+          "image": "<Input_Image-2>"
+        }
+      },
+      "1": {
+        "class_type": "TextEncodeQwenImageEditPlusAdvance_lrzjason",
+        "inputs": {
+          "clip": ["17", 1],
+          "vae": ["17", 2],
+          "vl_resize_image1": ["4", 0],
+          "vl_resize_image2": ["5", 0],
+          "prompt": "<prompt_here>",
+          "target_size": 1536,
+          "target_vl_size": 384,
+          "upscale_method": "lanczos",
+          "instruction": "Describe the key features of the input image (color, shape, size, texture, objects, background), then explain how the user's text instruction should alter or modify the image. Generate a new image that meets the user's requirements while maintaining consistency with the original input where appropriate."
+        }
+      },
+      "7": {
+        "class_type": "ConditioningZeroOut",
+        "inputs": {
+          "conditioning": ["1", 0]
+        }
+      },
+      "6": {
+        "class_type": "KSampler",
+        "inputs": {
+          "seed": 1001,
+          "steps": 4,
+          "cfg": 1,
+          "sampler_name": "euler_ancestral",
+          "scheduler": "beta",
+          "denoise": 1,
+          "model": ["13", 0],
+          "positive": ["1", 0],
+          "negative": ["7", 0],
+          "latent_image": ["1", 1]
+        }
+      },
+      "9": {
+        "class_type": "VAEDecode",
+        "inputs": {
+          "samples": ["6", 0],
+          "vae": ["17", 2]
+        }
+      },
+      "16": {
+        "class_type": "PreviewImage",
+        "inputs": {
+          "images": ["9", 0]
+        }
+      }
+    },
+    "bindings": [
+      {
+        "nodeId": "4",
+        "input": "image",
+        "from": "asset",
+        "portId": "reference",
+        "portIndex": 0
+      },
+      {
+        "nodeId": "5",
+        "input": "image",
+        "from": "asset",
+        "portId": "reference",
+        "portIndex": 1,
+        "optional": true,
+        "omitNodeWhenMissing": true
+      },
+      {
+        "nodeId": "1",
+        "input": "prompt",
+        "from": "prompt"
+      },
+      {
+        "nodeId": "6",
+        "input": "seed",
+        "from": "seed"
+      }
+    ],
+    "parameters": [
+      {
+        "id": "checkpointModel",
+        "nodeId": "17",
+        "input": "ckpt_name",
+        "label": "Checkpoint model",
+        "group": "Models",
+        "type": "text",
+        "default": "Qwen-Rapid-AIO-NSFW-v19.safetensors",
+        "placement": "advanced",
+        "control": "input",
+        "description": "CheckpointLoaderSimple model. Available choices are discovered from ComfyUI.",
+        "order": 0
+      },
+      {
+        "id": "loraModel",
+        "nodeId": "13",
+        "input": "lora_name",
+        "label": "LoRA model",
+        "group": "LoRA",
+        "type": "text",
+        "default": "consistence_edit_v2.safetensors",
+        "placement": "advanced",
+        "control": "input",
+        "description": "LoraLoaderModelOnly model. Available choices are discovered from ComfyUI.",
+        "order": 1
+      },
+      {
+        "id": "loraStrength",
+        "nodeId": "13",
+        "input": "strength_model",
+        "label": "LoRA strength_model",
+        "group": "LoRA",
+        "type": "number",
+        "default": 0.8,
+        "placement": "advanced",
+        "control": "input",
+        "description": "Model strength used by consistence_edit_v2.safetensors.",
+        "order": 2
+      },
+      {
+        "id": "steps",
+        "nodeId": "6",
+        "input": "steps",
+        "label": "KSampler steps",
+        "group": "Sampling",
+        "type": "number",
+        "default": 4,
+        "placement": "advanced",
+        "control": "input",
+        "description": "Number of KSampler steps.",
+        "order": 3
+      },
+      {
+        "id": "cfg",
+        "nodeId": "6",
+        "input": "cfg",
+        "label": "KSampler cfg",
+        "group": "Sampling",
+        "type": "number",
+        "default": 1,
+        "placement": "advanced",
+        "control": "input",
+        "description": "KSampler classifier-free guidance scale.",
+        "order": 4
+      }
+    ]
+  }
+}
