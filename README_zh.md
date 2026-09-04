@@ -36,6 +36,10 @@ DeepSeek-Harness Video-Director 是一个为 [DeepSeek Harness](https://github.c
 | 🎞️ **面向工程管理** | 每个 Video Project 都有独立画布、对话 Session、任务、不可变素材与 Provider 选择。 |
 | 🛠️ **可扩展** | 导入经过检查的 ComfyUI API Workflow，或将其打包为声明式 Video Director Custom Node。 |
 
+<p align="center">
+  <img src="docs/ui-preview.png" alt="DeepSeek-Harness Video-Director 节点画布" width="100%">
+</p>
+
 ## 🚀 Quick start
 
 ### 1. 一键安装到 DSH 并运行
@@ -92,9 +96,6 @@ Text → Prompt Enhancer → H3 Video → Preview → Save Output
 
 在可执行节点中选择 Provider 与 Workflow，输入 Prompt，然后点击**运行**。顶部的**保存**用于持久化画布修改；即使画布还没保存，也可以基于当前不可变快照运行。
 
-<p align="center">
-  <img src="docs/ui-preview.png" alt="DeepSeek-Harness Video-Director 节点画布" width="100%">
-</p>
 
 ## 🧰 有哪些节点，怎么用
 

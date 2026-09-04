@@ -36,6 +36,10 @@ Beginners can start with the built-in workflows instead of assembling every prov
 | 🎞️ **Project-aware direction** | Every Video Project keeps its own canvas, chat session, jobs, immutable assets, and provider choices. |
 | 🛠️ **Extensible by design** | Import reviewed ComfyUI API workflows or package them as declarative Video Director Custom Nodes. |
 
+<p align="center">
+  <img src="docs/ui-preview.png" alt="DeepSeek-Harness Video-Director node canvas" width="100%">
+</p>
+
 ## 🚀 Quick start
 
 ### 1. Install into DSH and run
@@ -92,9 +96,6 @@ Text → Prompt Enhancer → H3 Video → Preview → Save Output
 
 Set the provider and workflow on each executable node, enter a prompt, then click **Run**. Use **Save** in the top bar to persist canvas edits; generation can run from the current unsaved canvas snapshot.
 
-<p align="center">
-  <img src="docs/ui-preview.png" alt="DeepSeek-Harness Video-Director node canvas" width="100%">
-</p>
 
 ## 🧰 Nodes and how to use them
 
