@@ -3,12 +3,12 @@ import { readFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { JobManager } from './jobs.js'
-import { NodeRegistry } from './node-registry.js'
+import { VdNodeRegistry } from './node-registry.js'
 import { ProviderSettings, PROVIDER_SETTINGS_NAMESPACE } from './provider-settings.js'
 import { ProjectStore } from './project-store.js'
 import { ProviderRuntime } from './providers.js'
 import { createDirectorRpc } from './rpc.js'
-import { WorkflowStore } from './workflow-store.js'
+import { ComfyWorkflowStore } from './workflow-store.js'
 
 export const name = 'video-director'
 export const inject = ['connection']
@@ -61,9 +61,9 @@ export const Config = z.object({
 export async function apply(ctx, config) {
   const store = new ProjectStore(config.dataDir, config.maxAssetBytes)
   await store.init()
-  const workflows = new WorkflowStore(store.root)
-  await workflows.init()
-  const nodes = new NodeRegistry(workflows)
+  const comfyWorkflows = new ComfyWorkflowStore(store.root)
+  await comfyWorkflows.init()
+  const vdNodes = new VdNodeRegistry(comfyWorkflows)
 
   const assetRoutes = new Set()
   const registerAsset = async (asset) => {
@@ -108,8 +108,8 @@ export async function apply(ctx, config) {
     providers,
     jobs,
     registerAsset,
-    workflows,
-    nodes,
+    workflows: comfyWorkflows,
+    nodes: vdNodes,
     providerSettings,
   }))
   const skillUrl = new URL('../skills/comfyui-workflow-to-node/SKILL.md', import.meta.url)
@@ -117,7 +117,7 @@ export async function apply(ctx, config) {
   ctx.inject(['skills'], (skillsCtx) => {
     skillsCtx.skills.register({
       name: 'comfyui-workflow-to-node',
-      description: 'Convert a trusted ComfyUI API graph or exactly mapped editor template into a Video Director built-in workflow or declarative Custom Node pack.',
+      description: 'Convert a trusted API-format comfyui-workflow or exactly mapped ComfyUI editor template into a registered comfyui-workflow or declarative vd-node pack (Custom Node v1).',
       invocation: { modelInvocable: true, userInvocable: true },
       source: 'bundled',
       resourceBase: { kind: 'directory', path: dirname(fileURLToPath(skillUrl)) },
@@ -125,5 +125,5 @@ export async function apply(ctx, config) {
       content: skillContent,
     })
   })
-  ctx.logger.info(`video-director: serving ${String((await store.listProjects()).length)} project(s), ${String(workflows.list().length)} workflow(s), and ${String(nodes.list().length)} node definition(s) from ${store.root}`)
+  ctx.logger.info(`video-director: serving ${String((await store.listProjects()).length)} vd-project(s), ${String(comfyWorkflows.list().length)} registered comfyui-workflow(s), and ${String(vdNodes.list().length)} vd-node definition(s) from ${store.root}`)
 }

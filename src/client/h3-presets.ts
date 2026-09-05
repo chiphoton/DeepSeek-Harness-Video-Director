@@ -1,4 +1,4 @@
-import type { DirectorNodeData, WorkflowBinding } from './types'
+import type { DirectorNodeData, ComfyWorkflowBinding } from './types'
 
 // These defaults match the model inventory verified on the reference
 // ComfyUI deployment at 127.0.0.1:8188. They are workflow configuration,
@@ -97,7 +97,7 @@ const H3_T2V_TURBO_WORKFLOW: Record<string, unknown> = {
   },
 }
 
-const H3_T2V_TURBO_BINDINGS: WorkflowBinding[] = [
+const H3_T2V_TURBO_BINDINGS: ComfyWorkflowBinding[] = [
   { nodeId: '104', input: 'prompt', from: 'prompt' },
   { nodeId: '104', input: 'width', from: 'width' },
   { nodeId: '104', input: 'height', from: 'height' },
@@ -181,7 +181,7 @@ const H3_AUDIO_TURBO_WORKFLOW: Record<string, unknown> = {
   },
 }
 
-const H3_AUDIO_TURBO_BINDINGS: WorkflowBinding[] = [
+const H3_AUDIO_TURBO_BINDINGS: ComfyWorkflowBinding[] = [
   { nodeId: '104', input: 'prompt', from: 'prompt' },
   // Audio-only mode never exposes a configurable visual canvas. Literal
   // bindings keep the disposable latent at the verified 32x32 size.

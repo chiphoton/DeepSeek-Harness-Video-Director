@@ -20,13 +20,13 @@ import type {
   DirectorNode as DirectorFlowNode,
   DirectorNodeData,
   MediaKind,
-  NodeDefinitionDescriptor,
-  NodeFieldDescriptor,
-  NodePortDescriptor,
+  VdNodeDefinitionDescriptor,
+  VdFieldDescriptor,
+  VdPortDescriptor,
   ProviderDescriptor,
-  WorkflowBinding,
-  WorkflowDescriptor,
-  WorkflowParameter,
+  ComfyWorkflowBinding,
+  ComfyWorkflowDescriptor,
+  ComfyWorkflowParameter,
 } from './types'
 import { referenceLabelsByKind, type DirectorReferencePreview } from './reference-previews'
 import { DEFAULT_TEXT_WORKFLOW_SYSTEM_PROMPT } from './default-system-prompt'
@@ -44,8 +44,8 @@ import {
 
 export interface DirectorRuntimeValue {
   providers: ProviderDescriptor[]
-  workflows: WorkflowDescriptor[]
-  nodeDefinitions: NodeDefinitionDescriptor[]
+  workflows: ComfyWorkflowDescriptor[]
+  nodeDefinitions: VdNodeDefinitionDescriptor[]
   references: Readonly<Record<string, readonly DirectorReferencePreview[]>>
   onChange(nodeId: string, patch: Partial<DirectorNodeData>): void
   onEditSketch(nodeId: string): void
@@ -776,8 +776,8 @@ function VideoSizeReferenceDialog(props: { onClose(): void }): ReactNode {
 
 function PromptReferencesPanel(props: {
   references: readonly DirectorReferencePreview[]
-  referencePort?: NodePortDescriptor
-  inputPorts: readonly NodePortDescriptor[]
+  referencePort?: VdPortDescriptor
+  inputPorts: readonly VdPortDescriptor[]
 }): ReactNode {
   const [openReferenceId, setOpenReferenceId] = useState<string | null>(null)
   const labels = referenceLabelsByKind(props.references)
@@ -928,7 +928,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function isBindings(value: unknown): value is WorkflowBinding[] {
+function isBindings(value: unknown): value is ComfyWorkflowBinding[] {
   return Array.isArray(value) && value.every(item => isObject(item)
     && typeof item.nodeId === 'string'
     && typeof item.input === 'string'
@@ -941,25 +941,25 @@ function hasTurboTopology(workflow: Record<string, unknown> | undefined): boolea
     && (node.class_type === 'MiniMaxH3TurboLoRA' || node.class_type === 'MiniMaxH3TurboSampler'))
 }
 
-function usesWorkflowRegistry(provider: ProviderDescriptor | undefined): boolean {
+function usesComfyWorkflowRegistry(provider: ProviderDescriptor | undefined): boolean {
   return provider?.kind === 'comfyui' || provider?.kind === 'comfyui-mcp'
 }
 
-function workflowMatchesNode(workflow: WorkflowDescriptor, kind: DirectorNodeData['kind']): boolean {
+function comfyWorkflowMatchesVdNode(workflow: ComfyWorkflowDescriptor, kind: DirectorNodeData['kind']): boolean {
   if (kind === 'image-generation' || kind === 'image-edit') {
     return workflow.kind === 'image-generation' || workflow.kind === 'image-edit'
   }
   return workflow.kind === kind
 }
 
-function parameterValue(data: DirectorNodeData, parameter: WorkflowParameter): string | number | boolean {
+function parameterValue(data: DirectorNodeData, parameter: ComfyWorkflowParameter): string | number | boolean {
   return data.workflowValues?.[parameter.id] ?? parameter.default
 }
 
 function ParameterInputPlaceholder(props: {
   label: string
   fieldId: string
-  inputPorts: readonly NodePortDescriptor[]
+  inputPorts: readonly VdPortDescriptor[]
 }): ReactNode {
   const port = props.inputPorts.find(candidate => candidate.id === fieldInputPortId(props.fieldId))
   return (
@@ -993,12 +993,12 @@ function discoveredModelChoices(
   ))?.models
 }
 
-function WorkflowParameterField(props: {
+function ComfyWorkflowParameterField(props: {
   id: string
   data: DirectorNodeData
-  parameter: WorkflowParameter
+  parameter: ComfyWorkflowParameter
   runtime: DirectorRuntimeValue | null
-  inputPorts: readonly NodePortDescriptor[]
+  inputPorts: readonly VdPortDescriptor[]
   choices?: string[]
 }): ReactNode {
   const value = parameterValue(props.data, props.parameter)
@@ -1085,17 +1085,17 @@ function WorkflowParameterField(props: {
   )
 }
 
-function WorkflowParameters(props: {
+function ComfyWorkflowParameters(props: {
   id: string
   data: DirectorNodeData
-  workflow: WorkflowDescriptor
+  workflow: ComfyWorkflowDescriptor
   runtime: DirectorRuntimeValue | null
-  inputPorts: readonly NodePortDescriptor[]
+  inputPorts: readonly VdPortDescriptor[]
   placement: 'primary' | 'advanced'
   provider?: ProviderDescriptor
 }): ReactNode {
   const groups = useMemo(() => {
-    const grouped = new Map<string, WorkflowParameter[]>()
+    const grouped = new Map<string, ComfyWorkflowParameter[]>()
     const parameters = props.workflow.parameters
       .filter(parameter => (parameter.placement ?? 'advanced') === props.placement)
       .sort((left, right) => (left.order ?? 0) - (right.order ?? 0))
@@ -1114,7 +1114,7 @@ function WorkflowParameters(props: {
         <fieldset key={group} style={{ display: 'grid', gridTemplateColumns: parameters.length > 1 ? 'repeat(2, minmax(0, 1fr))' : '1fr', gap: 8, minWidth: 0, margin: 0, padding: 9, border: `1px solid ${palette.subtleBorder}`, borderRadius: 9, background: '#f8fafc' }}>
           <legend style={{ padding: '0 4px', color: palette.muted, fontSize: 9, fontWeight: 650 }}>{group}</legend>
           {parameters.map(parameter => (
-            <WorkflowParameterField
+            <ComfyWorkflowParameterField
               key={parameter.id}
               id={props.id}
               data={props.data}
@@ -1138,9 +1138,9 @@ const NODE_DATA_FIELD_IDS = new Set([
 function DefinitionField(props: {
   id: string
   data: DirectorNodeData
-  field: NodeFieldDescriptor
+  field: VdFieldDescriptor
   runtime: DirectorRuntimeValue | null
-  inputPorts: readonly NodePortDescriptor[]
+  inputPorts: readonly VdPortDescriptor[]
   choices?: string[]
 }): ReactNode {
   const stored = NODE_DATA_FIELD_IDS.has(props.field.id)
@@ -1229,12 +1229,12 @@ function DefinitionField(props: {
 function DefinitionFields(props: {
   id: string
   data: DirectorNodeData
-  definition: NodeDefinitionDescriptor
+  definition: VdNodeDefinitionDescriptor
   placement: 'primary' | 'advanced'
   runtime: DirectorRuntimeValue | null
-  inputPorts: readonly NodePortDescriptor[]
+  inputPorts: readonly VdPortDescriptor[]
   provider?: ProviderDescriptor
-  workflow?: WorkflowDescriptor
+  workflow?: ComfyWorkflowDescriptor
 }): ReactNode {
   const fields = props.definition.fields
     .filter(field => field.placement === props.placement)
@@ -1257,12 +1257,12 @@ function DefinitionFields(props: {
   )
 }
 
-function WorkflowBody(props: {
+function GenerationNodeBody(props: {
   id: string
   data: DirectorNodeData
   runtime: DirectorRuntimeValue | null
-  inputPorts: readonly NodePortDescriptor[]
-  referencePort?: NodePortDescriptor
+  inputPorts: readonly VdPortDescriptor[]
+  referencePort?: VdPortDescriptor
 }): ReactNode {
   const [systemPromptEditorOpen, setSystemPromptEditorOpen] = useState(false)
   const [sizeReferenceOpen, setSizeReferenceOpen] = useState(false)
@@ -1274,8 +1274,8 @@ function WorkflowBody(props: {
   const available = providersFor(props.data.kind, props.runtime?.providers ?? [])
   const selectedProviderId = textWorkflow ? (props.data.providerId || 'ollama') : props.data.providerId
   const provider = props.runtime?.providers.find(item => item.id === selectedProviderId)
-  const registryProvider = usesWorkflowRegistry(provider)
-  const workflows = (props.runtime?.workflows ?? []).filter(workflow => workflowMatchesNode(workflow, props.data.kind))
+  const registryProvider = usesComfyWorkflowRegistry(provider)
+  const workflows = (props.runtime?.workflows ?? []).filter(workflow => comfyWorkflowMatchesVdNode(workflow, props.data.kind))
   const definition = props.runtime?.nodeDefinitions.find(candidate => (
     candidate.type === props.data.nodeType && candidate.version === (props.data.nodeVersion ?? '1.0.0')
   ))
@@ -1389,7 +1389,7 @@ function WorkflowBody(props: {
             onChange={event => {
               const providerId = event.target.value || undefined
               const nextProvider = props.runtime?.providers.find(item => item.id === providerId)
-              const workflow = registryMediaWorkflow && usesWorkflowRegistry(nextProvider) && workflows.length === 1
+              const workflow = registryMediaWorkflow && usesComfyWorkflowRegistry(nextProvider) && workflows.length === 1
                 ? workflows[0]
                 : undefined
               props.runtime?.onChange(props.id, workflow === undefined ? {
@@ -1608,7 +1608,7 @@ function WorkflowBody(props: {
               <fieldset style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, minWidth: 0, margin: 0, padding: 9, border: `1px solid ${palette.subtleBorder}`, borderRadius: 9, background: '#f8fafc' }}>
                 <legend style={{ padding: '0 4px', color: palette.muted, fontSize: 9, fontWeight: 650 }}>Resolution Selector</legend>
                 {videoAspectRatioParameter === undefined ? null : (
-                  <WorkflowParameterField
+                  <ComfyWorkflowParameterField
                     id={props.id}
                     data={props.data}
                     parameter={videoAspectRatioParameter}
@@ -1701,7 +1701,7 @@ function WorkflowBody(props: {
                   />
                 </label>
                 {audioPrimaryParameters.map(parameter => (
-                  <WorkflowParameterField
+                  <ComfyWorkflowParameterField
                     key={parameter.id}
                     id={props.id}
                     data={props.data}
@@ -1714,7 +1714,7 @@ function WorkflowBody(props: {
               </fieldset>
             </div>
           ) : selectedWorkflow !== undefined ? (
-            <WorkflowParameters id={props.id} data={props.data} workflow={selectedWorkflow} runtime={props.runtime} inputPorts={props.inputPorts} placement="primary" provider={provider} />
+            <ComfyWorkflowParameters id={props.id} data={props.data} workflow={selectedWorkflow} runtime={props.runtime} inputPorts={props.inputPorts} placement="primary" provider={provider} />
           ) : null}
           {registeredVideoWorkflow && referencePanelWorkflow ? (
             <PromptReferencesPanel
@@ -1853,7 +1853,7 @@ function WorkflowBody(props: {
       ) : null}
 
       {selectedWorkflow !== undefined ? (
-        <WorkflowParameters id={props.id} data={props.data} workflow={selectedWorkflow} runtime={props.runtime} inputPorts={props.inputPorts} placement="advanced" provider={provider} />
+        <ComfyWorkflowParameters id={props.id} data={props.data} workflow={selectedWorkflow} runtime={props.runtime} inputPorts={props.inputPorts} placement="advanced" provider={provider} />
       ) : null}
 
       {registeredAudioWorkflow ? (
@@ -1999,7 +1999,7 @@ function WorkflowBody(props: {
               value={props.data.workflow ?? {}}
               rows={9}
               validate={isObject}
-              invalidMessage="Workflow must be a JSON object keyed by ComfyUI node id."
+              invalidMessage="comfyui-workflow must be a JSON object keyed by comfyui-node ID."
               onApply={workflow => props.runtime?.onChange(props.id, { workflow })}
             />
             <JsonEditor
@@ -2127,8 +2127,8 @@ function OutputSinkBody(props: { id: string; data: DirectorNodeData; runtime: Di
 }
 
 function PromptReferenceHandle(props: {
-  port: NodePortDescriptor
-  ports: readonly NodePortDescriptor[]
+  port: VdPortDescriptor
+  ports: readonly VdPortDescriptor[]
   top?: number | string
 }): ReactNode {
   const label = `${props.port.label}${props.port.required ? ' *' : ''}`
@@ -2157,8 +2157,8 @@ function PromptReferenceHandle(props: {
 
 function PortHandles(props: {
   direction: 'input' | 'output'
-  ports: readonly NodePortDescriptor[]
-  allPorts?: readonly NodePortDescriptor[]
+  ports: readonly VdPortDescriptor[]
+  allPorts?: readonly VdPortDescriptor[]
   showLabels?: boolean
 }): ReactNode {
   const incoming = props.direction === 'input'
@@ -2352,6 +2352,7 @@ export const DirectorNodeView = memo(function DirectorNodeView(props: NodeProps<
   return (
     <article
       data-director-node={props.data.kind}
+      className={props.selected ? 'vd-node-selected' : undefined}
       style={nodeStyle}
     >
       {floatingInputs.length > 0 ? <PortHandles direction="input" ports={floatingInputs} allPorts={declaredInputs} /> : null}
@@ -2376,7 +2377,7 @@ export const DirectorNodeView = memo(function DirectorNodeView(props: NodeProps<
         {!isWorkflow && !isSink && !isTrigger && kind !== 'text' ? <MediaBody id={props.id} data={props.data} runtime={runtime} /> : null}
         {isTrigger ? <TriggerBody id={props.id} data={props.data} runtime={runtime} /> : null}
         {isWorkflow ? (
-          <WorkflowBody
+          <GenerationNodeBody
             id={props.id}
             data={props.data}
             runtime={runtime}

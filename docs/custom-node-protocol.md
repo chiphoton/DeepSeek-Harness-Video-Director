@@ -1,12 +1,14 @@
-# Video Director Custom Node Protocol v1
+# vd-node pack protocol v1
 
-Video Director Custom Nodes use a declarative, versioned protocol. A node pack declares typed ports, configurable fields, presentation placement, and a host-side implementation. The browser renders the declaration; it does not load node-provided React, HTML, CSS, credentials, or executable code.
+vd-node packs use the declarative, versioned `video-director.node/v1` protocol, formerly called Video Director Custom Node Protocol v1. A pack declares typed ports, configurable fields, presentation placement, and a host-side implementation. The browser renders the declaration; it does not load node-provided React, HTML, CSS, credentials, or executable code.
+
+Follow the [shared terminology](TERMINOLOGY.md): a **vd-node** is a canvas instance, a **vd-node definition** is its reusable declaration, and a **comfyui-node** belongs to the embedded **comfyui-workflow**. A **ComfyUI custom-node package** is a separately installed Python extension. Existing protocol identifiers remain unchanged.
 
 The canonical machine-readable schema is [`schemas/video-director-node-v1.schema.json`](../schemas/video-director-node-v1.schema.json). See [`custom_nodes/comfyui-basic-image.manifest.json`](../custom_nodes/comfyui-basic-image.manifest.json) for a complete workflow-backed node.
 
 ## Host interface
 
-The Node Host is a deep module with three entry points:
+The vd-node host inside the DSH Host is a deep module with three entry points:
 
 ```ts
 interface DirectorNodeHost {
@@ -23,7 +25,7 @@ interface DirectorNodeHost {
 
 Workflow graphs, host executors, provider credentials, and REST/MCP routing decisions are never returned by `describe`.
 
-## Node pack
+## vd-node pack
 
 ```ts
 type NodePack = {
@@ -97,7 +99,7 @@ Right-click a node and choose **Parameter inputs** to enable or disable eligible
 
 The Host derives the eligible fields from the pinned node definition or selected workflow and does not trust the browser's mode map. It rejects unknown fields, non-string fields, multiple connections to a single-value field, and connected values that are not text. For image, audio, video, sketch, and mask inputs, declare ordinary typed `PortSpec` entries and bind each one to a real workflow input. A generic Reference port is never inferred when the workflow has no corresponding asset or mask binding.
 
-## ComfyUI Workflow implementation
+## comfyui-workflow implementation
 
 ```ts
 type ComfyWorkflowImplementation = {
@@ -115,7 +117,7 @@ type ComfyWorkflowImplementation = {
 
 `operation` is mandatory and security-relevant. The host uses it to enforce compatible inputs, licensing rules, output policy, and runtime routing. It must describe the actual workflow rather than the node's visual category.
 
-The workflow must be ComfyUI API format: an object keyed by node id. Editor/UI JSON containing `nodes`, `links`, and layout metadata is not executable by this protocol. Export **Save (API Format)** from ComfyUI first.
+The comfyui-workflow must be ComfyUI API format: an object keyed by comfyui-node ID. Editor/UI JSON containing `nodes`, `links`, and layout metadata is not executable by this protocol. Export **Save (API Format)** from ComfyUI first.
 
 ```ts
 type WorkflowBinding = {
@@ -128,7 +130,9 @@ type WorkflowBinding = {
 }
 ```
 
-The host deep-clones the registered workflow for every execution, applies each binding once, uploads incoming assets as required, and then submits the compiled graph. A target may occur in only one binding.
+`target.nodeId` identifies a comfyui-node inside `implementation.workflow`. A job request's `nodeId` instead identifies the canvas vd-node. A binding's `fieldId` or `portId` refers to the vd-node definition; it connects these two layers without making a canvas vd-edge part of the comfyui-workflow.
+
+The host deep-clones the registered comfyui-workflow for every execution, applies each binding once, uploads incoming assets as required, and then submits the compiled graph. A target may occur in only one binding.
 
 `portIndex` is the zero-based position within one logical port, not an index in the node's combined media input list. It defaults to `0`; values above `0` require that port to declare `multiple: true`. Hosts accept the legacy `index` spelling when importing an older v1 pack, but always persist and expose `portIndex`.
 

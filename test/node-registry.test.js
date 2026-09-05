@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import { NodeRegistry, normalizeNodePack } from '../src/node-registry.js'
-import { WorkflowStore } from '../src/workflow-store.js'
+import { VdNodeRegistry, normalizeVdNodePack } from '../src/node-registry.js'
+import { ComfyWorkflowStore } from '../src/workflow-store.js'
 
 async function createRegistry(t) {
   const root = await mkdtemp(join(tmpdir(), 'video-director-node-registry-'))
@@ -13,16 +13,16 @@ async function createRegistry(t) {
     const { rm } = await import('node:fs/promises')
     await rm(root, { recursive: true, force: true })
   })
-  const workflows = new WorkflowStore(root)
+  const workflows = new ComfyWorkflowStore(root)
   await workflows.init()
-  return { workflows, nodes: new NodeRegistry(workflows) }
+  return { workflows, nodes: new VdNodeRegistry(workflows) }
 }
 
 async function examplePack() {
   return JSON.parse(await readFile(new URL('../custom_nodes/comfyui-basic-image.manifest.json', import.meta.url), 'utf8'))
 }
 
-test('NodeRegistry exposes Preview and Save as ordinary built-in sink definitions', async (t) => {
+test('VdNodeRegistry exposes Preview and Save as ordinary built-in sink definitions', async (t) => {
   const { nodes } = await createRegistry(t)
   const preview = nodes.get('core.preview', '1.0.0')
   const save = nodes.get('core.save', '1.0.0')
@@ -33,7 +33,7 @@ test('NodeRegistry exposes Preview and Save as ordinary built-in sink definition
   assert.deepEqual(save.inputs[0].types, ['text', 'image', 'audio', 'video'])
 })
 
-test('NodeRegistry exposes one configurable VRAM trigger with bidirectional flow ports', async (t) => {
+test('VdNodeRegistry exposes one configurable VRAM trigger with bidirectional flow ports', async (t) => {
   const { nodes } = await createRegistry(t)
   const trigger = nodes.get('core.vram-trigger', '1.0.0')
 
@@ -48,7 +48,7 @@ test('NodeRegistry exposes one configurable VRAM trigger with bidirectional flow
   assert.equal(nodes.list().filter(definition => definition.behavior === 'trigger').length, 1)
 })
 
-test('NodeRegistry infers Reference inputs only from actual media bindings', async (t) => {
+test('VdNodeRegistry infers Reference inputs only from actual media bindings', async (t) => {
   const { workflows, nodes } = await createRegistry(t)
   const video = nodes.list().find(definition => definition.workflowId === 'builtin-minimax-h3-video-turbo')
   const referenceVideo = nodes.list().find(definition => definition.workflowId === 'builtin-minimax-h3-reference-to-video-turbo')
@@ -98,7 +98,7 @@ test('NodeRegistry infers Reference inputs only from actual media bindings', asy
   }])
 })
 
-test('NodeRegistry installs an immutable declarative workflow node with primary and Advanced fields', async (t) => {
+test('VdNodeRegistry installs an immutable declarative workflow node with primary and Advanced fields', async (t) => {
   const { workflows, nodes } = await createRegistry(t)
   const pack = await examplePack()
   const installed = await nodes.install(pack)
@@ -128,7 +128,7 @@ test('NodeRegistry installs an immutable declarative workflow node with primary 
   })
 })
 
-test('NodeRegistry rejects arbitrary executors and validates field schemas at run time', async (t) => {
+test('VdNodeRegistry rejects arbitrary executors and validates field schemas at run time', async (t) => {
   const { nodes } = await createRegistry(t)
   const pack = await examplePack()
   const unsafe = structuredClone(pack)
@@ -151,7 +151,7 @@ test('NodeRegistry rejects arbitrary executors and validates field schemas at ru
   })
 })
 
-test('NodeRegistry validates schema keywords and defaults before installing a field', async (t) => {
+test('VdNodeRegistry validates schema keywords and defaults before installing a field', async (t) => {
   const { nodes } = await createRegistry(t)
   const invalidCases = [
     {
@@ -211,7 +211,7 @@ test('NodeRegistry validates schema keywords and defaults before installing a fi
   }
 })
 
-test('NodeRegistry stores one field parameter with several workflow targets', async (t) => {
+test('VdNodeRegistry stores one field parameter with several workflow targets', async (t) => {
   const { workflows, nodes } = await createRegistry(t)
   const pack = await examplePack()
   pack.type = 'example.multi-target-field'
@@ -234,7 +234,7 @@ test('NodeRegistry stores one field parameter with several workflow targets', as
   assert.equal(resolved.workflow['5'].inputs.denoise, 4.5)
 })
 
-test('NodeRegistry preserves image-edit and typed port binding identity', async (t) => {
+test('VdNodeRegistry preserves image-edit and typed port binding identity', async (t) => {
   const { workflows, nodes } = await createRegistry(t)
   const pack = await examplePack()
   pack.type = 'example.image-edit-ports'
@@ -273,7 +273,7 @@ test('NodeRegistry preserves image-edit and typed port binding identity', async 
   }, { min: 0, integer: true })
 })
 
-test('NodeRegistry serializes immutable type and version installation', async (t) => {
+test('VdNodeRegistry serializes immutable type and version installation', async (t) => {
   const { nodes } = await createRegistry(t)
   const first = await examplePack()
   first.type = 'example.concurrent-version'
@@ -289,7 +289,7 @@ test('NodeRegistry serializes immutable type and version installation', async (t
   )).length, 1)
 })
 
-test('NodeRegistry and the JSON Schema agree on namespaced types and exact SemVer', async (t) => {
+test('VdNodeRegistry and the JSON Schema agree on namespaced types and exact SemVer', async (t) => {
   const { nodes } = await createRegistry(t)
   const schema = JSON.parse(await readFile(new URL('../schemas/video-director-node-v1.schema.json', import.meta.url), 'utf8'))
   const typePattern = new RegExp(schema.properties.type.pattern, 'u')
@@ -326,25 +326,25 @@ test('NodeRegistry and the JSON Schema agree on namespaced types and exact SemVe
     assert.equal(typePattern.test(type), true, `schema should accept type ${type}`)
     const pack = await examplePack()
     pack.type = type
-    assert.equal(normalizeNodePack(pack).type, type)
+    assert.equal(normalizeVdNodePack(pack).type, type)
   }
   for (const type of invalidTypes) {
     assert.equal(typePattern.test(type), false, `schema should reject type ${type}`)
     const pack = await examplePack()
     pack.type = type
-    assert.throws(() => normalizeNodePack(pack), /lowercase namespaced identifier/i)
+    assert.throws(() => normalizeVdNodePack(pack), /lowercase namespaced identifier/i)
   }
   for (const version of validVersions) {
     assert.equal(versionPattern.test(version), true, `schema should accept version ${version}`)
     const pack = await examplePack()
     pack.version = version
-    assert.equal(normalizeNodePack(pack).version, version)
+    assert.equal(normalizeVdNodePack(pack).version, version)
   }
   for (const version of invalidVersions) {
     assert.equal(versionPattern.test(version), false, `schema should reject version ${version}`)
     const pack = await examplePack()
     pack.version = version
-    assert.throws(() => normalizeNodePack(pack), /node version/i)
+    assert.throws(() => normalizeVdNodePack(pack), /node version/i)
   }
 
   const installable = await examplePack()

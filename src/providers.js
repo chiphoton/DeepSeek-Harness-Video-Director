@@ -199,9 +199,25 @@ async function request(fetchImpl, url, init, options = {}) {
   })
   if (!response.ok) {
     try { await response.body?.cancel() } catch {}
-    throw new Error(`${options.label ?? 'provider'} request failed (${String(response.status)})`)
+    const error = new Error(`${options.label ?? 'provider'} request failed (${String(response.status)})`)
+    error.status = response.status
+    throw error
   }
   return response
+}
+
+function transientConnectionError(error) {
+  if ([408, 425, 429, 502, 503, 504].includes(error?.status)) return true
+  if (error?.status !== undefined || error instanceof DirectorInputError) return false
+  if (error?.name === 'TimeoutError' || error?.name === 'AbortError') return true
+  const code = error?.cause?.code ?? error?.code
+  if (/^(ECONNRESET|ECONNREFUSED|ECONNABORTED|EPIPE|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|UND_ERR_(CONNECT_TIMEOUT|HEADERS_TIMEOUT|BODY_TIMEOUT|SOCKET))$/u.test(code ?? '')) return true
+  return /fetch failed|failed to fetch|network error|connection (closed|reset|refused)|socket (closed|hang up)|terminated/iu.test(error?.message ?? '')
+}
+
+function connectionWasNotEstablished(error) {
+  return ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH', 'UND_ERR_CONNECT_TIMEOUT']
+    .includes(error?.cause?.code ?? error?.code)
 }
 
 function abortableWait(milliseconds, signal) {
@@ -282,10 +298,11 @@ function omitWorkflowNode(workflow, nodeId) {
 }
 
 function setWorkflowInput(workflow, binding, values) {
-  const nodeId = string(binding.nodeId, 'binding.nodeId', { min: 1, max: 128 })
+  // Bind a vd-node value into the provider graph, not into the canvas graph.
+  const comfyNodeId = string(binding.nodeId, 'binding.nodeId', { min: 1, max: 128 })
   const inputName = string(binding.input, 'binding.input', { min: 1, max: 128 })
-  const node = record(workflow[nodeId], `workflow[${nodeId}]`)
-  const inputs = record(node.inputs, `workflow[${nodeId}].inputs`)
+  const comfyNode = record(workflow[comfyNodeId], `workflow[${comfyNodeId}]`)
+  const inputs = record(comfyNode.inputs, `workflow[${comfyNodeId}].inputs`)
   let value
   switch (binding.from) {
     case 'prompt': value = values.prompt; break
@@ -317,7 +334,7 @@ function setWorkflowInput(workflow, binding, values) {
     default: throw new DirectorInputError(`unsupported binding source: ${String(binding.from)}`)
   }
   if (value === undefined) {
-    throw new DirectorInputError(`binding ${nodeId}.${inputName} has no value for source ${String(binding.from)}`)
+    throw new DirectorInputError(`comfyui-node binding ${comfyNodeId}.${inputName} has no value for source ${String(binding.from)}`)
   }
   inputs[inputName] = value
 }
@@ -413,6 +430,26 @@ export class ProviderRuntime {
       ...(provider.mcpBaseUrl === undefined || provider.mcpBaseUrl === '' ? {} : { mcpBaseUrl: cleanBaseUrl(provider.mcpBaseUrl) }),
     }]))
     this.minimaxH3LicenseAccepted = minimaxH3LicenseAccepted !== false
+  }
+
+  async #reconnect(operation, signal, progress = () => {}, phase = 'running') {
+    let failures = 0
+    while (true) {
+      signal?.throwIfAborted()
+      let result
+      try {
+        result = await operation()
+      } catch (error) {
+        if (signal?.aborted || !transientConnectionError(error)) throw error
+        failures += 1
+        await progress({ phase: 'reconnecting' })
+        await this.wait(Math.min(30_000, 1_000 * 2 ** Math.min(failures - 1, 5)), signal)
+        continue
+      }
+      signal?.throwIfAborted()
+      if (failures > 0) await progress({ phase })
+      return result
+    }
   }
 
   publicCatalog() {
@@ -582,8 +619,8 @@ export class ProviderRuntime {
     if (action === 'skip') {
       return { action: 'skip', message: 'VRAM trigger bypassed; no action was taken.' }
     }
-    if (action === 'ollama-eject') return this.#ejectOllamaModels(signal)
-    if (action === 'comfyui-clear') return this.#clearComfyUi(options.releaseWaitSeconds ?? 10, signal)
+    if (action === 'ollama-eject') return this.#reconnect(() => this.#ejectOllamaModels(signal), signal)
+    if (action === 'comfyui-clear') return this.#reconnect(() => this.#clearComfyUi(options.releaseWaitSeconds ?? 10, signal), signal)
     throw new DirectorInputError(`unknown VRAM trigger action: ${String(action)}`)
   }
 
@@ -739,6 +776,11 @@ export class ProviderRuntime {
       return this.codexPlan.runText(provider, requestValue, signal, progress)
     }
     if (requestValue.operation === 'prompt-enhancer' || requestValue.operation === 'text-generation') {
+      if (provider.kind === 'ollama') {
+        // Ollama chat has no retrievable job ID. Retry the same immutable
+        // request after a disconnect; never publish a partial response.
+        return this.#reconnect(() => this.#text(provider, requestValue, signal), signal, progress)
+      }
       return this.#text(provider, requestValue, signal)
     }
     if (requestValue.operation === 'image-generation' && provider.kind === 'openai-compatible') {
@@ -752,12 +794,12 @@ export class ProviderRuntime {
         // The read-only probe is the only safe fallback point. Once MCP enqueue
         // starts, an ambiguous failure may still have submitted the workflow,
         // so it must propagate instead of being retried through REST.
-        return this.#comfyMcp(provider, requestValue, signal, progress)
+        return this.#runComfy(provider, requestValue, signal, progress, true)
       }
-      return this.#comfy(provider, requestValue, signal, progress)
+      return this.#runComfy(provider, requestValue, signal, progress, false)
     }
     if (provider.kind === 'comfyui-mcp') {
-      return this.#comfyMcp(provider, requestValue, signal, progress)
+      return this.#runComfy(provider, requestValue, signal, progress, true)
     }
     throw new DirectorInputError(`${provider.label} cannot run ${String(requestValue.operation)}`)
   }
@@ -912,26 +954,135 @@ export class ProviderRuntime {
     return { kind: 'assets', assets: [asset], providerId: provider.id }
   }
 
-  async #comfy(provider, input, signal, progress) {
+  async #runComfy(provider, input, signal, progress, useMcp) {
+    const submission = { clientId: undefined, promptId: undefined, uncertain: false, finished: false }
+    try {
+      signal?.throwIfAborted()
+      const result = useMcp
+        ? await this.#comfyMcp(provider, input, signal, progress, submission)
+        : await this.#comfy(provider, input, signal, progress, submission)
+      signal?.throwIfAborted()
+      return result
+    } catch (error) {
+      if (!signal?.aborted || submission.finished) throw error
+      try {
+        // Cancelling a polling request does not cancel ComfyUI execution. Cleanup
+        // must survive the user's aborted signal and a disconnected SSH tunnel.
+        const cancelling = update => progress({ ...update,
+          phase: update.phase === 'reconnecting' ? 'cancelling-reconnecting' : 'cancelling',
+        })
+        if (submission.promptId === undefined && submission.uncertain) {
+          if (submission.clientId === undefined) {
+            throw new Error('MCP enqueue did not return a prompt ID; check the ComfyUI queue to cancel the submitted workflow.')
+          }
+          submission.promptId = await this.#findComfySubmission(provider, submission.clientId, undefined, cancelling)
+        }
+        if (submission.promptId !== undefined) {
+          await cancelling({ promptId: submission.promptId })
+          await this.#cancelComfyPrompt(provider, submission.promptId, cancelling)
+        }
+      } catch (cause) {
+        const failure = new Error(`Could not confirm ComfyUI cancellation${submission.promptId ? ` for ${submission.promptId}` : ''}: ${cause.message}`, { cause })
+        failure.code = 'video-director/remote-cancel-failed'
+        throw failure
+      }
+      throw signal.reason ?? error
+    }
+  }
+
+  async #cancelComfyPrompt(provider, promptId, progress) {
+    if (!provider.baseUrl) throw new Error('Configure the ComfyUI REST URL to cancel this workflow.')
+    const readQueue = () => this.#reconnect(async () => {
+      const response = await request(this.fetch, `${provider.baseUrl}/queue`, {
+        headers: this.#headers(provider),
+      }, { timeoutMs: provider.timeoutMs, label: `${provider.label} cancellation status` })
+      const queue = parseJsonText(await response.text(), provider.label)
+      if (!Array.isArray(queue.queue_running) || !Array.isArray(queue.queue_pending)) {
+        throw new Error('ComfyUI returned an invalid queue; cancellation cannot be confirmed.')
+      }
+      return queue
+    }, undefined, progress, 'cancelling')
+    let accepted = false
+    try {
+      accepted = await this.#reconnect(async () => {
+        const response = await request(this.fetch, `${provider.baseUrl}/api/jobs/${encodeURIComponent(promptId)}/cancel`, {
+          method: 'POST', headers: this.#headers(provider),
+        }, { timeoutMs: provider.timeoutMs, label: `${provider.label} cancellation` })
+        return parseJsonText(await response.text(), provider.label).cancelled === true
+      }, undefined, progress, 'cancelling')
+    } catch (error) {
+      if (![404, 405].includes(error?.status)) throw error
+      // Older servers can safely delete an exact queued item. Their global
+      // /interrupt endpoint can stop another user's job, so never use it.
+      await this.#reconnect(async () => {
+        const response = await request(this.fetch, `${provider.baseUrl}/queue`, {
+          method: 'POST',
+          headers: { ...this.#headers(provider), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ delete: [promptId] }),
+        }, { timeoutMs: provider.timeoutMs, label: `${provider.label} queue cancellation` })
+        await response.text()
+      }, undefined, progress, 'cancelling')
+    }
+    while (true) {
+      const queue = await readQueue()
+      const active = [...queue.queue_running, ...queue.queue_pending].some(row => row?.[1] === promptId)
+      if (!active) return
+      if (!accepted) {
+        throw new Error('The prompt is still active. ComfyUI must support POST /api/jobs/{id}/cancel to stop a running prompt safely; update ComfyUI or cancel it in ComfyUI.')
+      }
+      // ComfyUI acknowledges the interrupt before the executing node stops.
+      // Keep the local queue occupied until this specific prompt has stopped.
+      await this.wait(provider.pollIntervalMs)
+    }
+  }
+
+  async #comfy(provider, input, signal, progress, submission) {
     const seed = Number.isSafeInteger(input.seed) ? input.seed : randomInt(0, 2_147_483_647)
-    progress({ phase: 'uploading', progress: 0.05 })
-    const uploaded = await this.#uploadComfyInputs(provider, input.assetIds, signal)
+    await progress({ phase: 'uploading', progress: 0.05 })
+    const uploaded = await this.#uploadComfyInputs(provider, input.assetIds, signal, progress)
     const workflow = this.#compileWorkflow(input, seed, uploaded)
-    progress({ phase: 'queued', progress: 0.12 })
-    const response = await request(this.fetch, `${provider.baseUrl}/prompt`, {
-      method: 'POST',
-      headers: { ...this.#headers(provider), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: workflow, client_id: `dsh-video-director-${randomUUID()}` }),
-    }, { signal, timeoutMs: null, label: provider.label })
-    const queued = parseJsonText(await response.text(), provider.label)
-    const promptId = promptIdFrom(queued)
-    if (promptId === undefined) throw new Error(`${provider.label} returned no prompt_id`)
+    await progress({ phase: 'queued', progress: 0.12 })
+    const clientId = `dsh-video-director-${randomUUID()}`
+    submission.clientId = clientId
+    const promptId = await this.#reconnect(async () => {
+      signal?.throwIfAborted()
+      try {
+        submission.uncertain = true
+        // Let this bounded enqueue finish even if Cancel is clicked, so its
+        // receipt can identify the remote job that must be cancelled next.
+        const response = await request(this.fetch, `${provider.baseUrl}/prompt`, {
+          method: 'POST',
+          headers: { ...this.#headers(provider), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt: workflow, client_id: clientId }),
+        }, { timeoutMs: provider.timeoutMs, label: provider.label })
+        const queued = parseJsonText(await response.text(), provider.label)
+        const id = promptIdFrom(queued)
+        if (id !== undefined) {
+          submission.promptId = id
+          submission.uncertain = false
+          return id
+        }
+      } catch (error) {
+        if (connectionWasNotEstablished(error) || (error?.status !== undefined && !transientConnectionError(error))) {
+          submission.uncertain = false
+        }
+        if (signal?.aborted || !transientConnectionError(error)) throw error
+        // Retrying is safe only if the connection was never established.
+        // A lost response can otherwise enqueue a duplicate, even with the
+        // same prompt_id. Reconcile it using this submission's unique client_id.
+        if (connectionWasNotEstablished(error)) throw error
+      }
+      submission.promptId = await this.#findComfySubmission(provider, clientId, signal, progress)
+      submission.uncertain = false
+      return submission.promptId
+    }, signal, progress, 'queued')
     await progress({
       phase: 'running', progress: 0.15, promptId, seed,
       compiledWorkflowHash: workflowHash(workflow),
     })
     const history = await this.#waitForHistory(provider, promptId, signal, progress)
-    const assets = await this.#collectComfyOutputs(provider, input.projectId, promptId, history, signal)
+    submission.finished = true
+    const assets = await this.#collectComfyOutputs(provider, input.projectId, promptId, history, signal, progress)
     return {
       kind: 'assets', assets, providerId: provider.id, promptId, seed,
       transport: 'rest',
@@ -941,22 +1092,49 @@ export class ProviderRuntime {
     }
   }
 
-  async #comfyMcp(provider, input, signal, progress) {
+  async #findComfySubmission(provider, clientId, signal, progress) {
+    while (true) {
+      signal?.throwIfAborted()
+      await progress({ phase: 'reconciling-submission' })
+      const read = path => this.#reconnect(async () => {
+        const response = await request(this.fetch, `${provider.baseUrl}${path}`, {
+          headers: this.#headers(provider),
+        }, { signal, timeoutMs: provider.timeoutMs, label: `${provider.label} submission recovery` })
+        return parseJsonText(await response.text(), provider.label)
+      }, signal, progress, 'reconciling-submission')
+      const queue = await read('/queue')
+      const queued = [...(queue.queue_running ?? []), ...(queue.queue_pending ?? [])]
+        .find(row => row?.[3]?.client_id === clientId)
+      if (typeof queued?.[1] === 'string') return queued[1]
+      const histories = await read('/history')
+      const completed = Object.entries(histories).find(([, row]) => row?.prompt?.[3]?.client_id === clientId)
+      if (completed !== undefined) return completed[0]
+      // Absence is not proof of rejection: validation may still be running.
+      await this.wait(provider.pollIntervalMs, signal)
+    }
+  }
+
+  async #comfyMcp(provider, input, signal, progress, submission) {
     if (this.tools === undefined) throw new Error('DSH tools service is not available for ComfyUI MCP')
     const seed = Number.isSafeInteger(input.seed) ? input.seed : randomInt(0, 2_147_483_647)
     const uploaded = provider.baseUrl === undefined
       ? new Map()
-      : await this.#uploadComfyInputs(provider, input.assetIds, signal)
+      : await this.#uploadComfyInputs(provider, input.assetIds, signal, progress)
     const workflow = this.#compileWorkflow(input, seed, uploaded)
-    progress({ phase: 'queued', progress: 0.1 })
+    await progress({ phase: 'queued', progress: 0.1 })
+    signal?.throwIfAborted()
+    submission.uncertain = true
     const result = await this.#callMcp(provider, 'enqueue_workflow', {
       workflow,
       disable_random_seed: true,
-    }, signal)
+    }, AbortSignal.timeout(provider.timeoutMs))
     const promptId = promptIdFrom(result)
+    submission.promptId = promptId
+    submission.uncertain = promptId === undefined
     const compiledWorkflowHash = workflowHash(workflow)
     const directAssets = await this.#importMcpFinalAssets(provider, input.projectId, result)
     if (directAssets.length > 0) {
+      submission.finished = true
       await progress({
         phase: 'completed', progress: 0.99,
         ...(promptId === undefined ? {} : { promptId }), seed, compiledWorkflowHash,
@@ -990,7 +1168,8 @@ export class ProviderRuntime {
     // comfyui-mcp completion messages are not a DSH transport. Poll the exact
     // prompt history and use the REST response to recover video and SaveAudio outputs.
     const history = await this.#waitForHistory(provider, promptId, signal, progress)
-    const assets = await this.#collectComfyOutputs(provider, input.projectId, promptId, history, signal)
+    submission.finished = true
+    const assets = await this.#collectComfyOutputs(provider, input.projectId, promptId, history, signal, progress)
     return {
       kind: 'assets', assets, providerId: provider.id, promptId, seed, mcp: true,
       transport: 'mcp',
@@ -1108,19 +1287,21 @@ export class ProviderRuntime {
     return workflow
   }
 
-  async #uploadComfyInputs(provider, assetIds, signal) {
+  async #uploadComfyInputs(provider, assetIds, signal, progress) {
     const uploaded = new Map()
     for (const assetId of Array.isArray(assetIds) ? assetIds : []) {
       const { asset, data } = await this.store.assetBytes(assetId)
       const form = new FormData()
       form.set('image', new Blob([data], { type: asset.mimeType }), asset.name)
       form.set('overwrite', 'false')
-      const response = await request(this.fetch, `${provider.baseUrl}/upload/image`, {
-        method: 'POST',
-        headers: this.#headers(provider),
-        body: form,
-      }, { signal, timeoutMs: null, label: `${provider.label} upload` })
-      const body = parseJsonText(await response.text(), `${provider.label} upload`)
+      const body = await this.#reconnect(async () => {
+        const response = await request(this.fetch, `${provider.baseUrl}/upload/image`, {
+          method: 'POST',
+          headers: this.#headers(provider),
+          body: form,
+        }, { signal, timeoutMs: provider.timeoutMs, label: `${provider.label} upload` })
+        return parseJsonText(await response.text(), `${provider.label} upload`)
+      }, signal, progress, 'uploading')
       const name = body?.name
       if (typeof name !== 'string') throw new Error(`${provider.label} upload returned no name`)
       uploaded.set(assetId, body?.subfolder ? `${body.subfolder}/${name}` : name)
@@ -1129,39 +1310,37 @@ export class ProviderRuntime {
   }
 
   async #waitForHistory(provider, promptId, signal, progress) {
-    let attempt = 0
     while (true) {
       if (signal?.aborted === true) throw signal.reason ?? new Error('workflow cancelled')
-      const response = await request(this.fetch, `${provider.baseUrl}/history/${encodeURIComponent(promptId)}`, {
-        headers: this.#headers(provider),
-      }, {
-        signal,
-        timeoutMs: null,
-        label: `${provider.label} history`,
-      })
-      const body = parseJsonText(await response.text(), `${provider.label} history`)
+      const body = await this.#reconnect(async () => {
+        const response = await request(this.fetch, `${provider.baseUrl}/history/${encodeURIComponent(promptId)}`, {
+          headers: this.#headers(provider),
+        }, {
+          signal,
+          timeoutMs: provider.timeoutMs,
+          label: `${provider.label} history`,
+        })
+        return parseJsonText(await response.text(), `${provider.label} history`)
+      }, signal, progress)
       const history = body?.[promptId] ?? body
-      if (history?.outputs !== undefined) return history
-      attempt += 1
-      progress({ phase: 'running', progress: Math.min(0.9, 0.15 + attempt * 0.025) })
-      await new Promise((resolve, reject) => {
-        let timer
-        const cleanup = () => signal?.removeEventListener('abort', onAbort)
-        const onAbort = () => {
-          clearTimeout(timer)
-          cleanup()
-          reject(signal?.reason ?? new Error('workflow cancelled'))
-        }
-        timer = setTimeout(() => {
-          cleanup()
-          resolve()
-        }, provider.pollIntervalMs)
-        signal?.addEventListener('abort', onAbort, { once: true })
-      })
+      if (history?.status?.status_str === 'error') {
+        const details = history.status.messages?.find(row => row[0] === 'execution_error')?.[1]
+        throw new Error(`ComfyUI workflow ${promptId} failed: ${details?.exception_message ?? 'execution error'}`)
+      }
+      if (history?.outputs !== undefined && history?.status?.completed !== false) return history
+      const queue = await this.#reconnect(async () => {
+        const response = await request(this.fetch, `${provider.baseUrl}/queue`, {
+          headers: this.#headers(provider),
+        }, { signal, timeoutMs: provider.timeoutMs, label: `${provider.label} queue` })
+        return parseJsonText(await response.text(), `${provider.label} queue`)
+      }, signal, progress)
+      const queued = (queue.queue_pending ?? []).some(row => row[1] === promptId)
+      await progress({ phase: queued ? 'queued' : 'running' })
+      await this.wait(provider.pollIntervalMs, signal)
     }
   }
 
-  async #collectComfyOutputs(provider, projectId, promptId, history, signal) {
+  async #collectComfyOutputs(provider, projectId, promptId, history, signal, progress) {
     const descriptors = []
     for (const output of Object.values(history.outputs ?? {})) {
       if (typeof output !== 'object' || output === null) continue
@@ -1185,16 +1364,19 @@ export class ProviderRuntime {
         subfolder: descriptor.subfolder,
         type: descriptor.type,
       })
-      const response = await request(this.fetch, `${provider.baseUrl}/view?${query.toString()}`, {
-        headers: this.#headers(provider),
-      }, {
-        signal,
-        timeoutMs: null,
-        label: `${provider.label} output`,
-      })
-      const mimeType = contentType(response, descriptor.filename)
+      const { mimeType, data } = await this.#reconnect(async () => {
+        const response = await request(this.fetch, `${provider.baseUrl}/view?${query.toString()}`, {
+          headers: this.#headers(provider),
+        }, {
+          signal,
+          timeoutMs: provider.timeoutMs,
+          label: `${provider.label} output`,
+        })
+        const mimeType = contentType(response, descriptor.filename)
+        const data = Buffer.from(await response.arrayBuffer())
+        return { mimeType, data }
+      }, signal, progress, 'downloading')
       if (mimeType === 'application/octet-stream') continue
-      const data = Buffer.from(await response.arrayBuffer())
       const asset = await this.store.putAsset({
         projectId,
         kind: outputKind(mimeType),

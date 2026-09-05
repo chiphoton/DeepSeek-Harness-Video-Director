@@ -3,7 +3,7 @@ import type {
   DirectorGraph,
   DirectorNodeData,
   MediaKind,
-  NodeDefinitionDescriptor,
+  VdNodeDefinitionDescriptor,
 } from './types'
 import { resolveEdgePorts } from './ports'
 
@@ -38,7 +38,7 @@ function resultText(data: DirectorNodeData): string | undefined {
 
 export function referencePreviewsByTarget(
   graph: DirectorGraph,
-  definitions: readonly NodeDefinitionDescriptor[],
+  definitions: readonly VdNodeDefinitionDescriptor[],
 ): Readonly<Record<string, readonly DirectorReferencePreview[]>> {
   const previews: Record<string, DirectorReferencePreview[]> = {}
   for (const edge of graph.edges) {

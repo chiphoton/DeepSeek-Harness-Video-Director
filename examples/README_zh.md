@@ -14,6 +14,8 @@
 
 [`all-in-one.video-director.json`](all-in-one.video-director.json) 是一个可以直接导入的端到端工程。它在一张画布中展示图片生成、图片编辑、多模态提示词增强、视频生成、显存交接与结果预览。
 
+画布流程称为 **vd-workflow**，其中的模块是 **vd-node**。调用 ComfyUI 的 vd-node 使用独立的 **comfyui-workflow**，内部包含 **comfyui-node**。上面的文件是 vd-project 导出，不是 ComfyUI API 图或 vd-node pack。详见[术语约定](../docs/TERMINOLOGY_zh.md)。
+
 <p align="center">
   <img src="all-in-one.preview.png" alt="All-in-One Video-Director 工程预览" width="100%">
 </p>

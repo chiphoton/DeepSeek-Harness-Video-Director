@@ -8,9 +8,9 @@ import type {
   DirectorNode,
   DirectorNodeData,
   DirectorSnapshot,
-  DirectorWorkflowRun,
+  VdRun,
   MediaKind,
-  NodeDefinitionDescriptor,
+  VdNodeDefinitionDescriptor,
   ObservableSource,
   ProjectSummary,
   ProviderDescriptor,
@@ -19,10 +19,10 @@ import type {
   SessionBinding,
   SketchDocument,
   VideoProject,
-  WorkflowDescriptor,
-  WorkflowKind,
-  WorkflowRunMode,
-  WorkflowResult,
+  ComfyWorkflowDescriptor,
+  ComfyWorkflowKind,
+  VdRunMode,
+  VdNodeResult,
 } from './types'
 import {
   inferredNodeOutputTypes,
@@ -45,7 +45,7 @@ import {
 } from './parameter-inputs'
 import { effectiveOllamaModel, ollamaModelSupports } from './model-choices'
 import { DEFAULT_TEXT_WORKFLOW_SYSTEM_PROMPT } from './default-system-prompt'
-import { planWorkflowRun, validateTriggerNodeConnections } from './workflow-runner'
+import { planVdRun, validateTriggerNodeConnections } from './workflow-runner'
 
 const CHANNEL = '/video-director'
 const JOB_POLL_MS = 1_400
@@ -84,6 +84,22 @@ interface ActiveNodeRun {
   consecutivePollFailures?: number
 }
 
+function waitForRunTurn(previous: Promise<unknown>, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const aborted = (): void => reject(new Error(String(signal.reason ?? 'vd-run was cancelled.')))
+    if (signal.aborted) { aborted(); return }
+    signal.addEventListener('abort', aborted, { once: true })
+    previous.then(() => {
+      signal.removeEventListener('abort', aborted)
+      if (signal.aborted) aborted()
+      else resolve()
+    }, error => {
+      signal.removeEventListener('abort', aborted)
+      reject(error)
+    })
+  })
+}
+
 interface ActiveRunCompletion {
   promise: Promise<DirectorJob>
   settled: boolean
@@ -93,8 +109,9 @@ interface ActiveRunCompletion {
 
 interface NodeRunOptions {
   graph?: DirectorGraph
+  sourceRevision?: number
   workflowRunId?: string
-  workflowRunMode?: WorkflowRunMode
+  workflowRunMode?: VdRunMode
   batchIndex?: number
   batchSize?: number
   seed?: number
@@ -141,6 +158,7 @@ function emptySnapshot(): DirectorSnapshot {
     dirty: false,
     canUndo: false,
     canRedo: false,
+    canvasResetVersion: 0,
     saving: false,
     conflict: false,
     error: null,
@@ -484,7 +502,7 @@ function nodeTitle(kind: Exclude<MediaKind, 'mask' | 'flow'>): string {
 function withDefaultRegisteredImageWorkflow(
   data: DirectorNodeData,
   providers: readonly ProviderDescriptor[],
-  workflows: readonly WorkflowDescriptor[],
+  workflows: readonly ComfyWorkflowDescriptor[],
 ): DirectorNodeData {
   if ((data.kind !== 'image-generation' && data.kind !== 'image-edit')
     || data.workflowId !== undefined
@@ -506,7 +524,7 @@ function withDefaultRegisteredImageWorkflow(
 function initializeDefaultRegisteredImageWorkflows(
   project: VideoProject,
   providers: readonly ProviderDescriptor[],
-  workflows: readonly WorkflowDescriptor[],
+  workflows: readonly ComfyWorkflowDescriptor[],
 ): VideoProject {
   let changed = false
   const nodes = project.graph.nodes.map(node => {
@@ -642,7 +660,7 @@ function normalizeLoadedPromptValidation(project: VideoProject): VideoProject {
   return changed ? { ...project, graph: { ...project.graph, nodes } } : project
 }
 
-function workflowResultPayload(result: WorkflowResult): Partial<DirectorNodeData> {
+function vdNodeResultPayload(result: VdNodeResult): Partial<DirectorNodeData> {
   if (result.kind === 'assets') {
     return {
       assets: result.assets,
@@ -659,18 +677,18 @@ function workflowResultPayload(result: WorkflowResult): Partial<DirectorNodeData
   }
 }
 
-function storedWorkflowResult(value: unknown): WorkflowResult | undefined {
+function storedVdNodeResult(value: unknown): VdNodeResult | undefined {
   if (value === null || typeof value !== 'object') return undefined
-  const candidate = value as Partial<WorkflowResult>
-  if (candidate.kind === 'assets' && Array.isArray(candidate.assets)) return candidate as WorkflowResult
-  if (candidate.kind === 'text' && typeof candidate.text === 'string') return candidate as WorkflowResult
-  if (candidate.kind === 'mcp-result' && 'result' in candidate) return candidate as WorkflowResult
+  const candidate = value as Partial<VdNodeResult>
+  if (candidate.kind === 'assets' && Array.isArray(candidate.assets)) return candidate as VdNodeResult
+  if (candidate.kind === 'text' && typeof candidate.text === 'string') return candidate as VdNodeResult
+  if (candidate.kind === 'mcp-result' && 'result' in candidate) return candidate as VdNodeResult
   return undefined
 }
 
 function nodeOutputPayload(data: DirectorNodeData): Partial<DirectorNodeData> | undefined {
-  const result = storedWorkflowResult(data.result)
-  if (result !== undefined) return { ...workflowResultPayload(result), result }
+  const result = storedVdNodeResult(data.result)
+  if (result !== undefined) return { ...vdNodeResultPayload(result), result }
   if (data.asset === undefined && data.assets === undefined && data.text === undefined) return undefined
   return {
     asset: data.asset,
@@ -709,7 +727,7 @@ function combinedSinkPayload(
   nodes: readonly DirectorNode[],
   edges: readonly DirectorEdge[],
   sinkId: string,
-  definitions: readonly NodeDefinitionDescriptor[],
+  definitions: readonly VdNodeDefinitionDescriptor[],
 ): Partial<DirectorNodeData> | undefined {
   const graph: DirectorGraph = { nodes: [...nodes], edges: [...edges], viewport: { x: 0, y: 0, zoom: 1 } }
   const payloads: Array<{ node: DirectorNode; payload: Partial<DirectorNodeData> }> = []
@@ -724,7 +742,7 @@ function combinedSinkPayload(
       .filter(asset => carriedTypes.includes(asset.kind))
     const text = carriedTypes.includes('text') ? payload.text : undefined
     if (assets.length === 0 && (text === undefined || text === '')) continue
-    const stored = storedWorkflowResult(payload.result)
+    const stored = storedVdNodeResult(payload.result)
     const result = stored?.kind === 'assets'
       ? { ...stored, assets }
       : payload.result
@@ -830,7 +848,7 @@ function duplicatedNodeData(data: DirectorNodeData, patch: Partial<DirectorNodeD
 function recomputeSinkPayloads(
   nodes: readonly DirectorNode[],
   edges: readonly DirectorEdge[],
-  definitions: readonly NodeDefinitionDescriptor[],
+  definitions: readonly VdNodeDefinitionDescriptor[],
 ): DirectorNode[] {
   const sinks = new Set(nodes
     .filter(node => (
@@ -868,6 +886,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
   private savePromise: Promise<void> | null = null
   private editVersion = 0
   private savedState: ProjectHistoryState | null = null
+  private openedProject: { id: string; state: ProjectHistoryState } | null = null
   private readonly undoStack: ProjectHistoryState[] = []
   private readonly redoStack: ProjectHistoryState[] = []
   private historyTransaction: { projectId: string; before: ProjectHistoryState } | null = null
@@ -876,8 +895,12 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
   private disposed = false
   private readonly jobTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private readonly activeRuns = new Map<string, ActiveNodeRun>()
-  private readonly workflowRunControllers = new Map<string, AbortController>()
+  private readonly vdRunControllers = new Map<string, AbortController>()
+  private vdRunTail: Promise<void> = Promise.resolve()
+  private readonly vdRunSnapshots = new Map<string, Pick<VideoProject, 'name' | 'graph' | 'settings'>>()
+  private readonly vdRunWrites = new Map<string, Promise<unknown>>()
   private readonly modelRefreshVersions = new Map<string, number>()
+  private nodeClipboard: { projectId: string; nodes: DirectorNode[]; edges: DirectorEdge[] } | null = null
 
   constructor(private readonly ctx: ClientContext) {}
 
@@ -894,8 +917,8 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
       const [projects, providers, workflows, nodes] = await Promise.all([
         this.rpc<{ projects: ProjectSummary[] }>('projects/list', {}),
         this.rpc<{ providers: ProviderDescriptor[] }>('providers/list', {}),
-        this.rpc<{ workflows: WorkflowDescriptor[] }>('workflows/list', {}),
-        this.rpc<{ nodeDefinitions: NodeDefinitionDescriptor[] }>('nodes/list', {})
+        this.rpc<{ workflows: ComfyWorkflowDescriptor[] }>('workflows/list', {}),
+        this.rpc<{ nodeDefinitions: VdNodeDefinitionDescriptor[] }>('nodes/list', {})
           .catch(() => ({ nodeDefinitions: [] })),
       ])
       this.patch({
@@ -922,9 +945,9 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
 
   close = (): void => { this.patch({ open: false }) }
 
-  private stopWorkflowSchedulers(message = 'Workflow run stopped because the project changed.'): void {
-    for (const controller of this.workflowRunControllers.values()) controller.abort(message)
-    this.workflowRunControllers.clear()
+  private stopVdRunSchedulers(message = 'vd-run stopped because the project changed.'): void {
+    for (const controller of this.vdRunControllers.values()) controller.abort(message)
+    this.vdRunControllers.clear()
     for (const active of this.activeRuns.values()) active.completion?.reject(new Error(message))
   }
 
@@ -932,7 +955,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
     this.disposed = true
     for (const timer of this.jobTimers.values()) clearTimeout(timer)
     this.jobTimers.clear()
-    this.stopWorkflowSchedulers('Workflow runner was disposed.')
+    this.stopVdRunSchedulers('vd-run scheduler was disposed.')
     this.activeRuns.clear()
     this.listeners.clear()
   }
@@ -958,10 +981,11 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
       ]
       this.baseProject = structuredClone(project)
       this.savedState = this.historyState(project)
+      this.openedProject = { id: project.id, state: this.historyState(project) }
       this.resetHistory()
       this.editVersion = 0
       this.projectGeneration += 1
-      this.stopWorkflowSchedulers()
+      this.stopVdRunSchedulers()
       this.activeRuns.clear()
       this.ctx.sessions.open(project.sessionId)
       this.patch({ project, projects, dirty: false, saving: false, phase: 'ready', workflowRuns: [] })
@@ -979,6 +1003,50 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
         filename: projectArchiveFilename(project.name),
         text: `${JSON.stringify(archive, null, 2)}\n`,
       }
+    } catch (error) {
+      this.patch({ error: errorMessage(error) })
+      throw error
+    }
+  }
+
+  async refreshVdRuns(): Promise<void> {
+    const project = this.requireProject()
+    const { runs } = await this.rpc<{ runs: VdRun[] }>('vd-runs/list', { projectId: project.id })
+    if (this.snapshot.project?.id !== project.id) return
+    const current = new Map(this.snapshot.workflowRuns.map(run => [run.id, run]))
+    this.patch({ workflowRuns: runs.map(run => current.get(run.id) ?? run)
+      .concat(this.snapshot.workflowRuns.filter(run => !runs.some(saved => saved.id === run.id))) })
+  }
+
+  private async submittedVdWorkflow(runId: string): Promise<Pick<VideoProject, 'name' | 'graph' | 'settings'>> {
+    const cached = this.vdRunSnapshots.get(runId)
+    if (cached !== undefined) return structuredClone(cached)
+    const { run } = await this.rpc<{ run: VdRun & { snapshot: Pick<VideoProject, 'name' | 'graph' | 'settings'> } }>(
+      'vd-runs/get', { projectId: this.requireProject().id, runId },
+    )
+    return run.snapshot
+  }
+
+  async openVdWorkflow(runId: string): Promise<void> {
+    try {
+      const projectId = this.requireProject().id
+      const submitted = await this.submittedVdWorkflow(runId)
+      if (this.snapshot.project?.id !== projectId) return
+      const project = this.requireProject()
+      // Opening is an ordinary undoable canvas edit. Execution uses its own graph.
+      this.updateProject({ ...project, graph: archivedGraph(submitted.graph), settings: submitted.settings })
+    } catch (error) {
+      this.patch({ error: errorMessage(error) })
+      throw error
+    }
+  }
+
+  async exportVdWorkflow(runId: string): Promise<ExportedProjectArchive> {
+    try {
+      const project = this.requireProject()
+      const submitted = await this.submittedVdWorkflow(runId)
+      const archive = await archiveForProject({ ...project, ...submitted })
+      return { filename: projectArchiveFilename(`${submitted.name}-${runId.slice(0, 8)}`), text: `${JSON.stringify(archive, null, 2)}\n` }
     } catch (error) {
       this.patch({ error: errorMessage(error) })
       throw error
@@ -1074,6 +1142,40 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
     await this.loadProject(project.id, false)
   }
 
+  /** Restore this opening's workflow snapshot locally; explicit saves keep the restore point. */
+  restoreOpenedProject(): void {
+    const current = this.snapshot.project
+    if (current === null || this.openedProject?.id !== current.id) return
+    if (this.snapshot.saving || this.snapshot.phase === 'loading') {
+      throw new Error('请等待当前工程操作完成后再放弃更改。')
+    }
+    if (this.activeRuns.size > 0 || this.vdRunControllers.size > 0
+      || current.jobs.some(job => job.status === 'queued' || job.status === 'running')
+      || this.snapshot.workflowRuns.some(run => run.projectId === current.id && (run.status === 'queued' || run.status === 'running'))) {
+      throw new Error('请等待任务结束或取消任务后再放弃更改。')
+    }
+    const project = { ...current, ...structuredClone(this.openedProject.state) }
+    // An execution that was active on opening cannot be rewound with the canvas.
+    project.graph.nodes = project.graph.nodes.map(node => {
+      if (node.data.status !== 'queued' && node.data.status !== 'running') return node
+      const job = current.jobs.find(job => job.id === node.data.jobId)
+      return { ...node, data: { ...node.data, status: job === undefined ? 'idle' : job.status === 'completed' ? 'completed' : 'failed', phase: job?.phase,
+        progress: job?.progress, error: job?.error, result: job?.result } }
+    })
+    this.resetHistory()
+    this.editVersion += 1
+    this.projectGeneration += 1
+    this.patch({
+      project,
+      projects: this.snapshot.projects.map(summary => summary.id === project.id
+        ? { ...project, nodeCount: project.graph.nodes.length } : summary),
+      dirty: this.isDirty(project),
+      conflict: false,
+      error: null,
+      canvasResetVersion: this.snapshot.canvasResetVersion + 1,
+    })
+  }
+
   async deleteProject(projectId: string = this.requireProject().id): Promise<void> {
     if (this.snapshot.phase === 'loading') {
       throw new Error('Wait for the current project transition to finish before deleting a project.')
@@ -1099,11 +1201,12 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
 
       for (const timer of this.jobTimers.values()) clearTimeout(timer)
       this.jobTimers.clear()
-      this.stopWorkflowSchedulers()
+      this.stopVdRunSchedulers()
       this.activeRuns.clear()
       this.projectGeneration += 1
       this.baseProject = null
       this.savedState = null
+      this.openedProject = null
       this.editVersion = 0
       this.resetHistory()
       this.patch({
@@ -1304,6 +1407,69 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
     })
   }
 
+  toggleNodesFrozen(nodeIds: readonly string[]): void {
+    const project = this.requireProject()
+    const ids = new Set(nodeIds)
+    const targets = project.graph.nodes.filter(node => ids.has(node.id))
+    if (targets.length === 0) return
+    if (targets.some(node => node.data.status === 'queued' || node.data.status === 'running' || this.activeRuns.has(node.id))) {
+      throw new Error('Cancel active jobs before changing the selected nodes’ Freeze state.')
+    }
+    const frozen = !targets.every(node => node.data.frozen === true)
+    this.beginHistoryTransaction()
+    try {
+      for (const node of targets) this.setNodeFrozen(node.id, frozen)
+    } finally { this.endHistoryTransaction() }
+  }
+
+  copyNodes(nodeIds: readonly string[]): void {
+    const project = this.requireProject()
+    const ids = new Set(nodeIds)
+    const nodes = project.graph.nodes.filter(node => ids.has(node.id))
+    if (nodes.length === 0) return
+    this.nodeClipboard = structuredClone({ projectId: project.id, nodes,
+      edges: project.graph.edges.filter(edge => ids.has(edge.source) && ids.has(edge.target)) })
+  }
+
+  canPasteNodes(): boolean {
+    return this.nodeClipboard !== null && this.nodeClipboard.projectId === this.snapshot.project?.id
+  }
+
+  pasteNodes(position: CanvasPosition): string[] {
+    const project = this.requireProject()
+    const clipboard = this.nodeClipboard
+    if (clipboard === null || clipboard.projectId !== project.id) return []
+    const origin = { x: Math.min(...clipboard.nodes.map(node => node.position.x)),
+      y: Math.min(...clipboard.nodes.map(node => node.position.y)) }
+    const ids = new Map(clipboard.nodes.map(node => [node.id, crypto.randomUUID()]))
+    const nodes = clipboard.nodes.map(source => ({
+      ...structuredClone(source), id: ids.get(source.id)!, selected: false, dragging: false,
+      position: { x: position.x + source.position.x - origin.x, y: position.y + source.position.y - origin.y },
+      data: duplicatedNodeData(structuredClone(source.data), {}),
+    }))
+    const edges = clipboard.edges.map(edge => ({ ...structuredClone(edge), id: crypto.randomUUID(),
+      source: ids.get(edge.source)!, target: ids.get(edge.target)!, selected: false }))
+    this.updateGraph([...project.graph.nodes, ...nodes], [...project.graph.edges, ...edges], project.graph.viewport)
+    return [...ids.values()]
+  }
+
+  async resetVram(): Promise<void> {
+    try {
+      const providers = this.snapshot.providers.filter(provider => provider.configured !== false && provider.baseUrl)
+      const actions = [
+        ...(providers.some(provider => provider.kind === 'ollama') ? ['ollama-eject'] : []),
+        ...(providers.some(provider => provider.kind === 'comfyui' || provider.kind === 'comfyui-mcp') ? ['comfyui-clear'] : []),
+      ]
+      if (actions.length === 0) throw new Error('Configure Ollama or ComfyUI before resetting VRAM.')
+      const results = await Promise.allSettled(actions.map(action => this.rpc('triggers/run', { action, releaseWaitSeconds: 10 })))
+      const errors = results.flatMap(result => result.status === 'rejected' ? [errorMessage(result.reason)] : [])
+      if (errors.length > 0) throw new Error(errors.join(' '))
+    } catch (error) {
+      this.patch({ error: errorMessage(error) })
+      throw error
+    }
+  }
+
   configureFieldInput(nodeId: string, fieldId: string, enabled: boolean): void {
     const project = this.requireProject()
     const node = project.graph.nodes.find(candidate => candidate.id === nodeId)
@@ -1370,14 +1536,24 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
     this.updateProject({ ...project, jobs, status }, 'system')
   }
 
-  private storeWorkflowRun(run: DirectorWorkflowRun): void {
-    const workflowRuns = [run, ...this.snapshot.workflowRuns.filter(candidate => candidate.id !== run.id)].slice(0, 30)
+  private storeVdRun(run: VdRun): void {
+    const workflowRuns = [run, ...this.snapshot.workflowRuns.filter(candidate => candidate.id !== run.id)]
     this.patch({ workflowRuns, error: null })
   }
 
-  private patchWorkflowRun(id: string, patch: Partial<DirectorWorkflowRun>): void {
+  private patchVdRun(id: string, patch: Partial<VdRun>): void {
     const workflowRuns = this.snapshot.workflowRuns.map(run => run.id === id ? { ...run, ...patch } : run)
     this.patch({ workflowRuns })
+  }
+
+  private persistVdRun(run: VdRun, snapshot?: Pick<VideoProject, 'name' | 'graph' | 'settings'>): Promise<unknown> {
+    const previous = this.vdRunWrites.get(run.id) ?? Promise.resolve()
+    const submittedRun = structuredClone(run)
+    const write = previous.catch(() => {}).then(() => this.rpc('vd-runs/save', {
+      projectId: run.projectId, run: submittedRun, ...(snapshot === undefined ? {} : { snapshot }),
+    }))
+    this.vdRunWrites.set(run.id, write)
+    return write
   }
 
   addText(text: string, position?: { x: number; y: number }): void {
@@ -1517,7 +1693,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
     if (ids.size === 0) return
     const targets = project.graph.nodes.filter(node => ids.has(node.id))
     if (targets.length === 0) return
-    const running = targets.find(node => node.data.status === 'queued' || node.data.status === 'running')
+    const running = targets.find(node => node.data.status === 'queued' || node.data.status === 'running' || this.activeRuns.has(node.id))
     if (running !== undefined) throw new Error(`Cancel ${running.data.title} before deleting it.`)
     for (const node of targets) {
       this.activeRuns.delete(node.id)
@@ -1644,6 +1820,9 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
   }
 
   async runNode(nodeId: string): Promise<void> {
+    if (this.activeRuns.get(nodeId)?.workflowRunId !== undefined) {
+      throw new Error('This node is executing a submitted workflow. Queue another workflow or cancel its current run first.')
+    }
     const node = this.requireProject().graph.nodes.find(candidate => candidate.id === nodeId)
     if (node === undefined) throw new Error(`Node ${nodeId} was not found`)
     if (isTriggerNodeKind(node.data.kind)) {
@@ -1654,11 +1833,11 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
   }
 
   async runDependencies(nodeId: string): Promise<string> {
-    return this.runWorkflow({ mode: 'dependencies', selectedNodeIds: [nodeId] })
+    return this.runVdWorkflow({ mode: 'dependencies', selectedNodeIds: [nodeId] })
   }
 
   private async submitTriggerRun(nodeId: string, options: NodeRunOptions = {}): Promise<void> {
-    if (this.snapshot.saving || this.snapshot.phase === 'loading') {
+    if ((this.snapshot.saving && options.workflowRunId === undefined) || this.snapshot.phase === 'loading') {
       throw new Error('Wait for the current project operation before running a trigger node.')
     }
     const project = this.requireProject()
@@ -1667,7 +1846,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
     if (node === undefined) throw new Error(`Node ${nodeId} was not found`)
     if (!isTriggerNodeKind(node.data.kind)) throw new Error(`${node.data.title} is not a trigger node.`)
     if (node.data.frozen === true) throw new Error(`${node.data.title} is frozen. Unfreeze it before running the node directly.`)
-    if (signalAborted(options.signal)) throw new Error('Workflow run was cancelled.')
+    if (signalAborted(options.signal)) throw new Error('vd-run was cancelled.')
     try {
       validateTriggerNodeConnections(executionGraph, nodeId)
       const definition = nodeDefinition(node.data, this.snapshot.nodeDefinitions)
@@ -1688,8 +1867,8 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
         error: undefined,
         jobId: undefined,
       })
-      await this.rpc('triggers/run', { action, releaseWaitSeconds })
-      if (signalAborted(options.signal)) throw new Error('Workflow run was cancelled.')
+      await this.rpc('triggers/run', { action, releaseWaitSeconds }, options.signal)
+      if (signalAborted(options.signal)) throw new Error('vd-run was cancelled.')
       this.updateSystemNode(nodeId, {
         status: 'completed',
         phase: 'completed',
@@ -1699,8 +1878,8 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
       })
     } catch (error) {
       this.updateSystemNode(nodeId, {
-        status: 'failed',
-        phase: 'trigger-failed',
+        status: signalAborted(options.signal) ? 'idle' : 'failed',
+        phase: signalAborted(options.signal) ? 'cancelled' : 'trigger-failed',
         progress: 0,
         error: errorMessage(error),
         jobId: undefined,
@@ -1710,8 +1889,8 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
   }
 
   private async submitNodeRun(nodeId: string, options: NodeRunOptions = {}): Promise<ActiveNodeRun> {
-    if (this.snapshot.saving || this.snapshot.phase === 'loading') {
-      throw new Error('Wait for the current project operation before running a workflow node.')
+    if ((this.snapshot.saving && options.workflowRunId === undefined) || this.snapshot.phase === 'loading') {
+      throw new Error('Wait for the current project operation before running a vd-node.')
     }
     const project = this.requireProject()
     const projectGeneration = this.projectGeneration
@@ -1733,7 +1912,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
     if (node.data.frozen === true) {
       throw new Error(`${node.data.title} is frozen. Unfreeze it before running the node directly.`)
     }
-    if (signalAborted(options.signal)) throw new Error('Workflow run was cancelled.')
+    if (signalAborted(options.signal)) throw new Error('vd-run was cancelled.')
     const clientRunId = crypto.randomUUID()
     let request: Record<string, unknown>
     try {
@@ -1882,7 +2061,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
         clientRunId,
         snapshot: {
           version: 1,
-          sourceRevision: project.revision,
+          sourceRevision: options.sourceRevision ?? project.revision,
           nodeType: node.data.nodeType,
           nodeVersion: node.data.nodeVersion,
           nodeDigest: node.data.nodeDigest,
@@ -1896,6 +2075,9 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
       this.scheduleJobPoll(job.id, nodeId, 0, activeRun)
       if (signalAborted(options.signal)) await this.cancelJob(job.id)
     } catch (error) {
+      // A failed Cancel RPC does not undo a successful jobs/start. Preserve the
+      // poller so the submitted job can still be observed and cancelled again.
+      if (activeRun.jobId !== undefined && (error as RemoteFailure).code === 'video-director/cancel-request-failed') throw error
       if (this.isActiveRun(nodeId, activeRun)) {
         this.activeRuns.delete(nodeId)
         this.updateSystemNode(nodeId, {
@@ -1912,8 +2094,14 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
 
   async cancelJob(jobId: string): Promise<void> {
     const project = this.requireProject()
-    const { job } = await this.rpc<{ job: DirectorJob }>('jobs/cancel', { projectId: project.id, jobId })
-    this.updateVisibleJob(job)
+    try {
+      const { job } = await this.rpc<{ job: DirectorJob }>('jobs/cancel', { projectId: project.id, jobId })
+      this.updateVisibleJob(job)
+    } catch (cause) {
+      throw Object.assign(new Error(`Could not request cancellation for job ${jobId}: ${errorMessage(cause)}`), {
+        code: 'video-director/cancel-request-failed',
+      })
+    }
   }
 
   async deleteJob(jobId: string): Promise<void> {
@@ -1939,25 +2127,25 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
     this.patch({ workflowRuns })
   }
 
-  async runWorkflow(options: {
-    mode: WorkflowRunMode
+  async runVdWorkflow(options: {
+    mode: VdRunMode
     selectedNodeIds?: readonly string[]
     batchSize?: number
   }): Promise<string> {
     if (this.snapshot.saving || this.snapshot.phase === 'loading') {
-      throw new Error('Wait for the current project operation before running the workflow.')
+      throw new Error('Wait for the current project operation before running the vd-workflow.')
     }
     const project = this.requireProject()
     let batchSize: number
     let executionSource: VideoProject
-    let plan: ReturnType<typeof planWorkflowRun>
+    let plan: ReturnType<typeof planVdRun>
     try {
       batchSize = options.batchSize ?? 1
       if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 20) {
         throw new Error('Batch size must be an integer from 1 to 20.')
       }
       executionSource = structuredClone(project)
-      plan = planWorkflowRun(executionSource.graph, {
+      plan = planVdRun(executionSource.graph, {
         mode: options.mode,
         selectedNodeIds: options.selectedNodeIds,
       })
@@ -1980,10 +2168,6 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
         }
         throw new Error(message)
       }
-      const busy = plan.nodeIds
-        .filter(nodeId => this.activeRuns.has(nodeId))
-        .map(nodeId => executionSource.graph.nodes.find(node => node.id === nodeId)?.data.title ?? nodeId)
-      if (busy.length > 0) throw new Error(`Wait for active nodes before running the workflow: ${busy.join(', ')}.`)
     } catch (error) {
       this.patch({ error: errorMessage(error) })
       throw error
@@ -1991,9 +2175,9 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
 
     const id = crypto.randomUUID()
     const controller = new AbortController()
-    this.workflowRunControllers.set(id, controller)
+    this.vdRunControllers.set(id, controller)
     const startedAt = new Date().toISOString()
-    const summary: DirectorWorkflowRun = {
+    const summary: VdRun = {
       id,
       projectId: project.id,
       mode: options.mode,
@@ -2001,18 +2185,41 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
       nodeIds: plan.nodeIds,
       completedJobs: 0,
       totalJobs: plan.nodeIds.length * batchSize,
-      status: 'running',
+      status: 'queued',
       startedAt,
     }
-    this.storeWorkflowRun(summary)
+    this.storeVdRun(summary)
+    const submitted = { name: executionSource.name, graph: executionSource.graph, settings: executionSource.settings }
+    this.vdRunSnapshots.set(id, structuredClone(submitted))
+    const previous = this.vdRunTail
+    let release!: () => void
+    const finished = new Promise<void>(resolve => { release = resolve })
+    this.vdRunTail = previous.catch(() => {}).then(() => finished)
+    const updateRun = async (patch: Partial<VdRun>): Promise<void> => {
+      Object.assign(summary, patch)
+      this.patchVdRun(id, patch)
+      await this.persistVdRun(summary)
+    }
 
     let completedJobs = 0
+    let remoteCancellationFailed = false
     try {
+      await this.persistVdRun(summary, submitted)
+      await waitForRunTurn(previous, controller.signal)
+      // A direct node job may have been started before this workflow was queued.
+      while (plan.nodeIds.some(nodeId => this.activeRuns.has(nodeId))) {
+        await waitForRunTurn(new Promise<void>(resolve => setTimeout(resolve, 100)), controller.signal)
+      }
+      controller.signal.throwIfAborted()
+      await updateRun({ status: 'running' })
       for (let batchIndex = 0; batchIndex < batchSize; batchIndex += 1) {
-        if (controller.signal.aborted) throw new Error('Workflow run was cancelled.')
+        if (controller.signal.aborted) throw new Error('vd-run was cancelled.')
         let executionProject = { ...executionSource, graph: structuredClone(executionSource.graph) }
         for (const stage of plan.stages) {
-          if (controller.signal.aborted) throw new Error('Workflow run was cancelled.')
+          if (controller.signal.aborted) throw new Error('vd-run was cancelled.')
+          while (stage.some(nodeId => this.activeRuns.has(nodeId))) {
+            await waitForRunTurn(new Promise<void>(resolve => setTimeout(resolve, 100)), controller.signal)
+          }
           const outcomes = await Promise.allSettled(stage.map(async nodeId => {
             const node = executionProject.graph.nodes.find(candidate => candidate.id === nodeId)
             if (node === undefined) throw new Error(`Node ${nodeId} disappeared from the run snapshot.`)
@@ -2033,6 +2240,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
               : undefined
             const activeRun = await this.submitNodeRun(nodeId, {
               graph: executionProject.graph,
+              sourceRevision: executionSource.revision,
               workflowRunId: id,
               workflowRunMode: options.mode,
               batchIndex,
@@ -2049,31 +2257,34 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
           for (const outcome of outcomes) {
             completedJobs += 1
             if (outcome.status === 'rejected') {
+              if (outcome.reason?.code === 'video-director/cancel-request-failed') remoteCancellationFailed = true
               failures.push(errorMessage(outcome.reason))
               continue
             }
             const { nodeId, job } = outcome.value
             if (job === undefined) continue
+            if (job.errorCode === 'video-director/remote-cancel-failed') remoteCancellationFailed = true
             if (job.status !== 'completed' || job.result === undefined) {
               failures.push(job.error ?? `${job.status}: ${job.phase}`)
               continue
             }
             executionProject = this.projectWithJobResult(executionProject, nodeId, job.result, false)
           }
-          this.patchWorkflowRun(id, { completedJobs })
+          await updateRun({ completedJobs })
           if (failures.length > 0) throw new Error(failures.join(' '))
         }
       }
-      this.patchWorkflowRun(id, {
+      controller.signal.throwIfAborted()
+      await updateRun({
         completedJobs,
         status: 'completed',
         completedAt: new Date().toISOString(),
       })
       return id
     } catch (error) {
-      const cancelled = controller.signal.aborted
-      const message = cancelled ? 'Workflow run was cancelled.' : errorMessage(error)
-      this.patchWorkflowRun(id, {
+      const cancelled = controller.signal.aborted && !remoteCancellationFailed
+      const message = cancelled ? 'vd-run was cancelled.' : errorMessage(error)
+      await updateRun({
         completedJobs,
         status: cancelled ? 'cancelled' : 'failed',
         completedAt: new Date().toISOString(),
@@ -2082,16 +2293,54 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
       if (!cancelled) this.patch({ error: message })
       throw error
     } finally {
-      this.workflowRunControllers.delete(id)
+      this.vdRunControllers.delete(id)
+      this.vdRunWrites.delete(id)
+      this.vdRunSnapshots.delete(id)
+      release()
     }
   }
 
-  async cancelWorkflowRun(workflowRunId: string): Promise<void> {
-    this.workflowRunControllers.get(workflowRunId)?.abort('Cancelled by the Video Director user')
-    const pending = [...this.activeRuns.values()]
+  async cancelVdRun(workflowRunId: string): Promise<void> {
+    this.vdRunControllers.get(workflowRunId)?.abort('Cancelled by the Video Director user')
+    const project = this.requireProject()
+    const jobIds = new Set([...this.activeRuns.values()]
       .filter(run => run.workflowRunId === workflowRunId && run.jobId !== undefined)
-      .map(run => this.cancelJob(run.jobId!))
-    await Promise.allSettled(pending)
+      .map(run => run.jobId!))
+    // Restored jobs may no longer have a node on the current canvas.
+    for (const job of project.jobs) {
+      if (job.workflowRunId === workflowRunId && (job.status === 'running' || job.status === 'queued')) jobIds.add(job.id)
+    }
+    const outcomes = await Promise.allSettled([...jobIds].map(jobId => this.cancelJob(jobId)))
+    const errors = outcomes.flatMap(outcome => outcome.status === 'rejected' ? [errorMessage(outcome.reason)] : [])
+    if (errors.length > 0) throw new Error(`Could not request cancellation for every job: ${errors.join(' ')}`)
+    const saved = this.snapshot.workflowRuns.find(run => run.id === workflowRunId)
+    if (saved !== undefined && !this.vdRunControllers.has(workflowRunId)
+      && (saved.status === 'queued' || saved.status === 'running')) {
+      const stopped = await Promise.all([...jobIds].map(async jobId => {
+        while (true) {
+          const { job } = await this.rpc<{ job: DirectorJob }>('jobs/get', { projectId: project.id, jobId })
+          this.updateVisibleJob(job)
+          if (job.status !== 'running' && job.status !== 'queued') return job
+          await new Promise(resolve => setTimeout(resolve, JOB_POLL_MS))
+        }
+      }))
+      const failure = stopped.find(job => job.errorCode === 'video-director/remote-cancel-failed')
+      const cancelled: VdRun = { ...saved, status: failure ? 'failed' : 'cancelled',
+        error: failure?.error, completedAt: new Date().toISOString() }
+      this.patchVdRun(workflowRunId, cancelled)
+      await this.persistVdRun(cancelled)
+      if (failure) throw new Error(failure.error ?? 'Remote cancellation failed.')
+    }
+  }
+
+  /** @deprecated Use runVdWorkflow; this executes the canvas graph, not a ComfyUI graph. */
+  runWorkflow(options: Parameters<DirectorController['runVdWorkflow']>[0]): Promise<string> {
+    return this.runVdWorkflow(options)
+  }
+
+  /** @deprecated Use cancelVdRun. The argument is a grouped vd-run ID. */
+  cancelWorkflowRun(workflowRunId: string): Promise<void> {
+    return this.cancelVdRun(workflowRunId)
   }
 
   async checkProvider(providerId: string): Promise<void> {
@@ -2259,11 +2508,11 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
 
   async importWorkflow(input: {
     name: string
-    kind: WorkflowKind
+    kind: ComfyWorkflowKind
     description?: string
     document: Record<string, unknown>
-  }): Promise<WorkflowDescriptor> {
-    const result = await this.rpc<{ workflow: WorkflowDescriptor; nodeDefinitions?: NodeDefinitionDescriptor[] }>('workflows/import', input)
+  }): Promise<ComfyWorkflowDescriptor> {
+    const result = await this.rpc<{ workflow: ComfyWorkflowDescriptor; nodeDefinitions?: VdNodeDefinitionDescriptor[] }>('workflows/import', input)
     const workflows = [...this.snapshot.workflows.filter(workflow => workflow.id !== result.workflow.id), result.workflow]
       .sort((left, right) => Number(right.builtIn) - Number(left.builtIn) || left.name.localeCompare(right.name))
     this.patch({ workflows, ...(result.nodeDefinitions === undefined ? {} : { nodeDefinitions: result.nodeDefinitions }) })
@@ -2275,15 +2524,15 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
     if (this.snapshot.project?.graph.nodes.some(node => node.data.workflowId === workflowId)) {
       throw new Error('This workflow is still selected by a node in the current project. Choose another workflow and save the project before deleting it.')
     }
-    const result = await this.rpc<{ workflows: WorkflowDescriptor[]; nodeDefinitions?: NodeDefinitionDescriptor[] }>('workflows/delete', { workflowId })
+    const result = await this.rpc<{ workflows: ComfyWorkflowDescriptor[]; nodeDefinitions?: VdNodeDefinitionDescriptor[] }>('workflows/delete', { workflowId })
     this.patch({ workflows: result.workflows, ...(result.nodeDefinitions === undefined ? {} : { nodeDefinitions: result.nodeDefinitions }) })
   }
 
-  async installNode(pack: Record<string, unknown>): Promise<NodeDefinitionDescriptor> {
+  async installNode(pack: Record<string, unknown>): Promise<VdNodeDefinitionDescriptor> {
     const result = await this.rpc<{
-      definition: NodeDefinitionDescriptor
-      workflows: WorkflowDescriptor[]
-      nodeDefinitions: NodeDefinitionDescriptor[]
+      definition: VdNodeDefinitionDescriptor
+      workflows: ComfyWorkflowDescriptor[]
+      nodeDefinitions: VdNodeDefinitionDescriptor[]
     }>('nodes/install', { pack })
     this.patch({ workflows: result.workflows, nodeDefinitions: result.nodeDefinitions })
     await this.refreshConfiguredComfyProviderModels()
@@ -2292,9 +2541,9 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
 
   async deleteNodeDefinition(type: string, version: string): Promise<void> {
     if (this.snapshot.project?.graph.nodes.some(node => node.data.nodeType === type && (node.data.nodeVersion ?? '1.0.0') === version)) {
-      throw new Error('This Custom Node is still used by the current project. Remove it from the canvas and save before deleting it.')
+      throw new Error('This vd-node definition is still used by the current project. Remove it from the canvas and save before deleting it.')
     }
-    const result = await this.rpc<{ workflows: WorkflowDescriptor[]; nodeDefinitions: NodeDefinitionDescriptor[] }>('nodes/remove', { type, version })
+    const result = await this.rpc<{ workflows: ComfyWorkflowDescriptor[]; nodeDefinitions: VdNodeDefinitionDescriptor[] }>('nodes/remove', { type, version })
     this.patch({ workflows: result.workflows, nodeDefinitions: result.nodeDefinitions })
   }
 
@@ -2396,10 +2645,11 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
       ]
       for (const timer of this.jobTimers.values()) clearTimeout(timer)
       this.jobTimers.clear()
-      this.stopWorkflowSchedulers()
+      this.stopVdRunSchedulers()
       this.activeRuns.clear()
       this.baseProject = structuredClone(persisted)
       this.savedState = this.historyState(project)
+      this.openedProject = { id: project.id, state: this.historyState(project) }
       this.resetHistory()
       this.editVersion = 0
       this.projectGeneration += 1
@@ -2459,12 +2709,13 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
       const project = normalizeLoadedPromptValidation(this.restoreCompletedJobResults(persistedProject))
       this.baseProject = structuredClone(persistedProject)
       this.savedState = this.historyState(project)
+      this.openedProject = { id: project.id, state: this.historyState(project) }
       this.resetHistory()
       this.editVersion = 0
       this.projectGeneration += 1
       for (const timer of this.jobTimers.values()) clearTimeout(timer)
       this.jobTimers.clear()
-      this.stopWorkflowSchedulers()
+      this.stopVdRunSchedulers()
       this.activeRuns.clear()
       if (sessionReady && (openSession || this.ctx.sessions.list.getSnapshot().current !== project.sessionId)) {
         this.ctx.sessions.open(project.sessionId)
@@ -2623,7 +2874,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
     if (this.disposed || this.snapshot.project?.id !== activeRun.projectId || this.projectGeneration !== activeRun.projectGeneration) return false
     if (this.activeRuns.get(nodeId) !== activeRun) return false
     if (jobId !== undefined && activeRun.jobId !== jobId) return false
-    return this.snapshot.project.graph.nodes.some(node => node.id === nodeId)
+    return activeRun.workflowRunId !== undefined || this.snapshot.project.graph.nodes.some(node => node.id === nodeId)
   }
 
   private scheduleJobPoll(jobId: string, nodeId: string, delay = JOB_POLL_MS, activeRun = this.activeRuns.get(nodeId)): void {
@@ -2681,7 +2932,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
     }
   }
 
-  private applyJobResult(nodeId: string, result: WorkflowResult, activeRun?: ActiveNodeRun): void {
+  private applyJobResult(nodeId: string, result: VdNodeResult, activeRun?: ActiveNodeRun): void {
     if (activeRun !== undefined && !this.isActiveRun(nodeId, activeRun, activeRun.jobId)) return
     const project = this.requireProject()
     const updated = this.projectWithJobResult(project, nodeId, result, true, activeRun)
@@ -2705,13 +2956,13 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
   private projectWithJobResult(
     project: VideoProject,
     nodeId: string,
-    result: WorkflowResult,
+    result: VdNodeResult,
     createPreview: boolean,
     activeRun?: ActiveNodeRun,
   ): VideoProject {
     const source = project.graph.nodes.find(node => node.id === nodeId)
     if (source === undefined) return project
-    const payload = workflowResultPayload(result)
+    const payload = vdNodeResultPayload(result)
     const completedSeed = 'seed' in result && Number.isSafeInteger(result.seed) ? result.seed : undefined
     const submittedSeedState = activeRun?.seedStateAtSubmission
     const seedControl = submittedSeedState?.control ?? source.data.seedControlAfterGenerate
@@ -2808,7 +3059,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
     return { x: 120 + (count % 4) * 330, y: 120 + Math.floor(count / 4) * 260 }
   }
 
-  private defaultWorkflow(kind: WorkflowKind): WorkflowDescriptor | undefined {
+  private defaultWorkflow(kind: ComfyWorkflowKind): ComfyWorkflowDescriptor | undefined {
     if (kind === 'video-generation') {
       const textImageVideo = this.snapshot.workflows.find(workflow => workflow.id === 'builtin-minimax-h3-video-turbo')
       if (textImageVideo !== undefined) return textImageVideo
@@ -2904,8 +3155,8 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
     for (const listener of [...this.listeners]) listener()
   }
 
-  private async rpc<T = unknown>(endpoint: string, payload: unknown): Promise<T> {
-    const result = await this.ctx.connection.rpc.call(CHANNEL, endpoint, payload) as RemoteResult<T>
+  private async rpc<T = unknown>(endpoint: string, payload: unknown, signal?: AbortSignal): Promise<T> {
+    const result = await this.ctx.connection.rpc.call(CHANNEL, endpoint, payload, signal) as RemoteResult<T>
     if (result.ok) return result.value
     throw remoteError(result.error)
   }

@@ -1,8 +1,11 @@
 import type { Edge, Node, Viewport } from '@xyflow/react'
 import type { ComponentType } from 'react'
 
+// Source vocabulary: ComfyWorkflow* belongs to the ComfyUI execution graph;
+// DirectorNode/DirectorGraph and Vd* belong to Video Director. See docs/TERMINOLOGY.md.
+// Serialized field names remain stable even where their historical wording overlaps.
 export type MediaKind = 'text' | 'image' | 'audio' | 'video' | 'sketch' | 'mask' | 'flow'
-export type WorkflowKind = 'image-generation' | 'image-edit' | 'video-generation' | 'audio-generation'
+export type ComfyWorkflowKind = 'image-generation' | 'image-edit' | 'video-generation' | 'audio-generation'
 export type FieldInputMode = { mode: 'input' }
 export type VramTriggerAction = 'skip' | 'ollama-eject' | 'comfyui-clear'
 export type DirectorNodeKind =
@@ -90,7 +93,8 @@ export interface SketchDocument {
   elements: SketchElement[]
 }
 
-export interface WorkflowBinding {
+export interface ComfyWorkflowBinding {
+  /** Target comfyui-node ID inside the API graph; never a canvas vd-node ID. */
   nodeId: string
   input: string
   from: 'prompt' | 'negativePrompt' | 'seed' | 'width' | 'height' | 'duration' | 'frames' | 'fps' | 'steps' | 'scheduler' | 'variant' | 'asset' | 'maskAsset' | 'trimStart' | 'trimEnd' | 'inputWidth' | 'inputHeight' | 'aspectRatio' | 'includeAudio' | 'referenceRole' | 'literal'
@@ -106,8 +110,9 @@ export interface WorkflowBinding {
   omitNodeIdsWhenMissing?: string[]
 }
 
-export interface WorkflowParameter {
+export interface ComfyWorkflowParameter {
   id: string
+  /** Target comfyui-node ID inside the registered comfyui-workflow. */
   nodeId: string
   input: string
   label: string
@@ -121,10 +126,11 @@ export interface WorkflowParameter {
   choices?: string[]
 }
 
-export interface WorkflowDescriptor {
+/** Redacted ComfyUI registry entry selected by a vd-node, not the canvas vd-workflow. */
+export interface ComfyWorkflowDescriptor {
   id: string
   name: string
-  kind: WorkflowKind
+  kind: ComfyWorkflowKind
   description: string
   builtIn: boolean
   modelFamily?: string
@@ -132,7 +138,7 @@ export interface WorkflowDescriptor {
   nodeVersion?: string
   nodeDigest?: string
   defaults: Partial<DirectorNodeData>
-  parameters: WorkflowParameter[]
+  parameters: ComfyWorkflowParameter[]
   createdAt: string
   updatedAt: string
 }
@@ -159,8 +165,10 @@ export interface DirectorNodeData extends Record<string, unknown> {
   maskAsset?: AssetRef
   trim?: { start: number; end?: number }
   transform?: { width?: number; height?: number; aspectRatio?: string }
+  /** Legacy inline comfyui-workflow; the containing vd-workflow lives at project.graph. */
   workflow?: Record<string, unknown>
-  bindings?: WorkflowBinding[]
+  bindings?: ComfyWorkflowBinding[]
+  /** ComfyUI registry entry ID; unrelated to a vd-run's workflowRunId. */
   workflowId?: string
   workflowValues?: Record<string, string | number | boolean>
   fieldInputModes?: Record<string, FieldInputMode>
@@ -196,6 +204,7 @@ export interface DirectorNodeData extends Record<string, unknown> {
   vramActionInitialized?: boolean
 }
 
+/** Canvas vd-node. The renderer key 'director' is part of the persisted project format. */
 export type DirectorNode = Node<DirectorNodeData, 'director'>
 export type DirectorEdge = Edge<{
   role?: string
@@ -204,6 +213,7 @@ export type DirectorEdge = Edge<{
   targetPortId?: string
 }>
 
+/** The vd-workflow's canvas graph, including its viewport. */
 export interface DirectorGraph {
   nodes: DirectorNode[]
   edges: DirectorEdge[]
@@ -256,7 +266,7 @@ export interface ProviderDescriptor {
   }>
 }
 
-export interface NodePortDescriptor {
+export interface VdPortDescriptor {
   id: string
   label: string
   types: MediaKind[]
@@ -265,7 +275,7 @@ export interface NodePortDescriptor {
   maxByType?: Partial<Record<MediaKind, number>>
 }
 
-export interface NodeFieldDescriptor {
+export interface VdFieldDescriptor {
   id: string
   label: string
   type: 'text' | 'number' | 'boolean'
@@ -283,7 +293,8 @@ export interface NodeFieldDescriptor {
   maxLength?: number
 }
 
-export interface NodeDefinitionDescriptor {
+/** Reusable vd-node definition; instance identity and connections live in DirectorNode. */
+export interface VdNodeDefinitionDescriptor {
   type: string
   version: string
   digest: string
@@ -295,26 +306,29 @@ export interface NodeDefinitionDescriptor {
   execution?: 'comfyui.workflow' | 'system.trigger'
   triggerAction?: 'vram-trigger' | 'ollama-eject' | 'comfyui-clear'
   operation?: 'image-generation' | 'image-edit' | 'video-generation' | 'audio-generation'
-  workflowKind?: WorkflowKind
+  workflowKind?: ComfyWorkflowKind
   workflowId?: string
   modelFamily?: string
-  inputs: NodePortDescriptor[]
-  outputs: NodePortDescriptor[]
-  fields: NodeFieldDescriptor[]
+  inputs: VdPortDescriptor[]
+  outputs: VdPortDescriptor[]
+  fields: VdFieldDescriptor[]
   parameterInputs?: Array<{ id: string; label: string; type: 'text' }>
 }
 
 export interface DirectorJob {
   id: string
+  /** Correlates one vd-node request with its result, not an entire vd-run. */
   clientRunId?: string
+  /** Persisted name for the grouped vd-run ID. */
   workflowRunId?: string
-  workflowRunMode?: WorkflowRunMode
+  workflowRunMode?: VdRunMode
   batchIndex?: number
   batchSize?: number
   runSequence?: number
   sourceRevision?: number
   nodeDigest?: string
   projectId: string
+  /** Canvas vd-node ID; workflow bindings use the same spelling for comfyui-node IDs. */
   nodeId: string
   operation: string
   providerId: string
@@ -324,31 +338,34 @@ export interface DirectorJob {
   createdAt: string
   updatedAt: string
   completedAt?: string
+  /** ComfyUI submission ID (provider prompt_id), not generation prompt text. */
   promptId?: string
   seed?: number
   compiledWorkflowHash?: string
   error?: string
   errorCode?: string
-  result?: WorkflowResult
+  result?: VdNodeResult
 }
 
-export type WorkflowRunMode = 'all' | 'selected' | 'from-selection' | 'dependencies'
+export type VdRunMode = 'all' | 'selected' | 'from-selection' | 'dependencies'
 
-export interface DirectorWorkflowRun {
+/** One orchestration run of a vd-workflow scope, potentially containing several vd-jobs. */
+export interface VdRun {
   id: string
   projectId: string
-  mode: WorkflowRunMode
+  mode: VdRunMode
   batchSize: number
   nodeIds: string[]
   completedJobs: number
   totalJobs: number
-  status: 'running' | 'completed' | 'failed' | 'cancelled'
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
   startedAt: string
   completedAt?: string
   error?: string
 }
 
-export type WorkflowResult =
+/** Result of a vd-node execution through any provider, not specifically ComfyUI. */
+export type VdNodeResult =
   | { kind: 'text'; text: string; providerId: string }
   | { kind: 'assets'; assets: AssetRef[]; providerId: string; seed?: number; promptId?: string; frameCount?: number; actualDuration?: number; experimentalDuration?: boolean }
   | { kind: 'mcp-result'; result: unknown; providerId: string; seed?: number; promptId?: string; frameCount?: number; actualDuration?: number; experimentalDuration?: boolean }
@@ -359,17 +376,43 @@ export interface DirectorSnapshot {
   projects: ProjectSummary[]
   project: VideoProject | null
   providers: ProviderDescriptor[]
-  workflows: WorkflowDescriptor[]
-  nodeDefinitions: NodeDefinitionDescriptor[]
+  /** ComfyUI registry entries; the canvas vd-workflow is project.graph. */
+  workflows: ComfyWorkflowDescriptor[]
+  nodeDefinitions: VdNodeDefinitionDescriptor[]
   dirty: boolean
   canUndo: boolean
   canRedo: boolean
+  /** Changes when the canvas must reset its viewport, selection, and open tools. */
+  canvasResetVersion: number
   saving: boolean
   conflict: boolean
   error: string | null
   providerChecks: Record<string, { state: 'checking' | 'ok' | 'error'; latencyMs?: number; message?: string; transport?: 'rest' | 'mcp' }>
-  workflowRuns: DirectorWorkflowRun[]
+  /** Existing snapshot key for grouped vd-runs. */
+  workflowRuns: VdRun[]
 }
+
+// Compatibility aliases for existing type consumers. New code uses the qualified names.
+/** @deprecated Use ComfyWorkflowKind. */
+export type WorkflowKind = ComfyWorkflowKind
+/** @deprecated Use ComfyWorkflowBinding. */
+export type WorkflowBinding = ComfyWorkflowBinding
+/** @deprecated Use ComfyWorkflowParameter. */
+export type WorkflowParameter = ComfyWorkflowParameter
+/** @deprecated Use ComfyWorkflowDescriptor. */
+export type WorkflowDescriptor = ComfyWorkflowDescriptor
+/** @deprecated Use VdNodeDefinitionDescriptor. */
+export type NodeDefinitionDescriptor = VdNodeDefinitionDescriptor
+/** @deprecated Use VdPortDescriptor. */
+export type NodePortDescriptor = VdPortDescriptor
+/** @deprecated Use VdFieldDescriptor. */
+export type NodeFieldDescriptor = VdFieldDescriptor
+/** @deprecated Use VdRunMode. */
+export type WorkflowRunMode = VdRunMode
+/** @deprecated Use VdRun. */
+export type DirectorWorkflowRun = VdRun
+/** @deprecated Use VdNodeResult. */
+export type WorkflowResult = VdNodeResult
 
 export interface ObservableSource<T> {
   getSnapshot(): T

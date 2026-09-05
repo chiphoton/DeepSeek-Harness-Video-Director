@@ -194,6 +194,69 @@ export class ProjectStore {
     })
   }
 
+  // Keep submitted graphs outside project.json: polling job summaries should
+  // not transfer many copies of a potentially large canvas.
+  async saveVdRun(projectId, value, snapshot) {
+    const id = uuid(projectId, 'projectId')
+    const run = record(jsonValue(value, 'vd-run', 256 * 1024), 'vd-run')
+    const runId = uuid(run.id, 'vd-run.id')
+    if (run.projectId !== id) throw new DirectorInputError('vd-run projectId does not match')
+    oneOf(run.status, 'vd-run.status', ['queued', 'running', 'completed', 'failed', 'cancelled'])
+    oneOf(run.mode, 'vd-run.mode', ['all', 'selected', 'from-selection', 'dependencies'])
+    for (const field of ['batchSize', 'completedJobs', 'totalJobs']) {
+      if (!Number.isSafeInteger(run[field]) || run[field] < 0) throw new DirectorInputError(`invalid vd-run ${field}`)
+    }
+    if (run.batchSize < 1 || run.batchSize > 20 || run.completedJobs > run.totalJobs) throw new DirectorInputError('invalid vd-run counts')
+    if (!Array.isArray(run.nodeIds) || run.nodeIds.length > 2000
+      || run.nodeIds.some(nodeId => typeof nodeId !== 'string')) throw new DirectorInputError('invalid vd-run nodeIds')
+    string(run.startedAt, 'vd-run.startedAt', { min: 20, max: 40 })
+    const submitted = snapshot === undefined ? undefined : jsonValue(snapshot, 'vd-run snapshot', 32 * 1024 * 1024)
+    return this.#withProjectWrite(id, async () => {
+      const project = await this.getProject(id)
+      const directory = join(this.projectsDir, id, 'runs')
+      const path = join(directory, `${runId}.json`)
+      const snapshotPath = join(directory, `${runId}.snapshot.json`)
+      const previous = await readJson(path, undefined)
+      if (previous === undefined && submitted === undefined) throw new DirectorInputError('a new vd-run requires a snapshot')
+      // Submission contents are write-once, including on a retried RPC.
+      await mkdir(directory, { recursive: true })
+      if (previous === undefined) {
+        const validated = normalizedProject({ ...project, ...record(submitted, 'snapshot'), jobs: [] }, id)
+        await this.#atomicJson(snapshotPath, { name: validated.name, graph: validated.graph, settings: validated.settings })
+      }
+      const { snapshot: _ignored, ...summary } = run
+      await this.#atomicJson(path, summary)
+      return summary
+    })
+  }
+
+  async getVdRun(projectId, runId) {
+    const id = uuid(projectId, 'projectId')
+    await this.getProject(id)
+    const run = await readJson(join(this.projectsDir, id, 'runs', `${uuid(runId, 'runId')}.json`), undefined)
+    if (run === undefined) throw new DirectorInputError(`vd-run ${runId} was not found`)
+    const snapshot = await readJson(join(this.projectsDir, id, 'runs', `${runId}.snapshot.json`), undefined)
+    if (snapshot === undefined) throw new DirectorInputError(`vd-run ${runId} has no saved snapshot`)
+    return { ...run, snapshot }
+  }
+
+  async listVdRuns(projectId) {
+    const id = uuid(projectId, 'projectId')
+    await this.getProject(id)
+    const directory = join(this.projectsDir, id, 'runs')
+    let files
+    try { files = await readdir(directory) } catch (error) {
+      if (error?.code === 'ENOENT') return []
+      throw error
+    }
+    const runs = []
+    for (const file of files.filter(name => name.endsWith('.json') && !name.endsWith('.snapshot.json'))) {
+      const summary = await readJson(join(directory, file))
+      runs.push(summary)
+    }
+    return runs.sort((left, right) => right.startedAt.localeCompare(left.startedAt))
+  }
+
   async forceSaveProject(projectId, value) {
     const id = uuid(projectId, 'projectId')
     return this.#withProjectWrite(id, async () => {
@@ -235,10 +298,15 @@ export class ProjectStore {
     return this.#withProjectWrite(id, async () => {
       const project = await this.getProject(id)
       const activeJobs = project.jobs.filter(job => job?.status === 'queued' || job?.status === 'running')
-      if (activeJobs.length > 0) {
+      const activeRuns = (await this.listVdRuns(id)).filter(run => run.status === 'queued' || run.status === 'running')
+      if (activeJobs.length > 0 || activeRuns.length > 0) {
         const error = new Error(`project ${id} has active jobs and cannot be deleted`)
         error.code = 'video-director/project-busy'
-        error.details = { projectId: id, activeJobIds: activeJobs.map(job => job.id) }
+        error.details = {
+          projectId: id,
+          activeJobIds: activeJobs.map(job => job.id),
+          ...(activeRuns.length === 0 ? {} : { activeRunIds: activeRuns.map(run => run.id) }),
+        }
         throw error
       }
 

@@ -226,6 +226,8 @@ export class JobManager {
     const clientRunId = request.clientRunId === undefined
       ? undefined
       : string(request.clientRunId, 'clientRunId', { min: 1, max: 128 })
+    // Historical wire names: workflowRunId groups a vd-run; clientRunId correlates
+    // one vd-node request. A later promptId update identifies the ComfyUI submission.
     const workflowRunId = request.workflowRunId === undefined
       ? undefined
       : string(request.workflowRunId, 'workflowRunId', { min: 1, max: 128 })
@@ -244,7 +246,7 @@ export class JobManager {
       throw new DirectorInputError('batchSize must be an integer from 1 to 20')
     }
     if ((batchIndex !== undefined || batchSize !== undefined || workflowRunMode !== undefined) && workflowRunId === undefined) {
-      throw new DirectorInputError('workflow run metadata requires workflowRunId')
+      throw new DirectorInputError('vd-run metadata requires workflowRunId')
     }
     if (batchIndex !== undefined && batchSize !== undefined && batchIndex >= batchSize) {
       throw new DirectorInputError('batchIndex must be less than batchSize')
@@ -323,6 +325,8 @@ export class JobManager {
       const index = this.queue.indexOf(job)
       if (index >= 0) this.queue.splice(index, 1)
       await this.#settle(job, 'cancelled', { error: 'Cancelled before execution started.' })
+    } else {
+      await this.#progress(job, { phase: 'cancelling' })
     }
     return publicJob(job)
   }
@@ -385,6 +389,7 @@ export class JobManager {
         job.controller.signal,
         update => this.#progress(job, update),
       )
+      job.controller.signal.throwIfAborted()
       const result = validateProviderResult(
         this.store,
         job.projectId,
@@ -393,7 +398,7 @@ export class JobManager {
       )
       await this.#settle(job, 'completed', { result, progress: 1, phase: 'completed' })
     } catch (error) {
-      const cancelled = job.controller.signal.aborted
+      const cancelled = job.controller.signal.aborted && error?.code !== 'video-director/remote-cancel-failed'
       await this.#settle(job, cancelled ? 'cancelled' : 'failed', {
         phase: cancelled ? 'cancelled' : 'failed',
         error: error instanceof Error ? error.message : String(error),
@@ -417,7 +422,13 @@ export class JobManager {
       job.compiledWorkflowHash = update.compiledWorkflowHash
       persistIdentity = true
     }
-    job.phase = typeof update.phase === 'string' ? update.phase : job.phase
+    const phase = job.controller?.signal.aborted && !update.phase?.startsWith('cancelling')
+      ? 'cancelling'
+      : update.phase
+    if (typeof phase === 'string' && phase !== job.phase) {
+      job.phase = phase
+      persistIdentity = true
+    }
     if (typeof update.progress === 'number' && Number.isFinite(update.progress)) {
       job.progress = Math.max(job.progress, Math.min(0.99, update.progress))
     }

@@ -4,8 +4,8 @@ import type {
   DirectorNode,
   DirectorNodeData,
   MediaKind,
-  NodeDefinitionDescriptor,
-  NodePortDescriptor,
+  VdNodeDefinitionDescriptor,
+  VdPortDescriptor,
 } from './types'
 import {
   isFieldInputPort,
@@ -16,7 +16,7 @@ export type PortDirection = 'input' | 'output'
 
 export function shouldShowPortLabel(
   direction: PortDirection,
-  port: Pick<NodePortDescriptor, 'id' | 'label'>,
+  port: Pick<VdPortDescriptor, 'id' | 'label'>,
   showLabels = true,
 ): boolean {
   return direction === 'output'
@@ -26,7 +26,7 @@ export function shouldShowPortLabel(
 
 export function shouldShowReferencePanel(
   kind: DirectorNodeData['kind'],
-  referencePort: NodePortDescriptor | undefined,
+  referencePort: VdPortDescriptor | undefined,
 ): boolean {
   return kind === 'prompt-enhancer'
     || ((kind === 'image-generation' || kind === 'image-edit' || kind === 'video-generation' || kind === 'audio-generation')
@@ -35,7 +35,7 @@ export function shouldShowReferencePanel(
 
 export function embeddedWorkflowInputPortIds(
   _data: DirectorNodeData,
-  inputs: readonly NodePortDescriptor[],
+  inputs: readonly VdPortDescriptor[],
 ): string[] {
   return inputs
     .filter(port => port.id === 'reference' || isFieldInputPort(port.id))
@@ -44,8 +44,8 @@ export function embeddedWorkflowInputPortIds(
 
 export function nodeDefinition(
   data: DirectorNodeData,
-  definitions: readonly NodeDefinitionDescriptor[],
-): NodeDefinitionDescriptor | undefined {
+  definitions: readonly VdNodeDefinitionDescriptor[],
+): VdNodeDefinitionDescriptor | undefined {
   if (data.nodeType !== undefined) {
     return definitions.find(candidate => (
       candidate.type === data.nodeType
@@ -59,16 +59,16 @@ export function nodeDefinition(
 }
 
 export function portsFor(
-  definition: NodeDefinitionDescriptor | undefined,
+  definition: VdNodeDefinitionDescriptor | undefined,
   direction: PortDirection,
-): readonly NodePortDescriptor[] {
+): readonly VdPortDescriptor[] {
   return definition?.[direction === 'input' ? 'inputs' : 'outputs'] ?? []
 }
 
 export function portHandleId(
   direction: PortDirection,
-  port: NodePortDescriptor,
-  portCountOrPorts: number | readonly NodePortDescriptor[],
+  port: VdPortDescriptor,
+  portCountOrPorts: number | readonly VdPortDescriptor[],
 ): string {
   if (direction === 'input' && isFieldInputPort(port.id)) return `in:${port.id}`
   if (direction === 'input' && port.types.length === 1 && port.types[0] === 'flow') return `in:${port.id}`
@@ -82,10 +82,10 @@ export function portHandleId(
 }
 
 function portFromPorts(
-  ports: readonly NodePortDescriptor[],
+  ports: readonly VdPortDescriptor[],
   direction: PortDirection,
   handle: string | null | undefined,
-): NodePortDescriptor | undefined {
+): VdPortDescriptor | undefined {
   if (ports.length === 0) return undefined
   const legacy = direction === 'input' ? 'in' : 'out'
   const dataPorts = direction === 'input'
@@ -103,10 +103,10 @@ function portFromPorts(
 }
 
 export function portFromHandle(
-  definition: NodeDefinitionDescriptor | undefined,
+  definition: VdNodeDefinitionDescriptor | undefined,
   direction: PortDirection,
   handle: string | null | undefined,
-): NodePortDescriptor | undefined {
+): VdPortDescriptor | undefined {
   const ports = portsFor(definition, direction)
   return portFromPorts(ports, direction, handle)
 }
@@ -146,7 +146,7 @@ export function isTriggerNodeKind(kind: DirectorNodeData['kind']): boolean {
   return kind === 'vram-trigger' || kind === 'ollama-eject' || kind === 'comfyui-clear'
 }
 
-export function implicitInputPortForKind(kind: DirectorNodeData['kind']): NodePortDescriptor | undefined {
+export function implicitInputPortForKind(kind: DirectorNodeData['kind']): VdPortDescriptor | undefined {
   if (kind.startsWith('load-')) return undefined
   if (kind === 'output-text') return { id: 'input', label: 'Text', types: ['text'], multiple: true }
   if (kind === 'output-image') return { id: 'input', label: 'Image', types: ['image'], multiple: true }
@@ -159,9 +159,9 @@ export function implicitInputPortForKind(kind: DirectorNodeData['kind']): NodePo
   return { id: 'input', label: 'Input', types: ['text', 'image', 'audio', 'video', 'sketch', 'mask'], multiple: true }
 }
 
-function inlineWorkflowInputPorts(data: DirectorNodeData): NodePortDescriptor[] | undefined {
+function inlineWorkflowInputPorts(data: DirectorNodeData): VdPortDescriptor[] | undefined {
   if (data.workflow === undefined || !Array.isArray(data.bindings)) return undefined
-  const ports = new Map<string, NodePortDescriptor>()
+  const ports = new Map<string, VdPortDescriptor>()
   for (const binding of data.bindings) {
     if (binding.from !== 'asset' && binding.from !== 'maskAsset') continue
     const id = binding.portId ?? 'reference'
@@ -187,8 +187,8 @@ function inlineWorkflowInputPorts(data: DirectorNodeData): NodePortDescriptor[] 
 
 export function inputPortsFor(
   data: DirectorNodeData,
-  definition: NodeDefinitionDescriptor | undefined,
-): readonly NodePortDescriptor[] {
+  definition: VdNodeDefinitionDescriptor | undefined,
+): readonly VdPortDescriptor[] {
   const declared = definition?.inputs
     ?? inlineWorkflowInputPorts(data)
     ?? (implicitInputPortForKind(data.kind) === undefined ? [] : [implicitInputPortForKind(data.kind)!])
@@ -218,7 +218,7 @@ export function inputPortsFor(
   return [...withFlow, ...parameterInputPorts(data, definition)]
 }
 
-function implicitOutputPort(node: DirectorNode): NodePortDescriptor | undefined {
+function implicitOutputPort(node: DirectorNode): VdPortDescriptor | undefined {
   const types = inferredNodeOutputTypes(node)
   return types.length === 0 ? undefined : { id: 'output', label: 'Output', types, multiple: true }
 }
@@ -233,14 +233,14 @@ export interface ResolvedConnectionPorts {
 }
 
 export interface ResolvedNodePort {
-  port: NodePortDescriptor
+  port: VdPortDescriptor
   handle: string
 }
 
 export function preferredCompatibleInputPort(
-  inputs: readonly NodePortDescriptor[],
+  inputs: readonly VdPortDescriptor[],
   sourceTypes: readonly MediaKind[],
-): NodePortDescriptor | undefined {
+): VdPortDescriptor | undefined {
   const compatible = inputs.filter(input => mediaTypesIntersect(sourceTypes, input.types))
   if (sourceTypes.includes('flow')) return compatible.find(input => input.types.includes('flow')) ?? compatible[0]
   return compatible.find(input => input.required === true) ?? compatible[0]
@@ -248,10 +248,10 @@ export function preferredCompatibleInputPort(
 
 function declaredPort(
   node: DirectorNode,
-  definitions: readonly NodeDefinitionDescriptor[],
+  definitions: readonly VdNodeDefinitionDescriptor[],
   direction: PortDirection,
   handle: string | null | undefined,
-): { port: NodePortDescriptor; handle: string } | undefined {
+): { port: VdPortDescriptor; handle: string } | undefined {
   const definition = nodeDefinition(node.data, definitions)
   const ports = direction === 'input'
     ? inputPortsFor(node.data, definition)
@@ -263,7 +263,7 @@ function declaredPort(
 
 export function resolveNodePort(
   graph: DirectorGraph,
-  definitions: readonly NodeDefinitionDescriptor[],
+  definitions: readonly VdNodeDefinitionDescriptor[],
   nodeId: string,
   direction: PortDirection,
   handle: string | null | undefined,
@@ -277,7 +277,7 @@ export function resolveNodePort(
 
 export function resolveEdgePorts(
   graph: DirectorGraph,
-  definitions: readonly NodeDefinitionDescriptor[],
+  definitions: readonly VdNodeDefinitionDescriptor[],
   edge: Pick<DirectorEdge, 'source' | 'target' | 'sourceHandle' | 'targetHandle'>,
 ): ResolvedConnectionPorts {
   if (edge.source === edge.target) throw new Error('A node cannot connect to itself.')
@@ -303,7 +303,7 @@ export function resolveEdgePorts(
 
 export function resolveConnectionPorts(
   graph: DirectorGraph,
-  definitions: readonly NodeDefinitionDescriptor[],
+  definitions: readonly VdNodeDefinitionDescriptor[],
   edge: Pick<DirectorEdge, 'source' | 'target' | 'sourceHandle' | 'targetHandle'>,
 ): ResolvedConnectionPorts {
   const resolved = resolveEdgePorts(graph, definitions, edge)
@@ -349,7 +349,7 @@ export function resolveConnectionPorts(
 
 export function validateNodeInputPorts(
   graph: DirectorGraph,
-  definitions: readonly NodeDefinitionDescriptor[],
+  definitions: readonly VdNodeDefinitionDescriptor[],
   nodeId: string,
 ): void {
   const node = graph.nodes.find(candidate => candidate.id === nodeId)

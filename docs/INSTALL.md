@@ -2,6 +2,8 @@
 
 [English](INSTALL.md) | [简体中文](INSTALL_zh.md)
 
+Terminology: **vd-nodes** belong to the Video Director canvas; **comfyui-nodes** belong to a **comfyui-workflow**. Python extensions installed on the ComfyUI server are **ComfyUI custom-node packages**. The repository's `custom_nodes/` contains Video Director JSON definitions. A capability set here is an **installation preset**, distinct from a **DSH profile** selected with `--profile`. See the [terminology guide](TERMINOLOGY.md).
+
 This runbook installs the runtime dependencies used by **DeepSeek-Harness Video-Director**. It is written for an automation agent, but every command remains subject to the operator's approval and local security policy. It was verified against the repository's built-in graphs and upstream sources on **2026-09-05**.
 
 The agent must read this document completely before changing the machine. It must install only the capability set the operator selects. It must not interpret this document, the plugin's default license gate, or the word “uncensored” as acceptance of a third-party license or as permission to download sensitive-capability weights.

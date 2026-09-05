@@ -1,8 +1,8 @@
 import type {
   DirectorNodeData,
   FieldInputMode,
-  NodeDefinitionDescriptor,
-  NodePortDescriptor,
+  VdNodeDefinitionDescriptor,
+  VdPortDescriptor,
 } from './types'
 
 const FIELD_PORT_PREFIX = 'field:'
@@ -47,7 +47,7 @@ export function isFieldInputPort(portId: string | null | undefined): boolean {
 }
 
 function definitionTextCandidates(
-  definition: NodeDefinitionDescriptor | undefined,
+  definition: VdNodeDefinitionDescriptor | undefined,
 ): ParameterInputCandidate[] {
   if (definition?.behavior !== 'workflow') return []
   if (definition.parameterInputs !== undefined) {
@@ -62,7 +62,7 @@ function definitionTextCandidates(
 
 export function parameterInputCandidates(
   data: DirectorNodeData,
-  definition: NodeDefinitionDescriptor | undefined,
+  definition: VdNodeDefinitionDescriptor | undefined,
 ): ParameterInputCandidate[] {
   if (data.nodeType !== undefined) return definitionTextCandidates(definition)
   if (!GENERIC_WORKFLOW_KINDS.has(data.kind)) return []
@@ -97,7 +97,7 @@ export function fieldInputModeEnabled(data: DirectorNodeData, fieldId: string): 
 
 export function activeFieldInputModes(
   data: DirectorNodeData,
-  definition: NodeDefinitionDescriptor | undefined,
+  definition: VdNodeDefinitionDescriptor | undefined,
 ): Record<string, FieldInputMode> {
   return Object.fromEntries(parameterInputCandidates(data, definition)
     .filter(candidate => fieldInputModeEnabled(data, candidate.id))
@@ -106,8 +106,8 @@ export function activeFieldInputModes(
 
 export function parameterInputPorts(
   data: DirectorNodeData,
-  definition: NodeDefinitionDescriptor | undefined,
-): NodePortDescriptor[] {
+  definition: VdNodeDefinitionDescriptor | undefined,
+): VdPortDescriptor[] {
   return parameterInputCandidates(data, definition)
     .filter(candidate => fieldInputModeEnabled(data, candidate.id))
     .map(candidate => ({
@@ -123,7 +123,7 @@ function connectionPortId(connection: ConnectedParameterInput): string | undefin
 
 export function resolveParameterInputs(
   data: DirectorNodeData,
-  definition: NodeDefinitionDescriptor | undefined,
+  definition: VdNodeDefinitionDescriptor | undefined,
   connections: readonly ConnectedParameterInput[],
 ): ResolvedParameterInputs {
   let prompt = data.prompt

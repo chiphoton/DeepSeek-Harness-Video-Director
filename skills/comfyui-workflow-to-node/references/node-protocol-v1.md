@@ -1,6 +1,6 @@
-# Node Protocol v1 — workflow analysis reference
+# vd-node pack protocol v1 — comfyui-workflow analysis reference
 
-Use this reference when converting a ComfyUI API workflow to a Video Director node pack. The full protocol is documented in [`../../../docs/custom-node-protocol.md`](../../../docs/custom-node-protocol.md), with its canonical JSON Schema at [`../../../schemas/video-director-node-v1.schema.json`](../../../schemas/video-director-node-v1.schema.json).
+Use this reference when converting an API-format comfyui-workflow to a vd-node pack. Follow the [shared terminology](../../../docs/TERMINOLOGY.md). The full protocol is documented in [`../../../docs/custom-node-protocol.md`](../../../docs/custom-node-protocol.md), with its canonical JSON Schema at [`../../../schemas/video-director-node-v1.schema.json`](../../../schemas/video-director-node-v1.schema.json).
 
 ## Required pack shape
 
@@ -60,7 +60,7 @@ Infer output ports only from actual saving/preview topology such as `SaveImage`,
 
 For every binding:
 
-- the target node id exists;
+- the target comfyui-node ID exists inside `implementation.workflow` (it is not the canvas vd-node ID);
 - the target input exists;
 - the source field or port exists;
 - no other binding uses the same target;
@@ -82,11 +82,11 @@ Do not add arbitrary React, HTML, CSS, scripts, expressions, provider ids, endpo
 The analyzer is deliberately offline and produces a draft. Before calling the result complete:
 
 - confirm the workflow is API format and trusted;
-- confirm model and Custom Node dependencies with the user;
+- confirm model and ComfyUI custom-node package dependencies with the user;
 - confirm operation, input roles, and output types;
 - review all inferred primary fields;
 - retain the workflow graph exactly except for deliberate user-approved corrections;
 - validate against the schema;
 - report unresolved warnings.
 
-Generating a pack does not authorize installing Custom Nodes, downloading models, submitting the workflow, or mutating the user's Video Director registry.
+Generating a vd-node pack does not authorize installing ComfyUI custom-node packages, downloading models, submitting the comfyui-workflow, or mutating the user's Video Director registry.

@@ -2,7 +2,9 @@ import { createHash } from 'node:crypto'
 
 import { DirectorInputError, jsonValue, oneOf, record, string } from './validation.js'
 
-export const NODE_PROTOCOL = 'video-director.node/v1'
+// vd-node definitions and declarative packs. Embedded comfyui-nodes live in
+// implementation.workflow; installing a pack does not install ComfyUI Python extensions.
+export const VD_NODE_PROTOCOL = 'video-director.node/v1'
 
 const VERSION_PATTERN = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u
 const TYPE_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)*(?:[./][a-z0-9]+(?:-[a-z0-9]+)*)$/u
@@ -352,10 +354,10 @@ function normalizeBinding(value, index, fields, inputs) {
   return { ...normalized, source: { kind, value: jsonValue(source.value, `${label}.source.value`) } }
 }
 
-export function normalizeNodePack(value) {
+export function normalizeVdNodePack(value) {
   const input = record(value, 'node pack')
-  if (input.protocol !== NODE_PROTOCOL) {
-    throw new DirectorInputError(`node pack protocol must be ${NODE_PROTOCOL}`)
+  if (input.protocol !== VD_NODE_PROTOCOL) {
+    throw new DirectorInputError(`node pack protocol must be ${VD_NODE_PROTOCOL}`)
   }
   const manifest = record(input.manifest, 'node pack manifest')
   const implementation = record(input.implementation, 'node pack implementation')
@@ -386,7 +388,7 @@ export function normalizeNodePack(value) {
     if (!boundFields.has(field.id)) throw new DirectorInputError(`manifest field ${field.id} has no workflow binding`)
   }
   const normalized = {
-    protocol: NODE_PROTOCOL,
+    protocol: VD_NODE_PROTOCOL,
     type: nodeType(input.type),
     version: version(input.version),
     manifest: {
@@ -568,7 +570,7 @@ function validateFieldValue(field, value) {
   if (violation !== undefined) fieldFailure(field, violation)
 }
 
-export class NodeRegistry {
+export class VdNodeRegistry {
   constructor(workflows) {
     this.workflows = workflows
     this.mutationQueue = Promise.resolve()
@@ -611,7 +613,7 @@ export class NodeRegistry {
   }
 
   async install(value) {
-    const pack = normalizeNodePack(value)
+    const pack = normalizeVdNodePack(value)
     return this.#enqueueMutation(async () => {
       const existing = this.list().find(row => row.type === pack.type && row.version === pack.version)
       if (existing !== undefined) {
@@ -691,3 +693,11 @@ export class NodeRegistry {
     return result
   }
 }
+
+// Compatibility exports; these have always described Video Director declarations.
+/** @deprecated Use VdNodeRegistry. */
+export { VdNodeRegistry as NodeRegistry }
+/** @deprecated Use normalizeVdNodePack. */
+export { normalizeVdNodePack as normalizeNodePack }
+/** @deprecated Use VD_NODE_PROTOCOL. */
+export { VD_NODE_PROTOCOL as NODE_PROTOCOL }

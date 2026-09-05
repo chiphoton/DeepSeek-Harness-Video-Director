@@ -26,7 +26,7 @@ export function ollamaModelSupports(
 }
 
 /**
- * Resolve API-discovered choices over the workflow or Custom Node manifest.
+ * Resolve API-discovered choices over the comfyui-workflow or vd-node manifest.
  *
  * `discovered === undefined` means this field was not mapped by discovery, so
  * its declared UI remains authoritative. An empty discovered array is a valid

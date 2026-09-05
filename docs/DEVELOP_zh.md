@@ -1,16 +1,18 @@
 # DeepSeek-Harness Video-Director — 开发者文档
 
-[English](./DEVELOP.md) · [项目首页](../README_zh.md)
+[English](./DEVELOP.md) · [项目首页](../README_zh.md) · [术语约定](TERMINOLOGY_zh.md)
 
-`dsh-video-director` 是外置的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 视频导演插件。它提供无限节点画布、与当前 Video Project 绑定的 DeepSeek 对话、多模态素材输入，以及由不同 Provider 驱动的文字、图像、音频和视频 Workflow 节点。
+`dsh-video-director` 是外置的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 视频导演插件。它提供无限 vd-node 画布、与当前 Video Project 绑定的 DeepSeek 对话、多模态素材输入，以及由不同 Provider 驱动的文字、图像、音频和视频生成 vd-node。
+
+使用统一的[术语约定](TERMINOLOGY_zh.md)：画布编排称为 **vd-workflow**；调用 ComfyUI 的 **vd-node** 选择并执行包含 **comfyui-node** 的 **comfyui-workflow**。术语文档也列出现有代码标识符和 UI 标签的对应含义。
 
 这是可运行的早期实现，不是托管式生成服务。Ollama、OpenAI 兼容接口与 ComfyUI 需要由部署者提供和运维。MiniMax H3 权重采用独立许可证；本插件默认接受许可门，部署者仍可显式关闭。
 
 ## 已实现能力
 
-- 精简的顶部 Project 切换器，带新建、重命名/删除、Undo/Redo，以及独立的**运行**、**任务**、**设置**与**保存**按钮。运行菜单支持整个 Graph、所选 Node，或所选 Node 及其全部下游，并可设置 1–20 个批次；任务抽屉按 Graph Run 分组，同时保留单 Node Job。始终位于 Node 前景的横向画布工具栏固定在右下角，集中提供移动、框选、缩放、适配视图与 Mini Map 显隐。
+- 精简的顶部 Project 切换器，带新建、重命名/删除、Undo/Redo，以及独立的**运行**、**任务**、**设置**与**保存**按钮。运行菜单支持整个 Graph、所选 Node，或所选 Node 及其全部下游，并可设置 1–20 个批次；任务抽屉按 Graph Run 分组，同时保留单 Node Job。始终位于 Node 前景的横向画布工具栏固定在右下角，集中提供 Select/Hand 模式、缩放、适配视图与 Mini Map 显隐。
 - 左侧 DeepSeek 对话；切换 Project 时同步打开该工程的 `sessionId`，上下文不会串工程，并复用该 Session 的模型目录。聊天框支持直接粘贴或拖放图片/音频；底部 **＋** 菜单也可选择 PNG、JPEG、WebP、GIF 图片或音频文件。图片作为原生多模态附件发送，音频由选定的 OpenAI-compatible Provider 转写后写入输入框。设置按钮可切换“Enter 换行、Alt+Enter 发送”，并配置语音 Provider、不会回显的 API Key 和语音模型；麦克风按钮支持录音转写。
-- 基于 `@xyflow/react` 的无限画布，包含文字、图像、音频、视频和 Sketch Load 节点；点击已有 Sketch 会重新打开绘图编辑器。滚轮缩放，双击空白处可搜索并在原位添加节点。默认左键拖拽框选，按住空格临时平移画布。从输出端拖到空白画布并释放时，会打开按兼容输入类型过滤的节点菜单；选中后在释放位置创建节点并自动连线，右键菜单、点击其他位置或按 Esc 则取消待连接操作。节点背景右键菜单集中提供运行/取消、复制、Mask 副本、重命名、属性查看和删除；表单、播放器与下载控件仍保留原生交互。
+- 基于 `@xyflow/react` 的无限画布，包含文字、图像、音频、视频和 Sketch Load 节点；点击已有 Sketch 会重新打开绘图编辑器。滚轮缩放，双击空白处可搜索并在原位添加节点。Select（V）在空白处平移、点击节点选中并拖动节点；Hand（H）在节点及控件上也平移画布，空格临时启用 Hand。两种模式均支持 Ctrl+拖拽框选、Ctrl+点击增减选择和 Ctrl+B 冻结/解冻选择，批量冻结是单次可撤销编辑。Ctrl 框选由画布层处理，避免输入框的键盘焦点吞掉选择手势。可滚动字段或面板接管滚轮，其他节点区域缩放画布。从输出端拖到空白画布并释放时，会打开按兼容输入类型过滤的节点菜单；选中后在释放位置创建节点并自动连线，右键菜单、点击其他位置或按 Esc 则取消待连接操作。空白处右键菜单提供节点目录、Reset VRAM 和 Paste。节点背景右键菜单提供运行/取消、Copy、Duplicate、Mask 副本、重命名、属性查看和删除；输入区域保留原生右键菜单。画布剪贴板按工程保存节点及内部连线的快照；粘贴重新分配 ID、清理执行状态，并在鼠标位置生成节点组，支持单次 Undo。
 - Prompt Enhancer、图像生成、MiniMax H3 视频和 H3 音频 Workflow 节点。
 - 私有、不可变的素材 URL，并支持音视频播放所需的 HTTP Byte Range。
 - 乐观 revision：旧浏览器窗口不能静默覆盖新版本工程。
@@ -19,8 +21,8 @@
 - Ollama、OpenAI 兼容接口，以及一个统一的 ComfyUI Provider：用户只填一个 `IP:port`，Host 在每次运行时自动选择 REST 或 MCP。
 - 命名的 ComfyUI Workflow Registry：可导入图像生成、图像编辑、视频或音频 API Workflow，并在节点中选择 Workflow，而不是把 ComfyUI 模型文件误当成 Model ID。
 - 内置文字、图像、音频与视频通用的 **Preview** 和 **Save** 输出节点。
-- 不可变、声明式的 [Custom Node 协议](./custom-node-protocol.md)，包含 Typed Ports，以及简洁的 `primary` 与默认折叠的 `Advanced` 字段。
-- 内置 [`comfyui-workflow-to-node` Skill](../skills/comfyui-workflow-to-node/SKILL.md)，可把可信的 ComfyUI API Graph，或能用匹配 `/object_info` 精确解析的编辑器模板，转换为内置 Workflow 或 Custom Node 草稿。
+- 不可变、声明式的 [vd-node pack 协议](./custom-node-protocol.md)，包含 Typed Ports，以及简洁的 `primary` 与默认折叠的 `Advanced` 字段。
+- 内置 [`comfyui-workflow-to-node` Skill](../skills/comfyui-workflow-to-node/SKILL.md)，可把可信的 ComfyUI API Graph，或能用匹配 `/object_info` 精确解析的编辑器模板，转换为内置已注册 comfyui-workflow 或 vd-node pack 草稿。
 
 画布可以表达 Mask、截取、裁剪、缩放和 Sketch 数据。当前版本只有在兼容的预处理或 ComfyUI Workflow 消费派生素材/元数据时，这些编辑才会真正作用于生成；插件尚未内置完整的非破坏性媒体编辑器。
 
@@ -76,9 +78,9 @@ pnpm dsh web
 
 Codex Plan Provider 使用官方 [`@openai/codex-sdk`](https://developers.openai.com/codex/sdk/) 和本机现有的 Codex 登录。TEXT WORKFLOW 会在隔离的只读临时目录中运行 Codex Agent 来增强 Prompt；IMAGE WORKFLOW 则调用原生图像生成 Skill，再把单张结果导入 Video Project。它不会把 ChatGPT 订阅转换成 API Key，也不会代理任意 Responses API 请求。两个 Workflow 都提供 medium 推理的 `gpt-5.6-sol`、`gpt-5.6-terra` 与 `gpt-5.6-luna`。
 
-Host 会从 Ollama `/api/tags` 自动刷新模型，并且在设置和文字 Workflow 节点中只列出清单里真实可用的模型。Ollama 文字节点会在 **Advanced** 中提供 System Prompt、Context Length 与 Thinking；所选模型未声明 Thinking 能力时该选项会禁用，发现到的模型上下文长度会限制可选覆盖值。ComfyUI 模型枚举来自 `/object_info`，但只有注册 Workflow 或 Custom Node 明确开放的精确 Graph 输入才会成为下拉参数；ComfyUI 节点仍然先选择命名 Workflow，Checkpoint、UNET、CLIP、VAE、LoRA 等文件只在该 Workflow 的参数中选择。原始 `object_info` 与凭据都不会发送到浏览器。
+Host 会从 Ollama `/api/tags` 自动刷新模型，并且在设置和文字 Workflow 节点中只列出清单里真实可用的模型。Ollama 文字节点会在 **Advanced** 中提供 System Prompt、Context Length 与 Thinking；所选模型未声明 Thinking 能力时该选项会禁用，发现到的模型上下文长度会限制可选覆盖值。ComfyUI 模型枚举来自 `/object_info`，但只有注册 comfyui-workflow 或 vd-node 定义明确开放的精确 Graph 输入才会成为下拉参数；ComfyUI-backed vd-node 仍然先选择命名 comfyui-workflow，Checkpoint、UNET、CLIP、VAE、LoRA 等文件只在该 comfyui-workflow 的参数中选择。原始 `object_info` 与凭据都不会发送到浏览器。
 
-Host Cordis 插件负责 `ProjectStore`、`WorkflowStore`、`NodeRegistry`、`ProviderRuntime`、`JobManager`、`/video-director` RPC 与素材响应。浏览器侧负责 Project/Session 切换、带 Revision 的显式保存、通用 Node 渲染、画布、Graph 规划、Provider 检查与 Job 轮询。画布修改只保留在本地，用户点击**保存**后才写入工程；切换或新建工程前必须保存，或确认放弃修改。运行不要求先保存：客户端在点击 Run 时冻结一次 Graph，按拓扑顺序调度远程 Node，并在每个依赖阶段就绪时向 Host 发送该 Node 的不可变执行快照。Job 只持久化状态、Graph Run 分组、批次坐标与安全元数据，不把执行快照写回工程 Graph；运行期间继续编辑不会被旧快照回滚，晚到的旧 Job 也不能覆盖更新的 Run。每个 Project 保存独立 Harness `sessionId`，因此切换工程时对话上下文也随之切换。
+Host Cordis 插件负责 `ProjectStore`、`ComfyWorkflowStore`、`VdNodeRegistry`、`ProviderRuntime`、`JobManager`、`/video-director` RPC 与素材响应。浏览器侧负责 Project/Session 切换、带 Revision 的显式保存、通用 Node 渲染、画布、Graph 规划、Provider 检查与 Job 轮询。画布修改只保留在本地，用户点击**保存**后才写入工程；切换或新建工程前必须保存，或确认放弃修改。运行不要求先保存：客户端在点击 Run 时冻结一次 Graph，按拓扑顺序调度远程 Node，并在每个依赖阶段就绪时向 Host 发送该 Node 的不可变执行快照。Job 只持久化状态、Graph Run 分组、批次坐标与安全元数据，不把执行快照写回工程 Graph；运行期间继续编辑不会被旧快照回滚，晚到的旧 Job 也不能覆盖更新的 Run。每个 Project 保存独立 Harness `sessionId`，因此切换工程时对话上下文也随之切换。
 
 | Provider Kind | 当前操作 | 说明 |
 |---|---|---|
@@ -87,7 +89,7 @@ Host Cordis 插件负责 `ProjectStore`、`WorkflowStore`、`NodeRegistry`、`Pr
 | `codex-plan` | 文字/Prompt 扩写与图像生成，均可带图像 References | 使用本机 Codex SDK/登录，在隔离临时工作区运行并把生成图像导回工程；无需 Base URL 或 API Key 字段。 |
 | `comfyui` | API Workflow、上传、队列/历史与产物回收 | REST 是健康检查与媒体传输的必要条件；隐藏 MCP Transport 通过只读队列探测后，Host 才可能用它提交，否则自动使用 REST。 |
 
-当 Provider 提供原生清单 API 时，模型选项由服务端发现，而不是让用户手填。Ollama 通过 `GET /api/tags` 获取模型并显示为下拉选项。ComfyUI 通过 `GET /object_info` 获取可用值，但不会把它们暴露成一个全局模型列表；Host 只会将它们映射到已注册 Workflow 或已安装 Video Director Custom Node 明确暴露的参数。
+当 Provider 提供原生清单 API 时，模型选项由服务端发现，而不是让用户手填。Ollama 通过 `GET /api/tags` 获取模型并显示为下拉选项。ComfyUI 通过 `GET /object_info` 获取可用值，但不会把它们暴露成一个全局模型列表；Host 只会将它们映射到已注册 comfyui-workflow 或已安装 vd-node 定义 明确暴露的参数。
 
 Provider 地址属于部署配置，不能由 Project 任意输入。远端 ComfyUI 应放在 TLS 与鉴权反向代理之后，并明确意识到连接的工程素材会离开本机。
 
@@ -107,11 +109,11 @@ Patch 中固定版本的 `npx -y` 便于评估，但每次进程启动仍会进�
 
 DSH 普通 MCP Tool Timeout 不是 Render Job 生命周期。Workflow 只提交一次，保存 `prompt_id` 后异步收集结果。当前没有面向用户的 MCP-only Provider；统一 ComfyUI Backend 始终需要 REST 地址。
 
-## Workflow Registry、JSON 与绑定
+## ComfyUI 工作流注册表、JSON 与绑定
 
 在**设置 → Nodes & Workflows**中导入命名的 ComfyUI **API Format** JSON：`{ "nodeId": { "class_type": "...", "inputs": {} } }`。不要传入含 `nodes`、`links` 和布局信息的 Editor/UI JSON。Registry 在服务端保存可执行 Graph，画布节点只接收描述与可配置参数。图像生成与图像编辑是两个独立用途；Provider 选择 ComfyUI 后，节点第二项会从 **Model** 切换为 **Workflow**。
 
-生成节点的顶层选择器始终是 **Workflow**。ComfyUI `/object_info` 返回的 Loader 选项，例如 Checkpoint、UNet、VAE、CLIP 或 LoRA 文件名，只会在注册 Workflow/Custom Node 明确暴露对应输入时成为该参数的下拉菜单。Video Director 不会把这些选项扁平化成全局 Checkpoint/Model 选择器，也不会暴露注册定义中固定或隐藏的参数。
+生成节点的顶层选择器始终是 **Workflow**。ComfyUI `/object_info` 返回的 Loader 选项，例如 Checkpoint、UNet、VAE、CLIP 或 LoRA 文件名，只会在注册 comfyui-workflow/vd-node 定义明确暴露对应输入时成为该参数的下拉菜单。Video Director 不会把这些选项扁平化成全局 Checkpoint/Model 选择器，也不会暴露注册定义中固定或隐藏的参数。
 
 导入器会识别常见的 Prompt、Negative Prompt、Seed、宽高、时长、帧数、FPS 与 `LoadImage` 输入。常用创作字段会直接显示；Sampler、Scheduler、Model、CFG、Steps、输出前缀等详细字段仍然可配置，但默认放进 Node 的折叠 **Advanced** 区域。执行时 Workflow 仍会解析为 API Graph 与显式语义绑定：
 
@@ -131,7 +133,9 @@ DSH 普通 MCP Tool Timeout 不是 Render Job 生命周期。Workflow 只提交�
 
 绑定来源包括 `prompt`、`negativePrompt`、`seed`、`width`、`height`、`duration`、`frames`、`fps`、`steps`、`scheduler`、`variant`、`asset`、`maskAsset`、`trimStart`、`trimEnd`、`inputWidth`、`inputHeight`、`aspectRatio`、`includeAudio`、`referenceRole` 与 `literal`。绑定只修改指定 Node/Input，`mediaIndex` 用来选择第几个已连线输入（默认 `0`）。Asset 绑定使用 ComfyUI 上传返回的 Filename，绝不会把本地工作区路径写进 Loader Node。
 
-图像 Custom Node 见 [`custom_nodes/comfyui-basic-image.node.json`](../custom_nodes/comfyui-basic-image.node.json) 和 [`custom_nodes/z-image-turbo.node.json`](../custom_nodes/z-image-turbo.node.json)；H3 Custom Node 包括 [`custom_nodes/minimax-h3-t2v-turbo.node.json`](../custom_nodes/minimax-h3-t2v-turbo.node.json)、[`custom_nodes/minimax-h3-audio-turbo.node.json`](../custom_nodes/minimax-h3-audio-turbo.node.json) 和 [`custom_nodes/minimax-h3-audio-standard.node.json`](../custom_nodes/minimax-h3-audio-standard.node.json)。导入前请先读 [`custom_nodes/README.md`](../custom_nodes/README.md)。ComfyUI Workflow 是可执行配置，能调用已安装的 Custom Node；不要导入不可信 JSON。
+这里 `workflow` 是 comfyui-workflow，绑定中的 `nodeId` 是 **comfyui-node ID**。而 `project.graph.nodes[].id` 和 Job 的 `nodeId` 是 **vd-node ID**。`workflowId` 选择注册表条目，`workflowRunId` 对 vd-run 分组，`jobId` 标识 vd-job，ComfyUI `prompt_id` 标识后端提交。
+
+图像 vd-node 定义见 [`custom_nodes/comfyui-basic-image.node.json`](../custom_nodes/comfyui-basic-image.node.json) 和 [`custom_nodes/z-image-turbo.node.json`](../custom_nodes/z-image-turbo.node.json)；H3 vd-node 定义包括 [`custom_nodes/minimax-h3-t2v-turbo.node.json`](../custom_nodes/minimax-h3-t2v-turbo.node.json)、[`custom_nodes/minimax-h3-audio-turbo.node.json`](../custom_nodes/minimax-h3-audio-turbo.node.json) 和 [`custom_nodes/minimax-h3-audio-standard.node.json`](../custom_nodes/minimax-h3-audio-standard.node.json)。导入前请先读 [`custom_nodes/README.md`](../custom_nodes/README.md)。ComfyUI Workflow 是可执行配置，能调用已安装的 comfyui-node 类；不要导入不可信 JSON。
 
 ## Preview 与 Save 节点
 
@@ -143,9 +147,9 @@ DSH 普通 MCP Tool Timeout 不是 Render Job 生命周期。Workflow 只提交�
 
 Preview 接受文字、图像、音频或视频，并自动选择对应的安全内联预览器。如果生成完成时没有已连接的 Preview，Video Director 会自动创建一个，避免产物藏在 Job 结果中。Save 接收同一份不可变 Project Asset，让用户指定输出名并明确下载到本地；它不会重复复制大体积服务端字节，也不允许节点指定任意服务端文件路径。
 
-## Custom Node 与字段展示
+## vd-node pack 与字段展示
 
-Video Director Custom Node v1 是类似 ComfyUI Custom Node 安装范式的声明式协议。单个 Node Pack 会声明不可变的 `type@version`、Typed Input/Output Ports、Host 校验字段、精确 ComfyUI Workflow Bindings，以及 `primary`/`advanced` 展示位置。在**设置 → Nodes & Workflows**中安装可信 `.director-node.json` 后，即可从底栏的 **Custom Node** 选择器添加。
+vd-node pack 使用现有 `video-director.node/v1` 协议，原称 Video Director Custom Node v1。单个包声明不可变的 `type@version`、Typed Input/Output Ports、Host 校验字段、精确 comfyui-workflow 绑定，以及 `primary`/`advanced` 展示位置。它是声明式文档；ComfyUI custom-node package 则是在 ComfyUI 服务端提供 Python 类的扩展。在**设置 → Nodes & Workflows**中安装可信 `.director-node.json` 后，即可从底栏的 **Custom Node** 选择器添加。
 
 通用 Renderer 只把 `primary` 字段放在 Node 主界面；全部 `advanced` 字段仍可在默认折叠的 **Advanced** 区域编辑。这样大型图像/视频 Workflow Node 保持简洁，但不会丢失细节控制。浏览器导入的 Pack 只能声明经过审查的 `comfyui.workflow` 实现，不能携带 JavaScript、Shell、凭据、任意 MCP Tool、React、HTML 或 CSS。
 
@@ -157,13 +161,13 @@ Video Director Custom Node v1 是类似 ComfyUI Custom Node 安装范式的声�
 
 文字参数也可以按节点实例变成输入端口。右键点击节点，打开**参数输入**，即可启用列表中实际支持的 Prompt、Negative prompt 或声明为字符串的字段。没有连线时保留节点中的本地值作为回退；连入文字后，只在本次运行快照中覆盖它。关闭该输入时，对应连线会作为一次可 Undo 的图编辑一起移除。协议 v1 中，Number 与 Boolean 字段仍保留为节点内控件。
 
-多模态参考使用普通的 Typed Custom Node 端口。例如 R2V Node 可以分别声明图像、视频、音频输入，并将每个端口精确绑定到 ComfyUI Workflow；它们可以接收上游 Load 或生成节点的输出。若 Workflow 根本没有消费某类媒体，Video Director 不会虚构一个无效的 Reference 端口。
+多模态参考使用普通的 Typed vd-node 端口。例如 R2V vd-node 可以分别声明图像、视频、音频输入，并将每个端口精确绑定到 ComfyUI Workflow；它们可以接收上游 Load 或生成节点的输出。若 Workflow 根本没有消费某类媒体，Video Director 不会虚构一个无效的 Reference 端口。
 
 ## ComfyUI Workflow-to-Node Skill
 
 当 DSH Skills Service 可用时，插件会注册内置 [`comfyui-workflow-to-node`](../skills/comfyui-workflow-to-node/SKILL.md) Skill。对于可移植 Node Pack，它用离线 Analyzer 读取可信的 **API-format** Workflow；对于本仓库内置 Workflow，它也能在取得匹配 ComfyUI `/object_info` 后精确编译可信的编辑器模板。两条路径都会保留精确 Bindings，把常用路径放进 `primary`、详细控制放进 `advanced`。
 
-该 Skill 可以读取 ComfyUI 元数据以精确转换 UI 模板，但除非用户另行要求，否则不会提交 Workflow、生成媒体、安装 Custom Node 或下载模型。Agent 必须复核映射、Prompt 正负极性、媒体角色、输出识别、Operation、默认值与字段位置。参考文档见 [Node Protocol v1](../skills/comfyui-workflow-to-node/references/node-protocol-v1.md) 与 [项目内置 Workflow 流程](../skills/comfyui-workflow-to-node/references/project-builtin-workflows.md)。
+该 Skill 可以读取 ComfyUI 元数据以精确转换 UI 模板，但除非用户另行要求，否则不会提交 Workflow、生成媒体、安装 ComfyUI custom-node package 或下载模型。Agent 必须复核映射、Prompt 正负极性、媒体角色、输出识别、Operation、默认值与字段位置。参考文档见 [Node Protocol v1](../skills/comfyui-workflow-to-node/references/node-protocol-v1.md) 与 [项目内置 Workflow 流程](../skills/comfyui-workflow-to-node/references/project-builtin-workflows.md)。
 
 ## MiniMax H3
 
@@ -202,15 +206,28 @@ Video Director Custom Node v1 是类似 ComfyUI Custom Node 安装范式的声�
 
 - 默认只在 Loopback 或带鉴权的私有网络运行 ComfyUI/Ollama。
 - API Key 不得写入 Project JSON、Canvas Node、Prompt 或 Workflow Literal。
-- 下载模型、安装 Custom Node、重启服务属于管理员操作；Custom Node 会执行本地 Python。
+- 下载模型、安装 ComfyUI custom-node package、重启服务属于管理员操作；ComfyUI custom-node package 会执行本地 Python。
 - 只提交可信 Workflow；结构验证无法证明已安装 Node 的行为安全。
-- 浏览器导入的 Video Director Node Pack 是声明式并经过 Schema 校验的，不能携带任意 Executor；但其中嵌入的 ComfyUI Workflow 仍能调用已安装的 Python Custom Node，因此依然需要信任审查。
+- 浏览器导入的 vd-node pack 是声明式并经过 Schema 校验的，不能携带任意 Executor；但其中嵌入的 ComfyUI Workflow 仍能调用已安装的 ComfyUI custom-node package，因此依然需要信任审查。
 - MCP Tool 与 Operation 由 Host 持有并限制；删除模型、安装节点、重启进程、清空整个队列和任意服务端路径读取都不在插件路径内。
+
+## 工作流队列与连接恢复
+
+当前浏览器 Controller 按 FIFO 调度 vd-run；每次提交先捕获画布与设置，再等待前一个工作流的依赖阶段和批次完成。摘要和只写一次的快照分别保存到 `projects/<project-id>/runs/`，通过 `vd-runs/save`、`vd-runs/list`、`vd-runs/get` 访问。列表仅传输摘要。任务窗口可将提交的画布恢复为可撤销编辑，或将画布和引用素材导出为工程归档。排队中的运行可以取消；取消或失败后继续下一项。
+
+`ProviderRuntime` 对 ComfyUI History、Queue、上传和输出下载中的连接错误及 HTTP 408/425/429/502/503/504 自动重试，退避间隔从 1 秒增长至最多 30 秒，直到连接恢复或用户取消。读取和下载使用单次请求超时，不限制整个生成任务的时长。恢复后先按原 `prompt_id` 检查 History，因此断网期间已完成的产物可直接获取；真正的执行错误仍使任务失败。Ollama Chat 没有异步结果句柄，因此重试相同文本请求；显存卸载触发器也会重试临时连接错误。
+
+REST Enqueue 在建立连接前被拒绝时可安全重试；若建立连接后丢失响应，则按唯一 `client_id` 查找 Queue/History，避免再次提交。无法确认接收状态时保持 `reconciling-submission`，直到发现记录。用户取消后转为取消清理，仍需找到已接收的任务并确认它已停止。MCP Enqueue 的不明确结果仍采用前述保守策略；任一传输获得 prompt ID 后，REST 监控均可自动恢复。
+
+取消属于 Provider 执行的清理阶段。用户取消时，REST 和 MCP Enqueue 会等待受请求超时限制的回执，避免丢失 prompt ID。随后以独立请求信号调用 `POST /api/jobs/{prompt_id}/cancel`，并等待对应任务从 `/queue` 消失。临时连接错误继续退避重试；本地任务保持 `running`，阶段为 `cancelling` 或 `cancelling-reconnecting`，直到远端停止才释放执行位置。旧版 ComfyUI 仅使用 `POST /queue` 的 `delete: [prompt_id]` 删除指定排队任务，不调用全局 `/interrupt` 或清空队列。若不支持取消正在执行的任务、取消被拒绝，或 MCP 提交无法识别 prompt ID，则以 `video-director/remote-cancel-failed` 明确报告失败，vd-run 摘要也保留该错误。下载结果时远端任务已经完成，无需中断。
+
+Ollama 推理请求和响应体读取共享用户取消信号。取消会关闭 HTTP 请求并停止重连重试，不卸载共享模型。Socket 级回归测试覆盖响应头返回前和部分响应读取期间的取消；晚到的 Provider 结果不能把已取消的本地任务标记为完成。
 
 ## 当前限制
 
 - 暂无协同 Graph Merge；Revision 冲突需要在 UI 层 Reload/Merge。
 - 重启后把未完成 Job 记为 Orphaned，尚未恢复持久化的 ComfyUI Watcher。
+- 工作流调度要求当前浏览器工程保持打开。提交快照可在重载后打开和导出，但关闭 Controller 或重启 Harness 后不会自动恢复队列的依赖调度。
 - 进度使用轮询，尚无精确到 Prompt 的 WebSocket Observer。
 - H3 I2V/R2V Graph 与带角色的 Reference Wiring 尚未内置；当前内置 T2V-with-audio 与 Prompt-only Audio。
 - Mask、Trim/Crop、Resize 尚未接入内置 FFmpeg/图像预处理流水线。
@@ -226,6 +243,6 @@ pnpm test
 pnpm run check
 ```
 
-测试覆盖插件/Patch 发现、Project 身份与 Revision 冲突、不可变 Asset 和 HTTP Range、不可变 Custom Node Definition 与字段校验、Preview/Save Catalog、不会重复提交的 REST/MCP 路由、H3 许可门与约束、保守 Job Recovery 与 RPC 输入验证。
+测试覆盖插件/Patch 发现、Project 身份与 Revision 冲突、不可变 Asset 和 HTTP Range、不可变 vd-node definition 与字段校验、Preview/Save Catalog、不会重复提交的 REST/MCP 路由、H3 许可门与约束、保守 Job Recovery 与 RPC 输入验证。
 
 主要参考：[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)、[DirectorX](https://github.com/LaplaceYoung/dsh-directorx)、[Tongflow](https://github.com/tong-io/tongflow)、[MiniMax-H3-Codex-Drama](https://github.com/chiphoton/MiniMax-H3-Codex-Drama)、[comfyui-mcp 0.49.3](https://github.com/artokun/comfyui-mcp/tree/v0.49.3) 与 [ComfyUI](https://github.com/Comfy-Org/ComfyUI)。

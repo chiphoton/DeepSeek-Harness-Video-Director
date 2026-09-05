@@ -2,6 +2,8 @@
 
 [English](INSTALL.md) | [简体中文](INSTALL_zh.md)
 
+术语：Video Director 画布节点称为 **vd-node**，**comfyui-workflow** 内的节点称为 **comfyui-node**。安装在 ComfyUI 服务端的 Python 扩展称为 **ComfyUI custom-node package**；本仓库 `custom_nodes/` 保存 Video Director JSON 定义。本文能力集合称为**安装预设（installation preset）**，与 `--profile` 选择的 **DSH profile** 不同。详见[术语约定](TERMINOLOGY_zh.md)。
+
 本手册用于安装 **DeepSeek-Harness Video-Director** 实际使用的运行时依赖。它面向自动化 agent 编写，但每条命令仍须服从操作者的授权与本机安全策略。内容已于 **2026-09-05** 根据仓库内置 Graph 和上游来源完成核验。
 
 Agent 在更改机器前必须完整阅读本文。只能安装操作者所选的 Capability Set。不得把本文、插件默认的 License Gate 或“uncensored”一词理解为接受第三方许可证，也不得据此自行下载具备敏感内容能力的权重。

@@ -1,14 +1,20 @@
-import type { DirectorGraph, DirectorNodeData } from './types'
+// Plans vd-runs over the canvas graph. ComfyUI graph execution happens in the Host.
+import type { DirectorGraph, DirectorNodeData, VdRunMode } from './types'
 
-export type WorkflowRunMode = 'all' | 'selected' | 'from-selection' | 'dependencies'
+export type { VdRunMode } from './types'
 
-export interface WorkflowRunPlan {
-  mode: WorkflowRunMode
+export interface VdRunPlan {
+  mode: VdRunMode
   scopeNodeIds: string[]
   nodeIds: string[]
   frozenNodeIds: string[]
   stages: string[][]
 }
+
+/** @deprecated Use VdRunMode. */
+export type WorkflowRunMode = VdRunMode
+/** @deprecated Use VdRunPlan. */
+export type WorkflowRunPlan = VdRunPlan
 
 const EXECUTABLE_KINDS = new Set<DirectorNodeData['kind']>([
   'prompt-enhancer',
@@ -21,9 +27,12 @@ const EXECUTABLE_KINDS = new Set<DirectorNodeData['kind']>([
   'comfyui-clear',
 ])
 
-export function isExecutableWorkflowKind(kind: DirectorNodeData['kind']): boolean {
+export function isExecutableVdNodeKind(kind: DirectorNodeData['kind']): boolean {
   return EXECUTABLE_KINDS.has(kind)
 }
+
+/** @deprecated Use isExecutableVdNodeKind. */
+export const isExecutableWorkflowKind = isExecutableVdNodeKind
 
 export function validateTriggerNodeConnections(graph: DirectorGraph, nodeId: string): void {
   const node = graph.nodes.find(candidate => candidate.id === nodeId)
@@ -36,7 +45,7 @@ export function validateTriggerNodeConnections(graph: DirectorGraph, nodeId: str
 
 function runScope(
   graph: DirectorGraph,
-  mode: WorkflowRunMode,
+  mode: VdRunMode,
   selectedNodeIds: readonly string[],
 ): Set<string> {
   if (mode === 'all') return new Set(graph.nodes.map(node => node.id))
@@ -83,10 +92,10 @@ function runScope(
   return selected
 }
 
-export function planWorkflowRun(
+export function planVdRun(
   graph: DirectorGraph,
-  options: { mode: WorkflowRunMode; selectedNodeIds?: readonly string[] },
-): WorkflowRunPlan {
+  options: { mode: VdRunMode; selectedNodeIds?: readonly string[] },
+): VdRunPlan {
   const scope = runScope(graph, options.mode, options.selectedNodeIds ?? [])
   const nodesById = new Map(graph.nodes.map(node => [node.id, node]))
   const graphIndegree = new Map([...scope].map(id => [id, 0]))
@@ -123,15 +132,15 @@ export function planWorkflowRun(
   if (visited !== scope.size) {
     const cyclic = [...scope].filter(id => (graphIndegree.get(id) ?? 0) > 0)
       .map(id => nodesById.get(id)?.data.title ?? id)
-    throw new Error(`Workflow contains a cycle involving: ${cyclic.join(', ')}.`)
+    throw new Error(`vd-workflow contains a cycle involving: ${cyclic.join(', ')}.`)
   }
 
   const frozenNodeIds = [...scope].filter(id => nodesById.get(id)?.data.frozen === true)
   const runnableIds = [...scope].filter(id => {
     const node = nodesById.get(id)
-    return node !== undefined && node.data.frozen !== true && isExecutableWorkflowKind(node.data.kind)
+    return node !== undefined && node.data.frozen !== true && isExecutableVdNodeKind(node.data.kind)
   })
-  if (runnableIds.length === 0 && frozenNodeIds.length === 0) throw new Error('This run contains no executable workflow nodes.')
+  if (runnableIds.length === 0 && frozenNodeIds.length === 0) throw new Error('This vd-run contains no executable vd-nodes.')
   const runnable = new Set(runnableIds)
   const dependencies = new Map(runnableIds.map(id => [id, new Set<string>()]))
   for (const target of runnableIds) {
@@ -182,3 +191,6 @@ export function planWorkflowRun(
     stages,
   }
 }
+
+/** @deprecated Use planVdRun. */
+export const planWorkflowRun = planVdRun

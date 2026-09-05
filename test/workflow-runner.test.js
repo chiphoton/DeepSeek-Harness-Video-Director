@@ -31,7 +31,7 @@ function edge(source, target) {
 }
 
 test('workflow planning collapses local data nodes into executable dependency stages', async () => {
-  const { planWorkflowRun } = await workflowRunner()
+  const { planVdRun } = await workflowRunner()
   const graph = {
     nodes: [
       node('input', 'load-text'),
@@ -44,26 +44,26 @@ test('workflow planning collapses local data nodes into executable dependency st
     viewport: { x: 0, y: 0, zoom: 1 },
   }
 
-  const plan = planWorkflowRun(graph, { mode: 'all' })
+  const plan = planVdRun(graph, { mode: 'all' })
 
   assert.deepEqual(plan.stages, [['enhance', 'independent'], ['generate']])
   assert.deepEqual(plan.nodeIds, ['enhance', 'independent', 'generate'])
 })
 
 test('selected and from-selection modes have distinct scopes', async () => {
-  const { planWorkflowRun } = await workflowRunner()
+  const { planVdRun } = await workflowRunner()
   const graph = {
     nodes: [node('a', 'prompt-enhancer'), node('b', 'image-generation'), node('c', 'video-generation')],
     edges: [edge('a', 'b'), edge('b', 'c')],
     viewport: { x: 0, y: 0, zoom: 1 },
   }
 
-  assert.deepEqual(planWorkflowRun(graph, { mode: 'selected', selectedNodeIds: ['b'] }).nodeIds, ['b'])
-  assert.deepEqual(planWorkflowRun(graph, { mode: 'from-selection', selectedNodeIds: ['b'] }).nodeIds, ['b', 'c'])
+  assert.deepEqual(planVdRun(graph, { mode: 'selected', selectedNodeIds: ['b'] }).nodeIds, ['b'])
+  assert.deepEqual(planVdRun(graph, { mode: 'from-selection', selectedNodeIds: ['b'] }).nodeIds, ['b', 'c'])
 })
 
 test('dependency mode runs only executable ancestors of the selected output', async () => {
-  const { planWorkflowRun } = await workflowRunner()
+  const { planVdRun } = await workflowRunner()
   const graph = {
     nodes: [
       node('input', 'load-text'),
@@ -76,7 +76,7 @@ test('dependency mode runs only executable ancestors of the selected output', as
     viewport: { x: 0, y: 0, zoom: 1 },
   }
 
-  const plan = planWorkflowRun(graph, { mode: 'dependencies', selectedNodeIds: ['preview'] })
+  const plan = planVdRun(graph, { mode: 'dependencies', selectedNodeIds: ['preview'] })
 
   assert.deepEqual(plan.nodeIds, ['enhance', 'generate'])
   assert.deepEqual(plan.stages, [['enhance'], ['generate']])
@@ -84,7 +84,7 @@ test('dependency mode runs only executable ancestors of the selected output', as
 })
 
 test('a frozen node is a cached dependency boundary and is excluded from run stages', async () => {
-  const { planWorkflowRun } = await workflowRunner()
+  const { planVdRun } = await workflowRunner()
   const graph = {
     nodes: [
       node('enhance', 'prompt-enhancer'),
@@ -96,7 +96,7 @@ test('a frozen node is a cached dependency boundary and is excluded from run sta
     viewport: { x: 0, y: 0, zoom: 1 },
   }
 
-  const plan = planWorkflowRun(graph, { mode: 'dependencies', selectedNodeIds: ['preview'] })
+  const plan = planVdRun(graph, { mode: 'dependencies', selectedNodeIds: ['preview'] })
 
   assert.deepEqual(new Set(plan.scopeNodeIds), new Set(['cached', 'animate', 'preview']))
   assert.deepEqual(plan.frozenNodeIds, ['cached'])
@@ -105,18 +105,18 @@ test('a frozen node is a cached dependency boundary and is excluded from run sta
 })
 
 test('workflow planning rejects cycles before submitting any node', async () => {
-  const { planWorkflowRun } = await workflowRunner()
+  const { planVdRun } = await workflowRunner()
   const graph = {
     nodes: [node('a', 'prompt-enhancer'), node('b', 'prompt-enhancer')],
     edges: [edge('a', 'b'), edge('b', 'a')],
     viewport: { x: 0, y: 0, zoom: 1 },
   }
 
-  assert.throws(() => planWorkflowRun(graph, { mode: 'all' }), /cycle involving: a, b/)
+  assert.throws(() => planVdRun(graph, { mode: 'all' }), /cycle involving: a, b/)
 })
 
 test('VRAM triggers form sequential execution barriers between workflow nodes', async () => {
-  const { planWorkflowRun } = await workflowRunner()
+  const { planVdRun } = await workflowRunner()
   const graph = {
     nodes: [
       node('image', 'image-generation'),
@@ -127,7 +127,7 @@ test('VRAM triggers form sequential execution barriers between workflow nodes', 
     viewport: { x: 0, y: 0, zoom: 1 },
   }
 
-  assert.deepEqual(planWorkflowRun(graph, { mode: 'all' }).stages, [['image'], ['clear'], ['video']])
+  assert.deepEqual(planVdRun(graph, { mode: 'all' }).stages, [['image'], ['clear'], ['video']])
 })
 
 test('VRAM triggers reject isolated execution but accept either connected end', async () => {

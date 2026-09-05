@@ -4,12 +4,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import { WorkflowStore } from '../src/workflow-store.js'
+import { ComfyWorkflowStore } from '../src/workflow-store.js'
 
 async function createStore(t) {
   const root = await mkdtemp(join(tmpdir(), 'dsh-video-director-workflows-'))
   t.after(async () => { await rm(root, { recursive: true, force: true }) })
-  const store = new WorkflowStore(root)
+  const store = new ComfyWorkflowStore(root)
   await store.init()
   return { root, store }
 }
@@ -51,7 +51,7 @@ function importDocument(store, name, options = {}) {
   })
 }
 
-test('WorkflowStore exposes immutable built-ins without sending their full graphs to the client', async (t) => {
+test('ComfyWorkflowStore exposes immutable built-ins without sending their full graphs to the client', async (t) => {
   const { store } = await createStore(t)
   const workflows = store.list()
 
@@ -521,7 +521,7 @@ test('MiniMax-H3 Audio (Standard) maps the supplied non-LoRA audio template', as
   )
 })
 
-test('WorkflowStore imports API-format graphs, extracts an interface, persists it, and resolves parameter values', async (t) => {
+test('ComfyWorkflowStore imports API-format graphs, extracts an interface, persists it, and resolves parameter values', async (t) => {
   const { root, store } = await createStore(t)
   const document = {
     '1': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'base.safetensors' } },
@@ -564,13 +564,13 @@ test('WorkflowStore imports API-format graphs, extracts an interface, persists i
     { nodeId: '3', input: 'text', from: 'negativePrompt' },
   ])
 
-  const reloaded = new WorkflowStore(root)
+  const reloaded = new ComfyWorkflowStore(root)
   await reloaded.init()
   assert.equal(reloaded.list().some(workflow => workflow.id === descriptor.id), true)
   assert.equal(reloaded.resolve(descriptor.id, {}).workflow['1'].inputs.ckpt_name, 'base.safetensors')
 })
 
-test('WorkflowStore rejects ComfyUI UI-format graphs with an actionable export instruction', async (t) => {
+test('ComfyWorkflowStore rejects ComfyUI UI-format graphs with an actionable export instruction', async (t) => {
   const { store } = await createStore(t)
   await assert.rejects(store.import({
     name: 'Wrong format',
@@ -579,7 +579,7 @@ test('WorkflowStore rejects ComfyUI UI-format graphs with an actionable export i
   }), /Save \(API Format\)/i)
 })
 
-test('WorkflowStore infers the MiniMax H3 policy family from custom API graphs', async (t) => {
+test('ComfyWorkflowStore infers the MiniMax H3 policy family from custom API graphs', async (t) => {
   const { store } = await createStore(t)
   const descriptor = await store.import({
     name: 'Custom H3 workflow',
@@ -617,7 +617,7 @@ test('WorkflowStore infers the MiniMax H3 policy family from custom API graphs',
   assert.equal(promptOnly.modelFamily, undefined)
 })
 
-test('WorkflowStore validates caller-defined parameters against the workflow graph', async (t) => {
+test('ComfyWorkflowStore validates caller-defined parameters against the workflow graph', async (t) => {
   const { store } = await createStore(t)
 
   const descriptor = await importDocument(store, 'Explicit parameters', {
@@ -658,7 +658,7 @@ test('WorkflowStore validates caller-defined parameters against the workflow gra
   assert.equal(recovered.name, 'Queue remains usable')
 })
 
-test('WorkflowStore validates explicit binding targets and media indexes', async (t) => {
+test('ComfyWorkflowStore validates explicit binding targets and media indexes', async (t) => {
   const { store } = await createStore(t)
   const base = {
     name: 'Explicit bindings',
@@ -669,11 +669,11 @@ test('WorkflowStore validates explicit binding targets and media indexes', async
   await assert.rejects(store.import({
     ...base,
     bindings: [{ nodeId: '404', input: 'text', from: 'prompt' }],
-  }), /missing workflow node/i)
+  }), /missing comfyui-node/i)
   await assert.rejects(store.import({
     ...base,
     bindings: [{ nodeId: '1', input: 'missing', from: 'prompt' }],
-  }), /missing workflow input/i)
+  }), /missing comfyui-node input/i)
   await assert.rejects(store.import({
     ...base,
     bindings: [{ nodeId: '1', input: 'text', from: 'asset', mediaIndex: -1 }],
@@ -693,7 +693,7 @@ test('WorkflowStore validates explicit binding targets and media indexes', async
   assert.equal(valid.name, base.name)
 })
 
-test('WorkflowStore serializes concurrent writes and persists their final snapshot', async (t) => {
+test('ComfyWorkflowStore serializes concurrent writes and persists their final snapshot', async (t) => {
   const { root, store } = await createStore(t)
   const imported = await Promise.all(Array.from(
     { length: 20 },
@@ -708,14 +708,14 @@ test('WorkflowStore serializes concurrent writes and persists their final snapsh
   assert.equal(added.length, 16)
 
   const expectedIds = store.list().filter(workflow => !workflow.builtIn).map(workflow => workflow.id).sort()
-  const reloaded = new WorkflowStore(root)
+  const reloaded = new ComfyWorkflowStore(root)
   await reloaded.init()
   const persistedIds = reloaded.list().filter(workflow => !workflow.builtIn).map(workflow => workflow.id).sort()
   assert.deepEqual(persistedIds, expectedIds)
   assert.equal(persistedIds.length, 16)
 })
 
-test('WorkflowStore publishes copy-on-write state only after persistence succeeds', async (t) => {
+test('ComfyWorkflowStore publishes copy-on-write state only after persistence succeeds', async (t) => {
   const { root, store } = await createStore(t)
   const existing = await importDocument(store, 'Existing')
   const registryPath = store.path
@@ -734,7 +734,7 @@ test('WorkflowStore publishes copy-on-write state only after persistence succeed
   const recovered = await importDocument(store, 'Recovered after failure')
   await store.remove(existing.id)
 
-  const reloaded = new WorkflowStore(root)
+  const reloaded = new ComfyWorkflowStore(root)
   await reloaded.init()
   const custom = reloaded.list().filter(workflow => !workflow.builtIn)
   assert.deepEqual(custom.map(workflow => workflow.id), [recovered.id])

@@ -4,6 +4,8 @@ import { dirname, join } from 'node:path'
 
 import { DirectorInputError, jsonValue, oneOf, record, string } from './validation.js'
 
+// Owns registered comfyui-workflows and their graph-local binding targets.
+// The canvas vd-workflow belongs to ProjectStore; workflows.json is a stable storage name.
 const WORKFLOW_KINDS = [
   'image-generation',
   'image-edit',
@@ -111,7 +113,7 @@ function workflowGraph(value) {
   const workflow = record(candidate, 'ComfyUI API workflow')
   const entries = Object.entries(workflow)
   if (entries.length === 0 || entries.length > 4_000) {
-    throw new DirectorInputError('ComfyUI API workflow must contain between 1 and 4000 nodes')
+    throw new DirectorInputError('API-format comfyui-workflow must contain between 1 and 4000 comfyui-nodes')
   }
   for (const [nodeId, value] of entries) {
     const node = record(value, `workflow[${nodeId}]`)
@@ -250,12 +252,12 @@ function normalizeBindings(value, workflow) {
   const targets = new Set()
   return value.map((entry, index) => {
     const binding = normalizeBinding(entry, index)
-    const node = workflow[binding.nodeId]
-    if (!isRecord(node)) {
-      throw new DirectorInputError(`binding ${binding.nodeId}.${binding.input} references a missing workflow node`)
+    const comfyNode = workflow[binding.nodeId]
+    if (!isRecord(comfyNode)) {
+      throw new DirectorInputError(`binding ${binding.nodeId}.${binding.input} references a missing comfyui-node`)
     }
-    if (!isRecord(node.inputs) || !Object.hasOwn(node.inputs, binding.input)) {
-      throw new DirectorInputError(`binding ${binding.nodeId}.${binding.input} references a missing workflow input`)
+    if (!isRecord(comfyNode.inputs) || !Object.hasOwn(comfyNode.inputs, binding.input)) {
+      throw new DirectorInputError(`binding ${binding.nodeId}.${binding.input} references a missing comfyui-node input`)
     }
     for (const omittedNodeId of binding.omitNodeIdsWhenMissing ?? []) {
       if (!isRecord(workflow[omittedNodeId])) {
@@ -309,7 +311,7 @@ function inferredPlacement(node, inputName, state) {
   return 'advanced'
 }
 
-export function extractWorkflowInterface(workflowValue, explicitBindings) {
+export function extractComfyWorkflowInterface(workflowValue, explicitBindings) {
   const workflow = workflowGraph(workflowValue)
   const supplied = normalizeBindings(explicitBindings, workflow)
   const bound = new Set((supplied ?? []).map(binding => `${binding.nodeId}:${binding.input}`))
@@ -477,7 +479,7 @@ function publicWorkflow(workflow) {
 
 function normalizeStoredWorkflow(value) {
   const input = record(value, 'stored workflow')
-  const { workflow, bindings, parameters: inferred } = extractWorkflowInterface(input.workflow, input.bindings)
+  const { workflow, bindings, parameters: inferred } = extractComfyWorkflowInterface(input.workflow, input.bindings)
   const declaredModelFamily = input.modelFamily === undefined
     ? undefined
     : string(input.modelFamily, 'workflow.modelFamily', { min: 1, max: 128 })
@@ -513,7 +515,7 @@ function normalizeStoredWorkflow(value) {
 async function builtinWorkflow(spec) {
   const document = JSON.parse(await readFile(spec.file, 'utf8'))
   const nodeData = record(document.nodeData, `${spec.id}.nodeData`)
-  const extracted = extractWorkflowInterface(nodeData.workflow, nodeData.bindings)
+  const extracted = extractComfyWorkflowInterface(nodeData.workflow, nodeData.bindings)
   const parameters = nodeData.parameters === undefined
     ? (spec.exposeUnboundParameters ? extracted.parameters : [])
     : normalizeParameters(nodeData.parameters, extracted.workflow)
@@ -537,7 +539,8 @@ async function builtinWorkflow(spec) {
   })
 }
 
-export class WorkflowStore {
+/** Registry of ComfyUI API graphs, defaults, bindings, and exposed vd-node controls. */
+export class ComfyWorkflowStore {
   constructor(dataDir) {
     this.path = join(dataDir, 'workflows.json')
     this.workflows = new Map()
@@ -554,7 +557,7 @@ export class WorkflowStore {
     } catch (error) {
       if (error?.code !== 'ENOENT') throw error
     }
-    if (!Array.isArray(rows)) throw new Error('video-director workflow registry must be an array')
+    if (!Array.isArray(rows)) throw new Error('Video Director ComfyUI workflow registry must be an array')
     for (const row of rows) {
       const workflow = normalizeStoredWorkflow(row)
       if (!workflow.builtIn) workflows.set(workflow.id, workflow)
@@ -597,7 +600,7 @@ export class WorkflowStore {
       const document = record(input.document, 'workflow import document')
       const embedded = isRecord(document.nodeData) ? document.nodeData : {}
       const explicitBindings = input.bindings ?? embedded.bindings
-      const extracted = extractWorkflowInterface(document, explicitBindings)
+      const extracted = extractComfyWorkflowInterface(document, explicitBindings)
       const parameters = input.parameters === undefined
         ? extracted.parameters
         : normalizeParameters(input.parameters, extracted.workflow)
@@ -677,3 +680,9 @@ export class WorkflowStore {
     await rename(temp, this.path)
   }
 }
+
+// Compatibility exports; new code uses names that identify the ComfyUI layer.
+/** @deprecated Use ComfyWorkflowStore. */
+export { ComfyWorkflowStore as WorkflowStore }
+/** @deprecated Use extractComfyWorkflowInterface. */
+export { extractComfyWorkflowInterface as extractWorkflowInterface }

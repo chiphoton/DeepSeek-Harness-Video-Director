@@ -27,6 +27,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react'
+import { createPortal } from 'react-dom'
 import type { DirectorController } from './controller'
 import type { ProjectChatSource } from './chat-source'
 import {
@@ -35,6 +36,7 @@ import {
   type DirectorRuntimeValue,
 } from './DirectorNode'
 import { MaskModal } from './MaskModal'
+import { CanvasContextMenu, CanvasModeControl, isCanvasTextInput, scrollableCanvasField, type CanvasInteractionMode } from './canvas-controls'
 import { CloseIcon, JobsIcon, PlayIcon, RedoIcon, SaveIcon, SettingsIcon, UndoIcon } from './icons'
 import {
   fieldInputModeEnabled,
@@ -68,10 +70,10 @@ import type {
   DirectorNode,
   DirectorNodeData,
   DirectorSnapshot,
-  DirectorWorkflowRun,
+  VdRun,
   MediaKind,
-  NodeDefinitionDescriptor,
-  NodePortDescriptor,
+  VdNodeDefinitionDescriptor,
+  VdPortDescriptor,
   SketchDocument,
 } from './types'
 import xyflowStyles from '@xyflow/react/dist/style.css'
@@ -85,8 +87,6 @@ export interface DirectorInjectedProps {
 export interface DirectorLauncherProps extends DirectorInjectedProps {
   wide: boolean
 }
-
-type CanvasInteractionMode = 'pan' | 'select'
 
 function useSource<T>(source: {
   getSnapshot(): T
@@ -307,17 +307,24 @@ function TopBar({
     setMenuOpen(false)
     director.clearPreviews()
   }
+  const restoreOpenedProject = (): void => {
+    if (project === null || snapshot.saving || projectTransitioning) return
+    setMenuOpen(false)
+    if (!window.confirm(`确定放弃工程“${project.name}”的更改？\n\n工作流将恢复到本次打开时的状态，撤销和重做记录将清空。期间保存过的更改也会从画布中还原；如需将恢复结果写入工程，请点击“保存”。`)) return
+    try { director.restoreOpenedProject() } catch (error) { window.alert(error instanceof Error ? error.message : String(error)) }
+  }
   const importProject = async (file: File): Promise<void> => {
     if (!await saveBeforeProjectCopy('导入')) return
     try { await director.importProject(await file.text()) } catch (error) { swallow(error) }
   }
   const workflowBusy = snapshot.workflowRuns.some(run => run.projectId === project?.id && run.status === 'running')
   const runnableCount = project?.graph.nodes.filter(node => REMOTE_NODE_KINDS.has(node.data.kind)).length ?? 0
-  const canRunWorkflow = project !== null && runnableCount > 0 && !snapshot.saving && !projectTransitioning && !workflowBusy
-  const activeJobCount = project?.jobs.filter(job => job.status === 'queued' || job.status === 'running').length ?? 0
-  const runWorkflow = (mode: 'all' | 'selected' | 'from-selection'): void => {
+  const canRunWorkflow = project !== null && runnableCount > 0 && !snapshot.saving && !projectTransitioning
+  const activeJobCount = (project?.jobs.filter(job => job.status === 'queued' || job.status === 'running').length ?? 0)
+    + snapshot.workflowRuns.filter(run => run.projectId === project?.id && run.status === 'queued').length
+  const runVdWorkflow = (mode: 'all' | 'selected' | 'from-selection'): void => {
     setRunMenuOpen(false)
-    void director.runWorkflow({
+    void director.runVdWorkflow({
       mode,
       selectedNodeIds: mode === 'all' ? undefined : [...selectedNodeIds],
       batchSize,
@@ -381,6 +388,9 @@ function TopBar({
               <button type="button" disabled={snapshot.saving || projectTransitioning} onClick={() => { setMenuOpen(false); projectImportRef.current?.click() }}>导入工程</button>
               <button type="button" disabled={project === null || projectTransitioning} onClick={() => { void exportProject() }}>导出工程</button>
               <button type="button" disabled={project === null || snapshot.saving || projectTransitioning} onClick={clearPreviews}>清除预览</button>
+              <button type="button" disabled={project === null || snapshot.saving || projectTransitioning || workflowBusy || activeJobCount > 0}
+                title={workflowBusy || activeJobCount > 0 ? '请等待任务结束或取消任务后再放弃更改' : '恢复到本次打开时的工作流'}
+                onClick={restoreOpenedProject}>放弃更改</button>
               <button
                 type="button"
                 className="vd-project-delete"
@@ -436,7 +446,7 @@ function TopBar({
             disabled={!canRunWorkflow}
             aria-haspopup="menu"
             aria-expanded={runMenuOpen}
-            title={workflowBusy ? '已有工作流正在运行' : '运行画布工作流'}
+            title={workflowBusy ? '将当前工作流加入队列' : '运行画布工作流'}
             onClick={() => setRunMenuOpen(open => !open)}
           >
             <PlayIcon />
@@ -457,13 +467,13 @@ function TopBar({
                 />
                 <small>固定 seed 每批递增</small>
               </label>
-              <button type="button" role="menuitem" onClick={() => runWorkflow('all')}>
+              <button type="button" role="menuitem" onClick={() => runVdWorkflow('all')}>
                 <span>运行全部</span><small>{String(runnableCount)} 个可执行节点</small>
               </button>
-              <button type="button" role="menuitem" disabled={selectedNodeIds.size === 0} onClick={() => runWorkflow('selected')}>
+              <button type="button" role="menuitem" disabled={selectedNodeIds.size === 0} onClick={() => runVdWorkflow('selected')}>
                 <span>运行所选</span><small>{String(selectedNodeIds.size)} 个已选节点</small>
               </button>
-              <button type="button" role="menuitem" disabled={selectedNodeIds.size === 0} onClick={() => runWorkflow('from-selection')}>
+              <button type="button" role="menuitem" disabled={selectedNodeIds.size === 0} onClick={() => runVdWorkflow('from-selection')}>
                 <span>从所选节点运行</span><small>包含所有下游节点</small>
               </button>
             </div>
@@ -497,12 +507,12 @@ function TopBar({
 
 interface JobGroup {
   id: string
-  workflowRun?: DirectorWorkflowRun
+  workflowRun?: VdRun
   jobs: DirectorJob[]
   startedAt: string
 }
 
-function jobGroupStatus(group: JobGroup): DirectorJob['status'] | DirectorWorkflowRun['status'] {
+function jobGroupStatus(group: JobGroup): DirectorJob['status'] | VdRun['status'] {
   if (group.workflowRun !== undefined) return group.workflowRun.status
   if (group.jobs.some(job => job.status === 'running')) return 'running'
   if (group.jobs.some(job => job.status === 'queued')) return 'queued'
@@ -523,6 +533,16 @@ function JobDrawer({
 }) {
   const project = snapshot.project
   const [openArtifact, setOpenArtifact] = useState<PreviewArtifact | null>(null)
+  useEffect(() => { void director.refreshVdRuns().catch(swallow) }, [director, project?.id])
+  const exportWorkflow = async (runId: string): Promise<void> => {
+    const exported = await director.exportVdWorkflow(runId)
+    const url = URL.createObjectURL(new Blob([exported.text], { type: 'application/json' }))
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = exported.filename
+    anchor.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1_000)
+  }
   const groups = useMemo<JobGroup[]>(() => {
     if (project === null) return []
     const byId = new Map<string, JobGroup>()
@@ -572,8 +592,12 @@ function JobDrawer({
                   <span>{group.workflowRun?.mode ?? group.jobs[0]?.workflowRunMode ?? 'workflow'}</span>
                   <span>{String(group.workflowRun?.batchSize ?? group.jobs[0]?.batchSize ?? 1)} 批</span>
                   <span>{String(completedJobs)} / {String(totalJobs)}</span>
+                  {group.workflowRun !== undefined ? <>
+                    <button type="button" onClick={() => { void director.openVdWorkflow(group.id).catch(swallow) }}>打开工作流</button>
+                    <button type="button" onClick={() => { void exportWorkflow(group.id).catch(swallow) }}>导出工作流</button>
+                  </> : null}
                   {active ? (
-                    <button type="button" onClick={() => { void director.cancelWorkflowRun(group.id).catch(swallow) }}>取消运行</button>
+                    <button type="button" className="is-cancel" onClick={() => { void director.cancelVdRun(group.id).catch(swallow) }}>取消运行</button>
                   ) : null}
                 </div>
               ) : null}
@@ -591,6 +615,7 @@ function JobDrawer({
                       </div>
                       <div className="vd-job-row-meta">
                         <span>{job.status} · {job.phase}</span>
+                        {job.promptId === undefined ? null : <span title={job.promptId}>ComfyUI: {job.promptId}</span>}
                         {job.batchIndex === undefined ? null : <span>批次 {String(job.batchIndex + 1)}</span>}
                         <span>{String(Math.round(job.progress * 100))}%</span>
                       </div>
@@ -1319,6 +1344,7 @@ function NodeContextMenu({
   onRun,
   onCancel,
   onFreeze,
+  onCopy,
   onDuplicate,
   inputCandidateCount,
   onParameterInputs,
@@ -1337,6 +1363,7 @@ function NodeContextMenu({
   onRun(): void
   onCancel(): void
   onFreeze(): void
+  onCopy(): void
   onDuplicate(): void
   inputCandidateCount: number
   onParameterInputs(): void
@@ -1459,6 +1486,9 @@ function NodeContextMenu({
             <span aria-hidden>◩</span><span>创建 Mask 副本<small>保留原素材与节点</small></span>
           </button>
         ) : null}
+        <button type="button" role="menuitem" onClick={onCopy}>
+          <span aria-hidden>▣</span><span>Copy<small>Ctrl+C · 复制到画布剪贴板</small></span>
+        </button>
         <button type="button" role="menuitem" onClick={onDuplicate}>
           <span aria-hidden>⧉</span><span>{clip ? '复制当前裁剪' : 'Duplicate'}<small>创建独立节点副本</small></span>
         </button>
@@ -1488,7 +1518,7 @@ function ParameterInputPicker({
 }: {
   position: ParameterInputPickerPosition
   node: DirectorNode
-  definition?: NodeDefinitionDescriptor
+  definition?: VdNodeDefinitionDescriptor
   edges: readonly DirectorEdge[]
   onToggle(fieldId: string, enabled: boolean): void
   onClose(restoreFocus?: boolean): void
@@ -1639,13 +1669,13 @@ function NodeDetails({
   const outputs = portsFor(definition, 'output')
   const rows: Array<[string, string]> = [
     ['标题', node.data.title],
-    ['节点 ID', node.id],
+    ['vd-node ID', node.id],
     ['Kind', node.data.kind],
-    ['Custom Node', node.data.nodeType === undefined ? '内置兼容节点' : `${node.data.nodeType}@${node.data.nodeVersion ?? '1.0.0'}`],
+    ['vd-node definition', node.data.nodeType === undefined ? '内置兼容节点' : `${node.data.nodeType}@${node.data.nodeVersion ?? '1.0.0'}`],
     ['Provider', provider === undefined ? (node.data.providerId ?? '—') : `${provider.label} · ${provider.id}`],
-    ['Workflow', workflow === undefined ? (node.data.workflowId ?? '—') : `${workflow.name} · ${workflow.id}`],
+    ['comfyui-workflow', workflow === undefined ? (node.data.workflowId ?? '—') : `${workflow.name} · ${workflow.id}`],
     ['状态', `${node.data.status ?? 'idle'}${node.data.phase === undefined ? '' : ` · ${node.data.phase}`}`],
-    ['Job', node.data.jobId ?? '—'],
+    ['vd-job', node.data.jobId ?? '—'],
     ['素材', node.data.asset === undefined ? '—' : `${node.data.asset.name} · ${node.data.asset.kind}`],
     ['输入端口', inputs.length === 0 ? '—' : inputs.map(port => `${port.label} (${port.types.join(' / ')})`).join(', ')],
     ['输出端口', outputs.length === 0 ? '—' : outputs.map(port => `${port.label} (${port.types.join(' / ')})`).join(', ')],
@@ -1676,7 +1706,7 @@ interface NodeMenuItem {
   icon: string
   search: string
   action: NodeMenuAction
-  inputs: readonly NodePortDescriptor[]
+  inputs: readonly VdPortDescriptor[]
 }
 
 interface PendingNodeConnection {
@@ -1693,7 +1723,7 @@ interface NodeMenuPosition {
 
 interface NodeMenuCandidate {
   item: NodeMenuItem
-  targetPort?: NodePortDescriptor
+  targetPort?: VdPortDescriptor
 }
 
 const NODE_MENU_CATEGORY_LABELS: Record<NodeMenuItem['category'], string> = {
@@ -1711,8 +1741,8 @@ function NodeAddMenu({
   onClose,
 }: {
   position: NodeMenuPosition
-  definitions: NodeDefinitionDescriptor[]
-  onChoose(action: NodeMenuAction, targetPort?: NodePortDescriptor): void
+  definitions: VdNodeDefinitionDescriptor[]
+  onChoose(action: NodeMenuAction, targetPort?: VdPortDescriptor): void
   onClose(): void
 }) {
   const [query, setQuery] = useState('')
@@ -1733,7 +1763,7 @@ function NodeAddMenu({
   }, [onClose])
 
   const items = useMemo<NodeMenuItem[]>(() => {
-    const workflowInputs = (kind: Extract<DirectorNodeData['kind'], 'prompt-enhancer' | 'image-generation' | 'video-generation' | 'audio-generation'>): NodePortDescriptor[] => {
+    const workflowInputs = (kind: Extract<DirectorNodeData['kind'], 'prompt-enhancer' | 'image-generation' | 'video-generation' | 'audio-generation'>): VdPortDescriptor[] => {
       const input = implicitInputPortForKind(kind)
       return [...(input === undefined ? [] : [input]), { id: 'flow', label: 'Flow', types: ['flow'], multiple: true }]
     }
@@ -1881,14 +1911,23 @@ function CanvasStage({
   const [measuredNodeSizes, setMeasuredNodeSizes] = useState<Record<string, { width: number; height: number }>>({})
   const [nodeMenu, setNodeMenu] = useState<NodeMenuPosition | null>(null)
   const [nodeContextMenu, setNodeContextMenu] = useState<NodeContextMenuPosition | null>(null)
+  const [canvasContextMenu, setCanvasContextMenu] = useState<NodeMenuPosition | null>(null)
+  const [selectionModifierPressed, setSelectionModifierPressed] = useState(false)
+  const [spacePressed, setSpacePressed] = useState(false)
+  const [resettingVram, setResettingVram] = useState(false)
+  const [canvasNotice, setCanvasNotice] = useState<string | null>(null)
+  const [selectionBox, setSelectionBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null)
   const [parameterInputPicker, setParameterInputPicker] = useState<ParameterInputPickerPosition | null>(null)
   const [detailsNodeId, setDetailsNodeId] = useState<string | null>(null)
   const [openArtifact, setOpenArtifact] = useState<{ artifact: PreviewArtifact; properties: boolean } | null>(null)
   const [uploading, setUploading] = useState(false)
   const [miniMapVisible, setMiniMapVisible] = useState(true)
+  const [controlsLayer, setControlsLayer] = useState<HTMLDivElement | null>(null)
   const stageRef = useRef<HTMLElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const ignoreNextPaneClickRef = useRef(false)
+  const pastePositionRef = useRef<{ x: number; y: number } | null>(null)
+  const selectionGestureRef = useRef<{ pointerId: number; x: number; y: number; moved: boolean; nodeId?: string; previous: Set<string> } | null>(null)
   const pendingFileRef = useRef<{ mediaKind: 'image' | 'audio' | 'video'; position: { x: number; y: number } } | null>(null)
   const nodeTypes = useMemo(() => ({ director: DirectorNodeView }), [])
   useEffect(() => {
@@ -1897,13 +1936,56 @@ function CanvasStage({
     setSelectedEdgeId(null)
     setNodeMenu(null)
     setNodeContextMenu(null)
+    setCanvasContextMenu(null)
+    setCanvasNotice(null)
+    pastePositionRef.current = null
+    selectionGestureRef.current = null
+    setSelectionBox(null)
     setParameterInputPicker(null)
     setDetailsNodeId(null)
     setOpenArtifact(null)
     setSketchOpen(false)
     setSketchPosition(undefined)
     setSketchNodeId(null)
-  }, [onSelectedNodeIdsChange, project?.id])
+  }, [onSelectedNodeIdsChange, project?.id, snapshot.canvasResetVersion])
+
+  useEffect(() => {
+    const keyDown = (event: globalThis.KeyboardEvent): void => {
+      setSelectionModifierPressed(event.ctrlKey || event.metaKey)
+      if (isCanvasTextInput(event.target)) return
+      if (event.code === 'Space' && stageRef.current?.contains(event.target as Node)) {
+        event.preventDefault()
+        setSpacePressed(true)
+      }
+    }
+    const keyUp = (event: globalThis.KeyboardEvent): void => {
+      setSelectionModifierPressed(event.ctrlKey || event.metaKey)
+      if (event.code === 'Space') setSpacePressed(false)
+    }
+    const reset = (): void => { setSelectionModifierPressed(false); setSpacePressed(false) }
+    window.addEventListener('keydown', keyDown)
+    window.addEventListener('keyup', keyUp)
+    window.addEventListener('blur', reset)
+    return () => {
+      window.removeEventListener('keydown', keyDown)
+      window.removeEventListener('keyup', keyUp)
+      window.removeEventListener('blur', reset)
+    }
+  }, [])
+
+  const handMode = (interactionMode === 'hand' || spacePressed) && !selectionModifierPressed
+  const pasteNodes = (at?: { x: number; y: number }): void => {
+    if (instance === null || stageRef.current === null) return
+    const bounds = stageRef.current.getBoundingClientRect()
+    const position = at ?? pastePositionRef.current ?? instance.screenToFlowPosition({ x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 })
+    const ids = director.pasteNodes(position)
+    if (ids.length > 0) {
+      onSelectedNodeIdsChange(new Set(ids))
+      pastePositionRef.current = { x: position.x + 32, y: position.y + 32 }
+    }
+    setCanvasContextMenu(null)
+    stageRef.current.focus({ preventScroll: true })
+  }
 
   const updateNodes = useCallback((changes: NodeChange<DirectorNode>[]) => {
     if (project === null) return
@@ -2009,6 +2091,7 @@ function CanvasStage({
     connection?: PendingNodeConnection,
   ): void => {
     if (instance === null || stageRef.current === null) return
+    setCanvasContextMenu(null)
     setNodeContextMenu(null)
     setParameterInputPicker(null)
     const bounds = stageRef.current.getBoundingClientRect()
@@ -2025,9 +2108,10 @@ function CanvasStage({
   }, [instance])
 
   const openNodeContextMenu = useCallback((event: ReactMouseEvent, node: DirectorNode): void => {
+    if (event.ctrlKey || event.metaKey) { event.preventDefault(); return }
     const target = event.target
     if (!(target instanceof Element)) return
-    if (target.closest('input, textarea, select, button, a, audio, video, [contenteditable="true"]') !== null) return
+    if (isCanvasTextInput(target)) return
     event.preventDefault()
     event.stopPropagation()
     if (nodeMenu?.connection !== undefined || stageRef.current === null) {
@@ -2036,9 +2120,10 @@ function CanvasStage({
     }
     const bounds = stageRef.current.getBoundingClientRect()
     const menuWidth = Math.min(250, Math.max(210, bounds.width - 24))
-    const menuHeight = Math.min(410, Math.max(240, bounds.height - 24))
+    const menuHeight = Math.min(540, Math.max(240, bounds.height - 24))
     if (!selectedNodeIds.has(node.id)) onSelectedNodeIdsChange(new Set([node.id]))
     setSelectedEdgeId(null)
+    setCanvasContextMenu(null)
     setNodeMenu(null)
     setParameterInputPicker(null)
     setNodeContextMenu({
@@ -2087,7 +2172,7 @@ function CanvasStage({
     })
   }, [])
 
-  const chooseNode = useCallback((action: NodeMenuAction, targetPort?: NodePortDescriptor): void => {
+  const chooseNode = useCallback((action: NodeMenuAction, targetPort?: VdPortDescriptor): void => {
     if (nodeMenu === null) return
     const position = nodeMenu.flow
     const connection = nodeMenu.connection
@@ -2235,10 +2320,117 @@ function CanvasStage({
   return (
     <section
       ref={stageRef}
-      className="vd-canvas-stage"
+      className={`vd-canvas-stage${handMode ? ' is-hand-mode' : ''}${selectionModifierPressed ? ' is-group-selecting' : ''}`}
+      tabIndex={0}
+      aria-label="Workflow canvas"
+      onPointerDownCapture={event => {
+        if (!(event.target instanceof Element) || event.target.closest('.react-flow') === null) return
+        if ((event.ctrlKey || event.metaKey) && event.button === 0 && !event.target.closest('.react-flow__panel') && stageRef.current) {
+          event.preventDefault()
+          event.stopPropagation()
+          stageRef.current.focus({ preventScroll: true })
+          stageRef.current.setPointerCapture(event.pointerId)
+          selectionGestureRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY,
+            moved: false, nodeId: event.target.closest<HTMLElement>('.react-flow__node')?.dataset.id,
+            previous: new Set(selectedNodeIds) }
+          setNodeMenu(null)
+          setNodeContextMenu(null)
+          setCanvasContextMenu(null)
+          return
+        }
+        if (!isCanvasTextInput(event.target) && !event.target.closest('button, [role="menu"], .react-flow__minimap')) {
+          stageRef.current?.focus({ preventScroll: true })
+        }
+      }}
+      onPointerMoveCapture={event => {
+        const gesture = selectionGestureRef.current
+        if (!gesture || gesture.pointerId !== event.pointerId || !stageRef.current) return
+        event.preventDefault()
+        event.stopPropagation()
+        if (!gesture.moved && Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) < 3) return
+        gesture.moved = true
+        const left = Math.min(gesture.x, event.clientX), top = Math.min(gesture.y, event.clientY)
+        const right = Math.max(gesture.x, event.clientX), bottom = Math.max(gesture.y, event.clientY)
+        const bounds = stageRef.current.getBoundingClientRect()
+        setSelectionBox({ x: left - bounds.left, y: top - bounds.top, width: right - left, height: bottom - top })
+        const selected = new Set(gesture.previous)
+        for (const node of stageRef.current.querySelectorAll<HTMLElement>('.react-flow__node')) {
+          const box = node.getBoundingClientRect()
+          if (node.dataset.id && box.left < right && box.right > left && box.top < bottom && box.bottom > top) selected.add(node.dataset.id)
+        }
+        onSelectedNodeIdsChange(selected)
+      }}
+      onPointerUpCapture={event => {
+        const gesture = selectionGestureRef.current
+        if (!gesture || gesture.pointerId !== event.pointerId) return
+        event.preventDefault()
+        event.stopPropagation()
+        if (!gesture.moved && gesture.nodeId) {
+          const selected = new Set(gesture.previous)
+          if (selected.has(gesture.nodeId)) selected.delete(gesture.nodeId)
+          else selected.add(gesture.nodeId)
+          onSelectedNodeIdsChange(selected)
+        }
+        stageRef.current?.releasePointerCapture(event.pointerId)
+        selectionGestureRef.current = null
+        setSelectionBox(null)
+      }}
+      onPointerCancel={event => {
+        const gesture = selectionGestureRef.current
+        if (gesture && gesture.pointerId === event.pointerId) {
+          onSelectedNodeIdsChange(gesture.previous)
+          selectionGestureRef.current = null
+          setSelectionBox(null)
+        }
+      }}
+      onPointerMove={event => {
+        if (event.target instanceof Element && event.target.closest('.react-flow') && !event.target.closest('.react-flow__panel')) {
+          pastePositionRef.current = instance?.screenToFlowPosition({ x: event.clientX, y: event.clientY }) ?? null
+        }
+      }}
+      onMouseDownCapture={event => {
+        if (handMode && event.button === 0 && event.target instanceof Element && event.target.closest('.react-flow__node')) {
+          // Keep Hand navigation from focusing editors while still letting the
+          // pan handler receive this mouse event.
+          event.preventDefault()
+          stageRef.current?.focus({ preventScroll: true })
+        }
+      }}
+      onClickCapture={event => {
+        if (handMode && event.target instanceof Element && event.target.closest('.react-flow__node')) {
+          event.preventDefault()
+          event.stopPropagation()
+        }
+      }}
+      onWheelCapture={event => {
+        if (scrollableCanvasField(event.target)) event.stopPropagation()
+      }}
+      onKeyDown={event => {
+        if (event.isDefaultPrevented() || event.nativeEvent.isComposing || isCanvasTextInput(event.target)
+          || (event.target instanceof Element && event.target.closest('[role="menu"]'))) return
+        const key = event.key.toLowerCase()
+        if (!event.ctrlKey && !event.metaKey && !event.altKey && (key === 'v' || key === 'h')) {
+          event.preventDefault()
+          onInteractionModeChange(key === 'v' ? 'select' : 'hand')
+        }
+        if (!(event.ctrlKey || event.metaKey) || event.altKey || event.repeat) return
+        try {
+          if (key === 'b' && selectedNodeIds.size > 0) {
+            event.preventDefault()
+            director.toggleNodesFrozen([...selectedNodeIds])
+          } else if (key === 'c' && selectedNodeIds.size > 0) {
+            event.preventDefault()
+            director.copyNodes([...selectedNodeIds])
+            setCanvasNotice(`Copied ${selectedNodeIds.size} node${selectedNodeIds.size === 1 ? '' : 's'}`)
+          } else if (key === 'v' && director.canPasteNodes()) {
+            event.preventDefault()
+            pasteNodes()
+          }
+        } catch (error) { setCanvasNotice(error instanceof Error ? error.message : String(error)) }
+      }}
       onDoubleClick={event => {
         const target = event.target
-        if (event.button !== 0 || !(target instanceof Element)) return
+        if (handMode || selectionModifierPressed || event.button !== 0 || !(target instanceof Element)) return
         if (target.closest('.react-flow__pane') === null) return
         openNodeMenu(event.clientX, event.clientY)
       }}
@@ -2250,6 +2442,14 @@ function CanvasStage({
         const position = instance?.screenToFlowPosition({ x: event.clientX, y: event.clientY })
         void addFile(file, position)
       }}
+      onContextMenuCapture={event => {
+        // macOS Ctrl-click opens a native menu, sometimes targeting this section
+        // because it captured the selection pointer. Stop it before child menus.
+        if (event.ctrlKey || event.metaKey || selectionGestureRef.current !== null) {
+          event.preventDefault()
+          event.stopPropagation()
+        }
+      }}
       onContextMenu={event => {
         if (nodeMenu?.connection !== undefined) {
           event.preventDefault()
@@ -2257,6 +2457,16 @@ function CanvasStage({
           return
         }
         if (event.target instanceof Element && event.target.closest('.react-flow__pane') !== null) {
+          if (event.target.closest('.react-flow__node, .react-flow__edge, .react-flow__panel')) return
+          event.preventDefault()
+          if (!stageRef.current || !instance) return
+          const bounds = stageRef.current.getBoundingClientRect()
+          setCanvasContextMenu({
+            screen: { x: Math.max(8, Math.min(event.clientX - bounds.left, bounds.width - 248)),
+              y: Math.max(8, Math.min(event.clientY - bounds.top, bounds.height - 148)) },
+            flow: instance.screenToFlowPosition({ x: event.clientX, y: event.clientY }),
+          })
+          setNodeMenu(null)
           setNodeContextMenu(null)
           setParameterInputPicker(null)
         }
@@ -2264,11 +2474,16 @@ function CanvasStage({
     >
       <DirectorRuntimeProvider value={runtime}>
         <ReactFlow<DirectorNode, DirectorEdge>
-          key={project.id}
+          key={`${project.id}:${snapshot.canvasResetVersion}`}
           nodes={project.graph.nodes.map(node => ({
             ...node,
             measured: measuredNodeSizes[node.id] ?? node.measured,
             selected: selectedNodeIds.has(node.id),
+            draggable: !handMode && !selectionModifierPressed,
+            selectable: !handMode,
+            connectable: !handMode && !selectionModifierPressed,
+            focusable: !handMode,
+            style: { ...node.style, pointerEvents: 'all' },
           }))}
           edges={project.graph.edges.map(edge => ({ ...edge, selected: edge.id === selectedEdgeId }))}
           nodeTypes={nodeTypes}
@@ -2287,9 +2502,10 @@ function CanvasStage({
           onNodeDragStop={() => director.endHistoryTransaction()}
           onSelectionDragStart={() => director.beginHistoryTransaction()}
           onSelectionDragStop={() => director.endHistoryTransaction()}
-          onEdgeClick={(_event, edge) => setSelectedEdgeId(edge.id)}
+          onEdgeClick={(_event, edge) => { if (!handMode) setSelectedEdgeId(edge.id) }}
           onNodeDoubleClick={event => event.stopPropagation()}
           onPaneClick={event => {
+            setCanvasContextMenu(null)
             setSelectedEdgeId(null)
             setNodeContextMenu(null)
             setParameterInputPicker(null)
@@ -2297,6 +2513,7 @@ function CanvasStage({
             setNodeMenu(null)
           }}
           onMoveStart={() => {
+            setCanvasContextMenu(null)
             setNodeContextMenu(null)
             setParameterInputPicker(null)
           }}
@@ -2307,8 +2524,16 @@ function CanvasStage({
           fitView={project.graph.nodes.length > 0 && project.graph.viewport.zoom === 1 && project.graph.viewport.x === 0}
           fitViewOptions={{ padding: 0.25, maxZoom: 1 }}
           deleteKeyCode={['Backspace', 'Delete']}
-          selectionOnDrag={interactionMode === 'select'}
-          panOnDrag={interactionMode === 'pan'}
+          selectionOnDrag={false}
+          selectionKeyCode={null}
+          multiSelectionKeyCode={null}
+          elementsSelectable={!handMode}
+          nodesDraggable={!handMode && !selectionModifierPressed}
+          nodesConnectable={!handMode && !selectionModifierPressed}
+          nodesFocusable={!handMode}
+          panOnDrag={[0, 1]}
+          noPanClassName={handMode ? 'vd-hand-nopan' : 'nopan'}
+          noWheelClassName="vd-native-scroll"
           panActivationKeyCode="Space"
           zoomOnScroll
           panOnScroll={false}
@@ -2317,99 +2542,102 @@ function CanvasStage({
           proOptions={{ hideAttribution: false }}
         >
           <Background variant={BackgroundVariant.Dots} gap={24} size={1.2} color="rgba(148,163,184,.18)" />
-          <Controls
-            showZoom={false}
-            showFitView={false}
-            showInteractive={false}
-            position="bottom-right"
-            orientation="horizontal"
-            aria-label="画布控制"
-          >
-            <ControlButton
-              className={`vd-interaction-control ${interactionMode === 'select' ? 'is-active' : ''}`}
-              aria-label="选择节点"
-              aria-pressed={interactionMode === 'select'}
-              title="选择：左键拖拽框选节点；按住空格可临时移动画布"
-              onClick={() => onInteractionModeChange('select')}
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="M5.7 3.8 18.6 12c.8.5.5 1.7-.4 1.8l-5 .7-2.6 4.4c-.5.8-1.7.5-1.8-.4L4.2 5c-.3-.9.7-1.7 1.5-1.2Z" />
-              </svg>
-            </ControlButton>
-            <ControlButton
-              className={`vd-interaction-control ${interactionMode === 'pan' ? 'is-active' : ''}`}
-              aria-label="移动画布"
-              aria-pressed={interactionMode === 'pan'}
-              title="移动：左键拖拽移动画布"
-              onClick={() => onInteractionModeChange('pan')}
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="M8.5 11V6.5a1.5 1.5 0 0 1 3 0V10 5.5a1.5 1.5 0 0 1 3 0V10 6.5a1.5 1.5 0 0 1 3 0v4-2a1.5 1.5 0 0 1 3 0v5.3c0 4-2.7 7.2-6.8 7.2h-1.4c-2.2 0-4.2-1.1-5.5-2.8l-3.1-4.1a1.6 1.6 0 0 1 .2-2.2 1.6 1.6 0 0 1 2.2.1l2.4 2.5V11Z" />
-              </svg>
-            </ControlButton>
-            <span className="vd-control-half-gap" aria-hidden="true" />
-            <ControlButton
-              aria-label="Zoom In"
-              title="放大"
-              disabled={instance === null}
-              onClick={() => { void instance?.zoomIn({ duration: 180 }) }}
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-              </svg>
-            </ControlButton>
-            <ControlButton
-              aria-label="Zoom Out"
-              title="缩小"
-              disabled={instance === null}
-              onClick={() => { void instance?.zoomOut({ duration: 180 }) }}
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="M5 12h14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-              </svg>
-            </ControlButton>
-            <ControlButton
-              aria-label="Fit View"
-              title="适配视图"
-              disabled={instance === null}
-              onClick={() => { void instance?.fitView({ padding: 0.25, maxZoom: 1, duration: 220 }) }}
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="M9 4H5a1 1 0 0 0-1 1v4m11-5h4a1 1 0 0 1 1 1v4M9 20H5a1 1 0 0 1-1-1v-4m11 5h4a1 1 0 0 0 1-1v-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </ControlButton>
-            <ControlButton
-              className={`vd-interaction-control ${miniMapVisible ? 'is-active' : ''}`}
-              aria-label={miniMapVisible ? '隐藏 Mini Map' : '显示 Mini Map'}
-              aria-pressed={miniMapVisible}
-              title={miniMapVisible ? '隐藏 Mini Map' : '显示 Mini Map'}
-              onClick={() => setMiniMapVisible(visible => !visible)}
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="m3 6 5-2 8 3 5-2v13l-5 2-8-3-5 2V6Zm5-2v13m8-10v13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </ControlButton>
-          </Controls>
-          {miniMapVisible ? (
-            <MiniMap
+          {controlsLayer !== null ? createPortal(<>
+            <Controls
+              showZoom={false}
+              showFitView={false}
+              showInteractive={false}
               position="bottom-right"
-              pannable
-              zoomable
-              nodeColor={node => kindColor((node as DirectorNode).data.kind)}
-              nodeStrokeWidth={6}
-              nodeStrokeColor={node => {
-                const data = (node as DirectorNode).data
-                return data.status === 'failed' || (data.error !== undefined && data.error !== '') ? '#dc2626' : 'transparent'
-              }}
-            />
-          ) : null}
+              orientation="horizontal"
+              aria-label="画布控制"
+            >
+              <CanvasModeControl mode={interactionMode} onChange={onInteractionModeChange} />
+              <span className="vd-control-half-gap" aria-hidden="true" />
+              <ControlButton
+                aria-label="Zoom In"
+                title="放大"
+                disabled={instance === null}
+                onClick={() => { void instance?.zoomIn({ duration: 180 }) }}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                </svg>
+              </ControlButton>
+              <ControlButton
+                aria-label="Zoom Out"
+                title="缩小"
+                disabled={instance === null}
+                onClick={() => { void instance?.zoomOut({ duration: 180 }) }}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M5 12h14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                </svg>
+              </ControlButton>
+              <ControlButton
+                aria-label="Fit View"
+                title="适配视图"
+                disabled={instance === null}
+                onClick={() => { void instance?.fitView({ padding: 0.25, maxZoom: 1, duration: 220 }) }}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M9 4H5a1 1 0 0 0-1 1v4m11-5h4a1 1 0 0 1 1 1v4M9 20H5a1 1 0 0 1-1-1v-4m11 5h4a1 1 0 0 0 1-1v-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </ControlButton>
+              <ControlButton
+                className={`vd-interaction-control ${miniMapVisible ? 'is-active' : ''}`}
+                aria-label={miniMapVisible ? '隐藏 Mini Map' : '显示 Mini Map'}
+                aria-pressed={miniMapVisible}
+                title={miniMapVisible ? '隐藏 Mini Map' : '显示 Mini Map'}
+                onClick={() => setMiniMapVisible(visible => !visible)}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="m3 6 5-2 8 3 5-2v13l-5 2-8-3-5 2V6Zm5-2v13m8-10v13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </ControlButton>
+            </Controls>
+            {miniMapVisible ? (
+              <MiniMap
+                position="bottom-right"
+                style={{ width: 180, height: 110 }}
+                pannable
+                zoomable
+                nodeColor={node => kindColor((node as DirectorNode).data.kind)}
+                nodeStrokeWidth={6}
+                nodeStrokeColor={node => {
+                  const data = (node as DirectorNode).data
+                  return data.status === 'failed' || (data.error !== undefined && data.error !== '') ? '#dc2626' : 'transparent'
+                }}
+              />
+            ) : null}
+          </>, controlsLayer) : null}
         </ReactFlow>
       </DirectorRuntimeProvider>
+      <div ref={setControlsLayer} className="vd-canvas-controls-layer react-flow dark" />
       <div className="vd-canvas-label">
         <span>INFINITE CANVAS</span>
         <small>拖放媒体 · 连线构建工作流 · Delete 删除</small>
       </div>
       {uploading ? <div className="vd-uploading">正在写入不可变素材…</div> : null}
+      {selectionBox ? <div className="vd-canvas-selection" style={{ left: selectionBox.x, top: selectionBox.y, width: selectionBox.width, height: selectionBox.height }} /> : null}
+      {canvasNotice ? <div className="vd-canvas-notice" role="status">{canvasNotice}</div> : null}
+      {canvasContextMenu ? <CanvasContextMenu position={canvasContextMenu.screen}
+        canPaste={director.canPasteNodes()} resettingVram={resettingVram}
+        onMap={() => {
+          if (instance) {
+            const point = instance.flowToScreenPosition(canvasContextMenu.flow)
+            openNodeMenu(point.x, point.y)
+          }
+        }}
+        onResetVram={() => {
+          setCanvasContextMenu(null)
+          setResettingVram(true)
+          setCanvasNotice('Resetting VRAM…')
+          void director.resetVram().then(() => setCanvasNotice('VRAM reset'),
+            error => setCanvasNotice(error instanceof Error ? error.message : String(error)))
+            .finally(() => setResettingVram(false))
+        }}
+        onPaste={() => pasteNodes(canvasContextMenu.flow)}
+        onClose={() => { setCanvasContextMenu(null); stageRef.current?.focus({ preventScroll: true }) }} /> : null}
       {selectedEdge !== undefined ? (
         <EdgeInspector
           edge={selectedEdge}
@@ -2456,6 +2684,12 @@ function CanvasStage({
           onFreeze={() => {
             setNodeContextMenu(null)
             try { director.setNodeFrozen(contextNode.id, contextNode.data.frozen !== true) } catch (error) { swallow(error) }
+          }}
+          onCopy={() => {
+            director.copyNodes(selectedNodeIds.has(contextNode.id) ? [...selectedNodeIds] : [contextNode.id])
+            setNodeContextMenu(null)
+            setCanvasNotice('Copied to canvas clipboard')
+            stageRef.current?.focus({ preventScroll: true })
           }}
           onDuplicate={() => {
             setNodeContextMenu(null)

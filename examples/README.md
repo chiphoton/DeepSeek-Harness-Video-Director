@@ -14,6 +14,8 @@
 
 [`all-in-one.video-director.json`](all-in-one.video-director.json) is an importable end-to-end project. It demonstrates image generation, image editing, multimodal prompt enhancement, video generation, memory hand-offs, and output previews on one canvas.
 
+The canvas pipeline is a **vd-workflow**, and its blocks are **vd-nodes**. ComfyUI-backed vd-nodes use separate **comfyui-workflows** containing **comfyui-nodes**. The file above is a vd-project export, not a ComfyUI API graph or a vd-node pack. See the [terminology guide](../docs/TERMINOLOGY.md).
+
 <p align="center">
   <img src="all-in-one.preview.png" alt="All-in-One Video-Director project preview" width="100%">
 </p>

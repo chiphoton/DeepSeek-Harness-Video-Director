@@ -149,7 +149,7 @@ function actionableCodexError(error) {
   if (error?.name === 'AbortError') return error
   const message = error instanceof Error ? error.message : String(error)
   if (/auth|login|sign[ -]?in|unauthorized|credential/iu.test(message)) {
-    return new Error('Codex Plan could not authenticate. Sign in to Codex on this machine, then retry the workflow node.')
+    return new Error('Codex Plan could not authenticate. Sign in to Codex on this machine, then retry the vd-node.')
   }
   return error instanceof Error ? error : new Error(message)
 }

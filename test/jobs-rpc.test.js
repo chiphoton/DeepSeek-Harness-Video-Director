@@ -5,10 +5,11 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import { JobManager } from '../src/jobs.js'
-import { NodeRegistry } from '../src/node-registry.js'
+import { VdNodeRegistry } from '../src/node-registry.js'
 import { ProjectStore } from '../src/project-store.js'
+import { ProviderRuntime } from '../src/providers.js'
 import { createDirectorRpc } from '../src/rpc.js'
-import { WorkflowStore } from '../src/workflow-store.js'
+import { ComfyWorkflowStore } from '../src/workflow-store.js'
 
 async function createStore(t) {
   const root = await mkdtemp(join(tmpdir(), 'dsh-video-director-jobs-'))
@@ -52,6 +53,83 @@ async function waitForPersistedStatus(store, projectId, jobId, status) {
   }
   throw new Error(`job ${jobId} was not persisted as ${status}`)
 }
+
+test('submitted vd-run snapshots persist independently of canvas saves and cannot be replaced', async t => {
+  const store = await createStore(t)
+  const project = await projectWithNode(store, 'Submitted workflow', 'submitted-session', 'original-node')
+  const rpc = createDirectorRpc({ store, providers: {}, jobs: {}, workflows: {}, registerAsset: async () => {} })
+  const run = { id: '00000000-0000-4000-8000-000000000121', projectId: project.id,
+    status: 'queued', mode: 'all', batchSize: 1, completedJobs: 0, totalJobs: 1,
+    nodeIds: ['original-node'], startedAt: project.createdAt }
+  const snapshot = { name: project.name, graph: project.graph, settings: project.settings }
+  let result = await rpc('vd-runs/save', { projectId: project.id, run, snapshot })
+  assert.equal(result.ok, true)
+  assert.equal('snapshot' in result.value.run, false)
+  await assert.rejects(store.deleteProject(project.id), error => {
+    assert.equal(error.code, 'video-director/project-busy')
+    assert.deepEqual(error.details.activeRunIds, [run.id])
+    return true
+  })
+  await store.updateProject(project.id, { graph: { ...project.graph, nodes: [] } })
+  snapshot.graph.nodes = [{ id: 'changed' }]
+  result = await rpc('vd-runs/save', { projectId: project.id, run: { ...run, status: 'completed', completedJobs: 1 }, snapshot })
+  assert.equal(result.ok, true)
+  const reopened = new ProjectStore(store.root, 1024 * 1024)
+  await reopened.init()
+  const saved = await reopened.getVdRun(project.id, run.id)
+  assert.equal(saved.status, 'completed')
+  assert.equal(saved.snapshot.graph.nodes[0].id, 'original-node')
+  assert.deepEqual((await reopened.getProject(project.id)).graph.nodes, [])
+  result = await rpc('vd-runs/list', { projectId: project.id })
+  assert.equal(result.value.runs.length, 1)
+  assert.equal('snapshot' in result.value.runs[0], false)
+  result = await rpc('vd-runs/get', { projectId: project.id, runId: '../../escape' })
+  assert.equal(result.ok, false)
+  const foreign = await store.createProject({ name: 'Other', sessionId: 'other-session' })
+  result = await rpc('vd-runs/get', { projectId: foreign.id, runId: run.id })
+  assert.equal(result.ok, false)
+})
+
+test('a provider outage persists a reconnecting job and completes it with the original prompt ID', async t => {
+  const store = await createStore(t)
+  const project = await projectWithNode(store, 'SSH recovery', 'ssh-recovery', 'render')
+  let submissions = 0
+  let historyChecks = 0
+  let release
+  const recovered = new Promise(resolve => { release = resolve })
+  let waiting
+  const offline = new Promise(resolve => { waiting = resolve })
+  const providers = new ProviderRuntime({
+    store,
+    providers: [{ id: 'comfyui', label: 'ComfyUI', kind: 'comfyui', baseUrl: 'localhost:8188' }],
+    waitImpl: async () => { waiting(); await recovered },
+    fetchImpl: async url => {
+      const path = new URL(url).pathname
+      if (path === '/prompt') { submissions += 1; return Response.json({ prompt_id: 'retained-prompt' }) }
+      if (path === '/history/retained-prompt') {
+        historyChecks += 1
+        if (historyChecks === 1) throw new TypeError('fetch failed')
+        return Response.json({ 'retained-prompt': { outputs: { save: { images: [{ filename: 'recovered.png' }] } } } })
+      }
+      if (path === '/view') return new Response('recovered image', { headers: { 'Content-Type': 'image/png' } })
+      throw new Error(`unexpected path ${path}`)
+    },
+  })
+  const manager = new JobManager(store, providers)
+  const job = await manager.start({ projectId: project.id, nodeId: 'render', operation: 'image-generation',
+    providerId: 'comfyui', workflow: {}, bindings: [], expectedOutputTypes: ['image'] })
+  await offline
+  try {
+    const persisted = (await store.getProject(project.id)).jobs.find(row => row.id === job.id)
+    assert.equal(persisted.status, 'running')
+    assert.equal(persisted.phase, 'reconnecting')
+    assert.equal(persisted.promptId, 'retained-prompt')
+  } finally { release() }
+  const completed = await waitForPersistedStatus(store, project.id, job.id, 'completed')
+  assert.equal(completed.result.promptId, 'retained-prompt')
+  assert.equal(completed.result.assets.length, 1)
+  assert.equal(submissions, 1)
+})
 
 test('JobManager recovery never resubmits ambiguous in-flight work', async (t) => {
   const store = await createStore(t)
@@ -742,9 +820,9 @@ test('Director RPC exposes ComfyUI choices only for registered workflow paramete
 test('Director RPC validates and resolves typed media ports before queueing', async (t) => {
   const store = await createStore(t)
   const project = await store.createProject({ name: 'Typed ports', sessionId: 'session-typed-ports' })
-  const workflows = new WorkflowStore(store.root)
+  const workflows = new ComfyWorkflowStore(store.root)
   await workflows.init()
-  const nodes = new NodeRegistry(workflows)
+  const nodes = new VdNodeRegistry(workflows)
   const pack = {
     protocol: 'video-director.node/v1',
     type: 'example.typed-image-edit',
@@ -909,9 +987,9 @@ test('Director RPC enforces MiniMax video mode frame counts and resolves ordered
     mimeType: 'image/png',
     dataBase64: Buffer.from('last-frame').toString('base64'),
   })
-  const workflows = new WorkflowStore(store.root)
+  const workflows = new ComfyWorkflowStore(store.root)
   await workflows.init()
-  const nodes = new NodeRegistry(workflows)
+  const nodes = new VdNodeRegistry(workflows)
   const queued = []
   const rpc = createDirectorRpc({
     store,
@@ -983,9 +1061,9 @@ test('Director RPC routes mixed reference media by type and enforces the R2V slo
   const audioOne = await put('audio', 'audio-one.wav', 'audio-one')
   const audioTwo = await put('audio', 'audio-two.wav', 'audio-two')
   const videoOne = await put('video', 'video-one.mp4', 'video-one')
-  const workflows = new WorkflowStore(store.root)
+  const workflows = new ComfyWorkflowStore(store.root)
   await workflows.init()
-  const nodes = new NodeRegistry(workflows)
+  const nodes = new VdNodeRegistry(workflows)
   const queued = []
   const rpc = createDirectorRpc({
     store,
@@ -1036,9 +1114,9 @@ test('Director RPC routes mixed reference media by type and enforces the R2V slo
 test('Director RPC treats pinned text fields as single typed input ports with literal fallback', async (t) => {
   const store = await createStore(t)
   const project = await store.createProject({ name: 'Field input ports', sessionId: 'session-field-input-ports' })
-  const workflows = new WorkflowStore(store.root)
+  const workflows = new ComfyWorkflowStore(store.root)
   await workflows.init()
-  const nodes = new NodeRegistry(workflows)
+  const nodes = new VdNodeRegistry(workflows)
   const definition = await nodes.install({
     protocol: 'video-director.node/v1',
     type: 'example.field-input-ports',
@@ -1187,9 +1265,9 @@ test('Director RPC treats pinned text fields as single typed input ports with li
 
 test('Director RPC derives generic workflow text ports from parameters and semantic prompt bindings', async (t) => {
   const store = await createStore(t)
-  const workflows = new WorkflowStore(store.root)
+  const workflows = new ComfyWorkflowStore(store.root)
   await workflows.init()
-  const nodes = new NodeRegistry(workflows)
+  const nodes = new VdNodeRegistry(workflows)
   const workflow = await workflows.import({
     name: 'Generic text inputs',
     kind: 'image-generation',
@@ -1243,9 +1321,9 @@ test('Director RPC accepts prompt text ports for a direct provider node without 
     mimeType: 'image/png',
     dataBase64: Buffer.from('direct-reference').toString('base64'),
   })
-  const workflows = new WorkflowStore(store.root)
+  const workflows = new ComfyWorkflowStore(store.root)
   await workflows.init()
-  const nodes = new NodeRegistry(workflows)
+  const nodes = new VdNodeRegistry(workflows)
   let queued
   const rpc = createDirectorRpc({
     store,
@@ -1278,9 +1356,9 @@ test('Director RPC queues an unsaved typed node from one immutable execution sna
   const store = await createStore(t)
   const project = await store.createProject({ name: 'Unsaved snapshot', sessionId: 'session-unsaved-snapshot' })
   const graphBefore = structuredClone(project.graph)
-  const workflows = new WorkflowStore(store.root)
+  const workflows = new ComfyWorkflowStore(store.root)
   await workflows.init()
-  const nodes = new NodeRegistry(workflows)
+  const nodes = new VdNodeRegistry(workflows)
   const definition = await nodes.install({
     protocol: 'video-director.node/v1',
     type: 'example.snapshot-image-edit',

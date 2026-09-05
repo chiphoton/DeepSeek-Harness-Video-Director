@@ -4,10 +4,10 @@ import type { DirectorController } from './controller'
 import { CloseIcon } from './icons'
 import type {
   DirectorSnapshot,
-  NodeDefinitionDescriptor,
+  VdNodeDefinitionDescriptor,
   ProviderDescriptor,
-  WorkflowDescriptor,
-  WorkflowKind,
+  ComfyWorkflowDescriptor,
+  ComfyWorkflowKind,
 } from './types'
 
 function messageOf(error: unknown): string {
@@ -179,7 +179,7 @@ function ProviderCard({
   )
 }
 
-function workflowKindLabel(kind: WorkflowKind): string {
+function workflowKindLabel(kind: ComfyWorkflowKind): string {
   return ({
     'image-generation': '图像生成',
     'image-edit': '图像编辑',
@@ -188,7 +188,7 @@ function workflowKindLabel(kind: WorkflowKind): string {
   })[kind]
 }
 
-function WorkflowRow({ workflow, director }: { workflow: WorkflowDescriptor; director: DirectorController }): ReactNode {
+function ComfyWorkflowRow({ workflow, director }: { workflow: ComfyWorkflowDescriptor; director: DirectorController }): ReactNode {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const remove = async (): Promise<void> => {
@@ -217,9 +217,9 @@ function WorkflowRow({ workflow, director }: { workflow: WorkflowDescriptor; dir
   )
 }
 
-function WorkflowSettings({ snapshot, director }: { snapshot: DirectorSnapshot; director: DirectorController }): ReactNode {
+function VdNodeLibrarySettings({ snapshot, director }: { snapshot: DirectorSnapshot; director: DirectorController }): ReactNode {
   const [name, setName] = useState('')
-  const [kind, setKind] = useState<WorkflowKind>('image-generation')
+  const [kind, setKind] = useState<ComfyWorkflowKind>('image-generation')
   const [description, setDescription] = useState('')
   const [document, setDocument] = useState<Record<string, unknown> | null>(null)
   const [filename, setFilename] = useState('')
@@ -229,7 +229,7 @@ function WorkflowSettings({ snapshot, director }: { snapshot: DirectorSnapshot; 
   const [nodeFilename, setNodeFilename] = useState('')
   const [nodeBusy, setNodeBusy] = useState(false)
   const [nodeMessage, setNodeMessage] = useState<string | null>(null)
-  const grouped = useMemo(() => snapshot.workflows.reduce<Record<string, WorkflowDescriptor[]>>((result, workflow) => {
+  const grouped = useMemo(() => snapshot.workflows.reduce<Record<string, ComfyWorkflowDescriptor[]>>((result, workflow) => {
     ;(result[workflow.kind] ??= []).push(workflow)
     return result
   }, {}), [snapshot.workflows])
@@ -241,7 +241,7 @@ function WorkflowSettings({ snapshot, director }: { snapshot: DirectorSnapshot; 
     setMessage(null)
     try {
       const value: unknown = JSON.parse(await file.text())
-      if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('Workflow JSON 必须是对象。')
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('comfyui-workflow JSON 必须是对象。')
       setDocument(value as Record<string, unknown>)
       setFilename(file.name)
       if (name.trim() === '') setName(file.name.replace(/\.json$/iu, ''))
@@ -277,7 +277,7 @@ function WorkflowSettings({ snapshot, director }: { snapshot: DirectorSnapshot; 
     setNodeMessage(null)
     try {
       const value: unknown = JSON.parse(await file.text())
-      if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('Custom Node manifest 必须是 JSON 对象。')
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('vd-node pack 必须是 JSON 对象。')
       setNodePack(value as Record<string, unknown>)
       setNodeFilename(file.name)
     } catch (error) {
@@ -321,7 +321,7 @@ function WorkflowSettings({ snapshot, director }: { snapshot: DirectorSnapshot; 
       </section>
       <section className="vd-workflow-group">
         <h3>Node Catalog · {snapshot.nodeDefinitions.length}</h3>
-        {snapshot.nodeDefinitions.map((definition: NodeDefinitionDescriptor) => (
+        {snapshot.nodeDefinitions.map((definition: VdNodeDefinitionDescriptor) => (
           <article className="vd-workflow-row" key={`${definition.type}@${definition.version}`}>
             <div className="vd-workflow-icon">{definition.behavior === 'preview' ? '◫' : definition.behavior === 'save' ? '⇩' : '◇'}</div>
             <div>
@@ -344,7 +344,7 @@ function WorkflowSettings({ snapshot, director }: { snapshot: DirectorSnapshot; 
           </label>
           <label>
             <span>用途</span>
-            <select value={kind} onChange={event => setKind(event.target.value as WorkflowKind)}>
+            <select value={kind} onChange={event => setKind(event.target.value as ComfyWorkflowKind)}>
               <option value="image-generation">图像生成</option>
               <option value="image-edit">图像编辑</option>
               <option value="video-generation">视频生成</option>
@@ -365,11 +365,11 @@ function WorkflowSettings({ snapshot, director }: { snapshot: DirectorSnapshot; 
         </button>
         {message !== null ? <div className="vd-settings-message">{message}</div> : null}
       </section>
-      {(['image-generation', 'image-edit', 'video-generation', 'audio-generation'] as WorkflowKind[]).map(group => (
+      {(['image-generation', 'image-edit', 'video-generation', 'audio-generation'] as ComfyWorkflowKind[]).map(group => (
         <section className="vd-workflow-group" key={group}>
           <h3>{workflowKindLabel(group)}</h3>
           {(grouped[group] ?? []).length === 0 ? <p className="vd-settings-empty">还没有这个用途的 workflow。</p> : null}
-          {(grouped[group] ?? []).map(workflow => <WorkflowRow key={workflow.id} workflow={workflow} director={director} />)}
+          {(grouped[group] ?? []).map(workflow => <ComfyWorkflowRow key={workflow.id} workflow={workflow} director={director} />)}
         </section>
       ))}
     </div>
@@ -407,7 +407,7 @@ export function SettingsDrawer({
               <ProviderCard key={provider.id} provider={provider} snapshot={snapshot} director={director} />
             ))}
           </>
-        ) : <WorkflowSettings snapshot={snapshot} director={director} />}
+        ) : <VdNodeLibrarySettings snapshot={snapshot} director={director} />}
       </div>
     </aside>
   )

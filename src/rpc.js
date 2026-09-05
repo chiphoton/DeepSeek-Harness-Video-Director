@@ -1,5 +1,9 @@
 import { DirectorInputError, finiteNumber, jsonValue, record, string, uuid } from './validation.js'
 
+// Boundary vocabulary: workflows/* manages registered comfyui-workflows;
+// nodes/* manages vd-node definitions; projects/* owns the canvas vd-workflow.
+// jobs/start.nodeId identifies a vd-node, while binding.nodeId/target.nodeId
+// identifies a comfyui-node. Keep these existing RPC keys and endpoints stable.
 const RUN_SNAPSHOT_VERSION = 1
 const MAX_RUN_SNAPSHOT_BYTES = 8 * 1024 * 1024
 const FIELD_INPUT_PREFIX = 'field:'
@@ -67,7 +71,7 @@ function withPublicModels(result, workflows) {
   return { ...rest, ...publicModelCatalog(result, workflows) }
 }
 
-function workflowReferences(projectValue) {
+function comfyWorkflowReferences(projectValue) {
   const nodes = projectValue?.graph?.nodes
   if (!Array.isArray(nodes)) return []
   const references = []
@@ -82,7 +86,7 @@ function workflowReferences(projectValue) {
   return [...new Set(references)]
 }
 
-function nodeReferences(projectValue) {
+function vdNodeDefinitionReferences(projectValue) {
   const graphNodes = projectValue?.graph?.nodes
   if (!Array.isArray(graphNodes)) return []
   const references = []
@@ -504,6 +508,14 @@ export function createDirectorRpc(options) {
           return success({ projects: await store.listProjects() })
         case 'projects/get':
           return success({ project: await store.getProject(uuid(input.projectId, 'projectId')) })
+        case 'vd-runs/save':
+          return success({ run: await withWorkflowReferenceLock(() => store.saveVdRun(
+            uuid(input.projectId, 'projectId'), input.run, input.snapshot,
+          )) })
+        case 'vd-runs/list':
+          return success({ runs: await store.listVdRuns(uuid(input.projectId, 'projectId')) })
+        case 'vd-runs/get':
+          return success({ run: await store.getVdRun(uuid(input.projectId, 'projectId'), uuid(input.runId, 'runId')) })
         case 'projects/create': {
           const project = await store.createProject({
             name: string(input.name, 'name', { min: 1, max: 120 }),
@@ -523,8 +535,8 @@ export function createDirectorRpc(options) {
             throw new DirectorInputError('force must be a boolean')
           }
           const project = await withWorkflowReferenceLock(async () => {
-            for (const workflowId of workflowReferences(input.project)) workflows.get(workflowId)
-            for (const reference of nodeReferences(input.project)) nodes.get(reference.type, reference.version)
+            for (const workflowId of comfyWorkflowReferences(input.project)) workflows.get(workflowId)
+            for (const reference of vdNodeDefinitionReferences(input.project)) nodes.get(reference.type, reference.version)
             return input.force === true
               ? store.forceSaveProject(projectId, input.project)
               : store.saveProject(projectId, input.project, expectedRevision)

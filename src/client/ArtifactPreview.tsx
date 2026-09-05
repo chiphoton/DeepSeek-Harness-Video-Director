@@ -2,7 +2,7 @@ import { type ReactNode, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 import { parseImageProperties, type ImageProperties } from './image-properties'
-import type { AssetRef, WorkflowResult } from './types'
+import type { AssetRef, VdNodeResult } from './types'
 
 export interface PreviewArtifact {
   id: string
@@ -25,7 +25,7 @@ export function previewArtifactFromText(text: string, name = 'Text output'): Pre
   return { id: `text:${name}:${text.length}`, kind: 'text', name, text }
 }
 
-export function previewArtifactsFromResult(result: WorkflowResult | undefined): PreviewArtifact[] {
+export function previewArtifactsFromResult(result: VdNodeResult | undefined): PreviewArtifact[] {
   if (result === undefined) return []
   if (result.kind === 'assets') return result.assets.map(previewArtifactFromAsset)
   if (result.kind === 'text') return [previewArtifactFromText(result.text)]

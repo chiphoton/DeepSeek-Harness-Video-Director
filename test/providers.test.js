@@ -93,11 +93,13 @@ function createUnifiedComfyRuntime({
   },
   baseUrl = '127.0.0.1:8188',
   mcpBaseUrl = baseUrl,
+  waitImpl,
 }) {
   return new ProviderRuntime({
     store,
     registerAsset,
     fetchImpl,
+    waitImpl,
     ...(execute === undefined ? {} : { tools: { execute } }),
     providers: [{
       id: 'comfyui',
@@ -110,6 +112,149 @@ function createUnifiedComfyRuntime({
     minimaxH3LicenseAccepted: false,
   })
 }
+
+test('ComfyUI reconnects to the submitted prompt and retries interrupted output downloads', async () => {
+  let submissions = 0
+  let histories = 0
+  let downloads = 0
+  const phases = []
+  const runtime = createUnifiedComfyRuntime({
+    waitImpl: async () => {},
+    store: { async putAsset(input) { return { id: 'recovered-asset', ...input } } },
+    fetchImpl: async url => {
+      const path = new URL(url).pathname
+      if (path === '/prompt') { submissions += 1; return Response.json({ prompt_id: 'recover-me' }) }
+      if (path === '/history/recover-me') {
+        histories += 1
+        if (histories === 1) throw new TypeError('fetch failed')
+        if (histories === 2) return new Response('', { status: 503 })
+        return Response.json({ 'recover-me': { outputs: { save: { images: [{ filename: 'done.png' }] } } } })
+      }
+      if (path === '/view') {
+        downloads += 1
+        if (downloads === 1) return new Response(new ReadableStream({ start(c) { c.error(new TypeError('terminated')) } }))
+        return new Response('finished', { headers: { 'Content-Type': 'image/png' } })
+      }
+      throw new Error(`unexpected path ${path}`)
+    },
+  })
+  const result = await runtime.run(comfyRequest(), undefined, update => { phases.push(update.phase) })
+  assert.equal(result.promptId, 'recover-me')
+  assert.equal(result.assets.length, 1)
+  assert.equal(submissions, 1)
+  assert.equal(histories, 3)
+  assert.equal(downloads, 2)
+  assert.ok(phases.includes('reconnecting'))
+})
+
+test('Ollama retries a disconnected generation and returns the recovered text', async () => {
+  let calls = 0
+  const runtime = new ProviderRuntime({
+    store: {}, waitImpl: async () => {},
+    providers: [{ id: 'ollama', label: 'Ollama', kind: 'ollama', baseUrl: 'localhost:11434', model: 'test' }],
+    fetchImpl: async () => {
+      calls += 1
+      if (calls === 1) throw new TypeError('fetch failed')
+      return Response.json({ message: { content: 'Recovered text' } })
+    },
+  })
+  const result = await runtime.run({ providerId: 'ollama', operation: 'prompt-enhancer', prompt: 'test' })
+  assert.equal(result.text, 'Recovered text')
+  assert.equal(calls, 2)
+})
+
+test('ComfyUI recovers a lost submission response by its unique client identity without enqueueing twice', async t => {
+  for (const location of ['queue', 'history']) await t.test(location, async () => {
+    let clientId
+    let submissions = 0
+    const runtime = createUnifiedComfyRuntime({
+      waitImpl: async () => {},
+      store: { async putAsset(input) { return { id: 'output', ...input } } },
+      fetchImpl: async (url, init) => {
+        const path = new URL(url).pathname
+        const prompt = [0, 'lost-response', {}, { client_id: clientId }]
+        const history = { prompt, outputs: { save: { images: [{ filename: 'done.png' }] } } }
+        if (path === '/prompt') {
+          submissions += 1
+          clientId = JSON.parse(init.body).client_id
+          throw new TypeError('fetch failed', { cause: { code: 'ECONNRESET' } })
+        }
+        if (path === '/queue') return Response.json({ queue_pending: location === 'queue' ? [prompt] : [], queue_running: [] })
+        if (path === '/history') return Response.json({ 'lost-response': history })
+        if (path === '/history/lost-response') return Response.json({ 'lost-response': history })
+        if (path === '/view') return new Response('done', { headers: { 'Content-Type': 'image/png' } })
+        throw new Error(`unexpected path ${path}`)
+      },
+    })
+    assert.equal((await runtime.run(comfyRequest())).promptId, 'lost-response')
+    assert.equal(submissions, 1)
+  })
+})
+
+test('ComfyUI retries a refused connection before submission and reports waiting in the remote queue', async () => {
+  let submissions = 0
+  let checks = 0
+  const phases = []
+  const runtime = createUnifiedComfyRuntime({
+    waitImpl: async () => {},
+    store: { async putAsset(input) { return { id: 'queued-output', ...input } } },
+    fetchImpl: async url => {
+      const path = new URL(url).pathname
+      if (path === '/prompt') {
+        submissions += 1
+        if (submissions === 1) throw new TypeError('fetch failed', { cause: { code: 'ECONNREFUSED' } })
+        return Response.json({ prompt_id: 'remote-queued' })
+      }
+      if (path === '/queue') return Response.json({ queue_pending: [[1, 'remote-queued']] })
+      if (path === '/history/remote-queued') {
+        checks += 1
+        return Response.json(checks === 1 ? {} : { 'remote-queued': { outputs: { save: { images: [{ filename: 'done.png' }] } } } })
+      }
+      if (path === '/view') return new Response('done', { headers: { 'Content-Type': 'image/png' } })
+      throw new Error(`unexpected path ${path}`)
+    },
+  })
+  assert.equal((await runtime.run(comfyRequest(), undefined, update => phases.push(update.phase))).assets.length, 1)
+  assert.equal(submissions, 2)
+  assert.equal(checks, 2)
+  assert.ok(phases.includes('reconnecting'))
+  assert.equal(phases.at(-1), 'queued')
+})
+
+test('provider reconnect backoff stays bounded and cancellation stops retries', async () => {
+  const controller = new AbortController()
+  const delays = []
+  let calls = 0
+  const runtime = new ProviderRuntime({
+    store: {}, providers: [{ id: 'ollama', label: 'Ollama', kind: 'ollama', baseUrl: 'localhost:11434' }],
+    fetchImpl: async () => { calls += 1; throw new TypeError('fetch failed') },
+    waitImpl: async delay => {
+      delays.push(delay)
+      if (delays.length === 8) controller.abort(new Error('user cancelled'))
+    },
+  })
+  await assert.rejects(runtime.run({ providerId: 'ollama', operation: 'text-generation', prompt: 'test' }, controller.signal), /user cancelled/u)
+  assert.equal(calls, 8)
+  assert.deepEqual(delays, [1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000])
+})
+
+test('ComfyUI execution failures and permanent provider errors are not retried', async () => {
+  let waits = 0
+  const runtime = createUnifiedComfyRuntime({
+    waitImpl: async () => { waits += 1 },
+    fetchImpl: async url => {
+      if (url.endsWith('/prompt')) return Response.json({ prompt_id: 'failed-render' })
+      return Response.json({ 'failed-render': { outputs: {}, status: { completed: false, status_str: 'error',
+        messages: [['execution_error', { exception_message: 'Out of VRAM' }]] } } })
+    },
+  })
+  await assert.rejects(runtime.run(comfyRequest()), /Out of VRAM/u)
+  const ollama = new ProviderRuntime({ store: {}, waitImpl: async () => { waits += 1 },
+    providers: [{ id: 'ollama', label: 'Ollama', kind: 'ollama', baseUrl: 'localhost:11434' }],
+    fetchImpl: async () => new Response('model missing', { status: 404 }) })
+  await assert.rejects(ollama.run({ providerId: 'ollama', operation: 'text-generation', prompt: 'test' }), /404/u)
+  assert.equal(waits, 0)
+})
 
 test('provider catalog exposes editable connection facts but never returns API keys', () => {
   const runtime = createOpenAiImageRuntime({
@@ -424,6 +569,7 @@ test('ComfyUI workflow polling has no overall provider deadline', async () => {
     },
     fetchImpl: async (url) => {
       if (url.endsWith('/prompt')) return Response.json({ prompt_id: 'prompt-slow' })
+      if (url.endsWith('/queue')) return Response.json({ queue_pending: [[0, 'prompt-slow']], queue_running: [] })
       if (url.endsWith('/history/prompt-slow')) {
         historyChecks += 1
         return historyChecks === 1

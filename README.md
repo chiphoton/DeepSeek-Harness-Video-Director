@@ -2,7 +2,8 @@
   <a href="README_zh.md">简体中文</a> ·
   <a href="docs/INSTALL.md">Agent installation guide</a> ·
   <a href="docs/DEVELOP.md">Developer guide</a> ·
-  <a href="custom_nodes/README.md">Custom Nodes</a> ·
+  <a href="docs/TERMINOLOGY.md">Terminology</a> ·
+  <a href="custom_nodes/README.md">vd-node definitions</a> ·
   <a href="examples/README.md">Example Gallery</a>
 </p>
 
@@ -25,6 +26,8 @@ DeepSeek-Harness Video-Director is a video-production plugin built for [DeepSeek
 
 Beginners can start with the built-in workflows instead of assembling every provider call by hand. Native Qwen3.8-27B and MiniMax-H3 paths make a **fully local, uncensored, deployment-controlled** multimedia pipeline possible when the selected models and runtime support it.
 
+We call canvas elements **vd-nodes** and the overall canvas graph a **vd-workflow**. A ComfyUI-backed vd-node executes a **comfyui-workflow** containing **comfyui-nodes**. See the [terminology guide](docs/TERMINOLOGY.md) for definitions, packages, bindings, and execution IDs.
+
 ## ✨ Why Video-Director
 
 | Highlight | What you get |
@@ -34,7 +37,7 @@ Beginners can start with the built-in workflows instead of assembling every prov
 | 🏠 **Local-first generation** | Use Ollama and ComfyUI on your own machine, including Qwen3.8-27B and MiniMax-H3 pipelines. |
 | 🔌 **Multiple providers** | Mix Ollama, OpenAI-compatible endpoints, Codex Plan, and one logical ComfyUI backend in the same project. |
 | 🎞️ **Project-aware direction** | Every Video Project keeps its own canvas, chat session, jobs, immutable assets, and provider choices. |
-| 🛠️ **Extensible by design** | Import reviewed ComfyUI API workflows or package them as declarative Video Director Custom Nodes. |
+| 🛠️ **Extensible by design** | Import reviewed API-format comfyui-workflows or package them as declarative vd-node packs. |
 
 <p align="center">
   <img src="docs/ui-preview.png" alt="DeepSeek-Harness Video-Director node canvas" width="100%">
@@ -44,7 +47,7 @@ Beginners can start with the built-in workflows instead of assembling every prov
 
 ### 1. Install into DSH and run
 
-Requirements: Git, Node.js `^22.19.0` or `>=24`, pnpm `11.7.0`, and an installed `dsh` CLI. For a single-machine, fully local deployment, **NVIDIA DGX Spark is the recommended environment**, but it is not required; the exact hardware requirement depends on the workflow profile and model precision you select. Run the following from the directory where you want to keep the plugin:
+Requirements: Git, Node.js `^22.19.0` or `>=24`, pnpm `11.7.0`, and an installed `dsh` CLI. For a single-machine, fully local deployment, **NVIDIA DGX Spark is the recommended environment**, but it is not required; the exact hardware requirement depends on the installation preset and model precision you select. Run the following from the directory where you want to keep the plugin:
 
 ```bash
 git clone --branch uncensored --single-branch https://github.com/chiphoton/DeepSeek-Harness-Video-Director.git
@@ -75,64 +78,76 @@ pnpm dsh web
 
 ### 2. Connect a generator
 
-If Ollama or ComfyUI is not ready yet, give the [agent installation guide](docs/INSTALL.md) to an agent. It inventories the exact models, ComfyUI workflows, and Custom Nodes used by this repository, installs only the selected workflow profile, and verifies the result. The default path installs both services locally; a separate path keeps cloud services bound to their remote loopback interfaces and reaches them through SSH local port forwarding.
+If Ollama or ComfyUI is not ready yet, give the [agent installation guide](docs/INSTALL.md) to an agent. It inventories the exact models, comfyui-workflows, and ComfyUI custom-node packages used by this repository, installs only the selected installation preset, and verifies the result. The default path installs both services locally; a separate path keeps cloud services bound to their remote loopback interfaces and reaches them through SSH local port forwarding.
 
 Open **Settings → Connections** in Video-Director:
 
 - **Ollama:** defaults to `127.0.0.1:11434`; install a model such as Qwen3.8-27B on the Ollama host, then select it in Video-Director.
-- **ComfyUI:** defaults to `127.0.0.1:8188`; install each workflow's required models and Custom Nodes on the ComfyUI host.
+- **ComfyUI:** defaults to `127.0.0.1:8188`; install each comfyui-workflow's required models and ComfyUI custom-node packages on the ComfyUI server.
 - **OpenAI-compatible:** set the Base URL, model ids, and API key for your provider.
 - **Codex Plan:** uses the machine's existing Codex sign-in for prompt and image workflows.
 
-You only need one working provider to begin. Video-Director does not silently install models, ComfyUI nodes, or external services.
+You only need one working provider to begin. Video-Director does not silently install models, ComfyUI custom-node packages, or external services.
 
-### 3. Build your first flow
+### 3. Build your first vd-workflow
 
-Double-click empty canvas space, add nodes, and connect compatible handles:
+Double-click empty canvas space, add vd-nodes, and connect compatible handles:
 
 ```text
 Text → Prompt Enhancer → H3 Video → Preview → Save Output
 ```
 
-Set the provider and workflow on each executable node, enter a prompt, then click **Run**. Use **Save** in the top bar to persist canvas edits; generation can run from the current unsaved canvas snapshot.
+Set the provider on each executable vd-node, choose its model or registered comfyui-workflow as applicable, enter a generation prompt, then click **Run**. Use **Save** in the top bar to persist canvas edits; generation can run from the current unsaved canvas snapshot.
+
+The project menu’s **放弃更改** (Discard changes), above Delete Project, asks for confirmation and restores the workflow to its state when the project was opened. It restores the name, nodes, connections, settings, and canvas view, clears undo/redo, and retains job history and stored assets. Saves during that opening do not replace the restore point; use **Save** to persist a restored workflow if it differs from the last save. Wait for queued/running jobs to finish or cancel them before discarding.
+
+Click **Run** again to queue another snapshot. Vd-workflows execute in submission order, with dependency stages and batches kept together. The **Jobs** window shows queued runs and lets you cancel, **Open Workflow**, or **Export Workflow**. Opening a submitted snapshot is undoable; exporting produces an importable project archive with its referenced assets. Keep the current project open while its queue executes.
+
+If an SSH tunnel drops, active ComfyUI and Ollama work waits and retries automatically with backoff. ComfyUI retrieves completed outputs using the original prompt ID; Ollama retries the interrupted text request. Permanent configuration or execution errors still fail visibly.
+
+**Cancel** also stops the submitted ComfyUI prompt, including a prompt waiting in ComfyUI's queue. The job stays `cancelling` until that prompt stops; `cancelling-reconnecting` means cancellation is waiting for the tunnel to recover. Other users' jobs are unaffected. Running-prompt cancellation requires ComfyUI's per-job cancellation API; older servers report an explicit failure instead of interrupting an unrelated job. Ollama cancellation closes the active inference request and stops retries; it leaves the model loaded for later use.
 
 
-## 🧰 Nodes and how to use them
+## 🧰 vd-nodes and how to use them
 
-| Group | Nodes | Use |
+| Group | vd-nodes | Use |
 |---|---|---|
 | **Inputs** | Text, Image, Audio, Video, Sketch | Type, upload, paste, drop, or draw source material. |
-| **Workflows** | Prompt Enhancer, Image Processing, H3 Video, H3 Audio | Generate or transform media with the selected provider and workflow. |
+| **Generation** | Prompt Enhancer, Image Processing, H3 Video, H3 Audio | Generate or transform media with the selected provider and model or comfyui-workflow. |
 | **Utilities** | VRAM Trigger | Insert an execution barrier and optionally eject Ollama models or clear ComfyUI VRAM/cache. |
 | **Outputs** | Preview, Save Output | Inspect results in the project or download them with an explicit filename. |
-| **Custom Node** | Bundled and imported definitions | Run typed, reusable ComfyUI-backed nodes with compact primary and Advanced controls. |
+| **vd-node definitions** | Bundled and imported definitions | Run typed, reusable ComfyUI-backed vd-nodes with compact primary and Advanced controls. |
 
 Useful canvas gestures:
 
 - Double-click blank space to search the node menu.
 - Drag an output onto blank space to create and connect a compatible node.
-- Right-click a node to run, cancel, duplicate, rename, inspect, or delete it.
+- **Select (V):** drag empty canvas to pan, click a node to select it, and drag a node to move it. **Hand (H):** drag anywhere to pan, including over nodes and their controls. Hold Space for temporary Hand navigation.
+- **Ctrl-drag** selects a group in either mode; **Ctrl-click** adds or removes a node. On macOS, **Command** also works for these gestures and shortcuts; Ctrl-click selects without opening a context menu. Selected nodes have an expanded border, and draggable node areas use a crosshair cursor in Select mode. **Ctrl+B** freezes or unfreezes the selection.
+- Scroll to zoom over the canvas or nodes. Scrollable fields and panels consume the wheel to scroll their own content.
+- Right-click empty canvas for the **vd-node catalog**, **Reset VRAM**, or **Paste**. Right-click a node for Run/Cancel, Freeze, **Copy**, Duplicate, Rename, Details, and Delete. Input fields retain their native context menu.
+- **Ctrl+C / Ctrl+V** copy and paste nodes within the current project, including connections between copied nodes. Copy captures a snapshot; pasted nodes get new identities and are created at the cursor. Reset VRAM unloads configured Ollama models and releases ComfyUI model/cache memory.
 - Select a node and use **Run** for one node, a selection, downstream nodes, or the whole graph.
 - Connect generated media to **Preview** and **Save Output**; unconnected results receive an automatic Preview.
 
-Bundled Custom Nodes include Qwen image editing, Z-Image Turbo, MiniMax-H3 text/image-to-video, reference-to-video, and Turbo/Standard H3 audio workflows. See [`custom_nodes/`](custom_nodes/README.md) for dependencies and safety notes.
+Bundled vd-node definitions include Qwen image editing, Z-Image Turbo, MiniMax-H3 text/image-to-video, reference-to-video, and Turbo/Standard H3 audio. See [`custom_nodes/`](custom_nodes/README.md) for dependencies and safety notes.
 
 ## 🪄 ComfyUI workflow-to-node Skill
 
-The bundled [`comfyui-workflow-to-node`](skills/comfyui-workflow-to-node/SKILL.md) Skill converts a trusted ComfyUI workflow into either:
+The bundled [`comfyui-workflow-to-node`](skills/comfyui-workflow-to-node/SKILL.md) Skill converts a trusted comfyui-workflow into either:
 
-- a repository built-in workflow; or
-- a portable, declarative Video Director Custom Node v1 pack.
+- a repository built-in registered comfyui-workflow; or
+- a portable, declarative vd-node pack (the existing Custom Node v1 protocol).
 
 Invoke it from a DSH conversation:
 
 ```text
 $comfyui-workflow-to-node
-Convert /absolute/path/my-workflow-api.json into a reusable Video Director
-Custom Node. Keep model and sampler controls in Advanced.
+Convert /absolute/path/my-workflow-api.json into a reusable vd-node pack.
+Keep model and sampler controls in Advanced.
 ```
 
-API-format workflows can be analyzed offline. Editor/UI workflows require exact metadata from the matching ComfyUI `/object_info`; the Skill stops instead of guessing when a mapping is ambiguous. Conversion does not submit the graph, install Python Custom Nodes, download models, or generate media.
+API-format workflows can be analyzed offline. Editor/UI workflows require exact metadata from the matching ComfyUI `/object_info`; the Skill stops instead of guessing when a mapping is ambiguous. Conversion does not submit the graph, install ComfyUI custom-node packages, download models, or generate media.
 
 The Skill is already prepared for plugin distribution: its project source lives under `skills/comfyui-workflow-to-node/`, `package.json` includes `skills/` in the published package, and the Host strips the Skill's YAML front matter before registering its body with the DSH Skills service while retaining its local references and script.
 
@@ -143,6 +158,7 @@ The default Host data directory is `./.dsh-video-director`, resolved from the di
 ```text
 .dsh-video-director/
 ├── projects/<project-id>/project.json   # canvas, settings, and recent jobs
+├── projects/<project-id>/runs/          # run summaries and immutable submitted snapshots
 ├── assets/<asset-id>.<ext>              # uploaded and generated media
 ├── assets/index.json                    # immutable asset metadata and hashes
 └── workflows.json                       # imported workflow registry
@@ -155,7 +171,7 @@ Change `dataDir` in the plugin's DSH configuration if you need a stable absolute
 - This plugin orchestrates providers; it is not a hosted generation service. Ollama, ComfyUI, models, and remote API accounts are operated separately.
 - “Fully local” means the selected Ollama/ComfyUI path stays on infrastructure you control. “Uncensored” behavior depends on the selected model, runtime configuration, applicable law, and model licenses.
 - MiniMax-H3 weights have a separate license. Review it before enabling production or commercial use.
-- ComfyUI workflow JSON is executable configuration because it can invoke installed local Python Custom Nodes. Import only trusted graphs.
+- ComfyUI workflow JSON is executable configuration because it can invoke installed ComfyUI custom-node packages. Import only trusted graphs.
 - Uploaded assets are limited to 200 MiB each by default. Projects retain the latest 100 job records.
 - Canvas edits are explicit-save. Running captures an immutable snapshot, so later edits do not change work already queued.
 - The plugin binds DSH Web to its normal loopback-safe defaults. Protect and authenticate any remote Ollama, ComfyUI, or OpenAI-compatible endpoint.
@@ -164,4 +180,4 @@ For configuration, architecture, transport behavior, recovery, security, limitat
 
 ## License
 
-[MIT](LICENSE). Model weights, ComfyUI, Custom Nodes, and external services retain their own licenses and terms.
+[MIT](LICENSE). Model weights, ComfyUI, ComfyUI custom-node packages, and external services retain their own licenses and terms.

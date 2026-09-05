@@ -7,11 +7,11 @@ import test from 'node:test'
 
 import { build } from 'esbuild'
 
-import { NodeRegistry } from '../src/node-registry.js'
+import { VdNodeRegistry } from '../src/node-registry.js'
 import { ProjectStore } from '../src/project-store.js'
 import { createDirectorRpc } from '../src/rpc.js'
 import { record } from '../src/validation.js'
-import { WorkflowStore } from '../src/workflow-store.js'
+import { ComfyWorkflowStore } from '../src/workflow-store.js'
 
 let controllerClass
 
@@ -370,6 +370,7 @@ test('project export and Duplicate preserve canvas assets while resetting active
 })
 
 function existingSessionContext(project, handler, projectGet = async () => ({ ok: true, value: { project } })) {
+  const submittedRuns = new Map()
   const list = {
     current: project.sessionId,
     byId: { [project.sessionId]: { id: project.sessionId, title: project.name } },
@@ -394,6 +395,13 @@ function existingSessionContext(project, handler, projectGet = async () => ({ ok
           if (endpoint === 'providers/list') return { ok: true, value: { providers: [] } }
           if (endpoint === 'workflows/list') return { ok: true, value: { workflows: [] } }
           if (endpoint === 'projects/get') return projectGet(payload)
+          if (endpoint === 'vd-runs/save') {
+            const run = { ...payload.run, snapshot: submittedRuns.get(payload.run.id)?.snapshot ?? structuredClone(payload.snapshot) }
+            submittedRuns.set(run.id, run)
+            return { ok: true, value: { run } }
+          }
+          if (endpoint === 'vd-runs/get') return { ok: true, value: { run: submittedRuns.get(payload.runId) } }
+          if (endpoint === 'vd-runs/list') return { ok: true, value: { runs: [...submittedRuns.values()] } }
           return handler(endpoint, payload)
         },
       },
@@ -600,6 +608,93 @@ test('project edits stay local until the explicit save action', { timeout: 2_000
   assert.equal(saves[0].project.name, 'Manual cut')
   assert.equal(controller.getSnapshot().dirty, false)
   assert.equal(controller.getSnapshot().project.revision, 2)
+})
+
+test('discard to opened state restores the workflow, clears history, and preserves project records', async () => {
+  const Controller = await DirectorController()
+  const project = projectFixture('00000000-0000-4000-8000-000000000091')
+  project.graph.nodes = [{ id: 'text', type: 'director', position: { x: 30, y: 40 }, data: { kind: 'load-text', title: 'Opening title', text: 'Opening text' } }]
+  project.jobs = [{ id: 'completed-job', nodeId: 'text', status: 'completed' }]
+  let persisted = structuredClone(project)
+  let saveCount = 0
+  const controller = new Controller(existingSessionContext(project, async (endpoint, payload) => {
+    if (endpoint !== 'projects/save') throw new Error(`unexpected endpoint ${endpoint}`)
+    saveCount += 1
+    persisted = { ...structuredClone(payload.project), revision: payload.expectedRevision + 1 }
+    return { ok: true, value: { project: persisted } }
+  }, async () => ({ ok: true, value: { project: structuredClone(persisted) } })))
+  await controller.start()
+  const opening = structuredClone(controller.getSnapshot().project)
+  controller.renameProject('Edited name')
+  controller.updateNode('text', { text: 'Edited text' })
+  controller.updateViewport({ x: 200, y: 300, zoom: 0.5 })
+  controller.restoreOpenedProject()
+  let snapshot = controller.getSnapshot()
+  assert.deepEqual(snapshot.project, opening)
+  assert.equal(snapshot.dirty, false)
+  assert.equal(snapshot.canUndo, false)
+  assert.equal(snapshot.canRedo, false)
+  assert.equal(snapshot.canvasResetVersion, 1)
+  assert.equal(snapshot.projects.find(row => row.id === project.id).name, opening.name)
+
+  // Explicit saving must not silently replace the opening restore point.
+  controller.updateNode('text', { text: 'Saved during this open session' })
+  await controller.saveProject()
+  controller.restoreOpenedProject()
+  snapshot = controller.getSnapshot()
+  assert.deepEqual(snapshot.project.graph, opening.graph)
+  assert.equal(snapshot.project.revision, 2)
+  assert.deepEqual(snapshot.project.jobs, opening.jobs)
+  assert.equal(snapshot.project.sessionId, opening.sessionId)
+  assert.equal(snapshot.dirty, true)
+  assert.equal(saveCount, 1, 'restoring must not silently write to storage')
+  assert.equal(persisted.graph.nodes[0].data.text, 'Saved during this open session')
+  controller.updateNode('text', { text: 'Another edit' })
+  controller.restoreOpenedProject()
+  assert.deepEqual(controller.getSnapshot().project.graph, opening.graph, 'restore snapshot must remain immutable')
+  controller.dispose()
+})
+
+test('discard to opened state refuses active jobs and saves without losing edits', async () => {
+  const Controller = await DirectorController()
+  const project = projectFixture('00000000-0000-4000-8000-000000000092')
+  const controller = new Controller(existingSessionContext(project, async endpoint => { throw new Error(`unexpected endpoint ${endpoint}`) }))
+  await controller.start()
+  controller.renameProject('Keep these edits')
+  for (const state of [
+    { saving: true },
+    { phase: 'loading' },
+    { project: { ...controller.getSnapshot().project, jobs: [{ id: 'queued-job', status: 'queued' }] } },
+    { workflowRuns: [{ id: 'queued-run', projectId: project.id, status: 'queued' }] },
+  ]) {
+    const before = controller.getSnapshot()
+    controller.patch(state)
+    assert.throws(() => controller.restoreOpenedProject(), /等待|取消/)
+    assert.equal(controller.getSnapshot().project.name, 'Keep these edits')
+    controller.patch(before)
+  }
+  controller.dispose()
+})
+
+test('opening another project replaces the discard restore point', async () => {
+  const Controller = await DirectorController()
+  const first = projectFixture('00000000-0000-4000-8000-000000000093')
+  const second = { ...structuredClone(first), id: '00000000-0000-4000-8000-000000000094', name: 'Second project' }
+  const controller = new Controller(existingSessionContext(first, async endpoint => { throw new Error(`unexpected endpoint ${endpoint}`) },
+    async ({ projectId }) => ({ ok: true, value: { project: structuredClone(projectId === first.id ? first : second) } })))
+  await controller.start()
+  controller.renameProject('First local edit')
+  await controller.selectProject(second.id, { discard: true })
+  controller.renameProject('Second local edit')
+  controller.restoreOpenedProject()
+  assert.equal(controller.getSnapshot().project.id, second.id)
+  assert.equal(controller.getSnapshot().project.name, second.name)
+  assert.equal(controller.getSnapshot().dirty, false)
+  await controller.selectProject(first.id)
+  controller.renameProject('New first edit')
+  controller.restoreOpenedProject()
+  assert.equal(controller.getSnapshot().project.name, first.name)
+  controller.dispose()
 })
 
 test('starting a new chat Session persists the binding without changing unsaved canvas state', async () => {
@@ -831,7 +926,7 @@ test('VRAM trigger nodes require a connection and surface completion or failure 
   assert.equal(controller.getSnapshot().project.graph.nodes[0].data.status, 'completed')
   assert.equal(controller.getSnapshot().project.graph.nodes[0].data.phase, 'completed')
 
-  const workflowRunId = await controller.runWorkflow({ mode: 'all' })
+  const workflowRunId = await controller.runVdWorkflow({ mode: 'all' })
   const workflowRun = controller.getSnapshot().workflowRuns.find(run => run.id === workflowRunId)
   assert.equal(workflowRun.status, 'completed')
   assert.equal(workflowRun.completedJobs, 1)
@@ -975,7 +1070,7 @@ test('an Image Workflow created from a VRAM trigger output persists its displaye
     source: 'clear', sourceHandle: 'out:flow-out', targetHandle: 'in',
   })
 
-  await controller.runWorkflow({ mode: 'dependencies', selectedNodeIds: [targetId] })
+  await controller.runVdWorkflow({ mode: 'dependencies', selectedNodeIds: [targetId] })
 
   const target = controller.getSnapshot().project.graph.nodes.find(node => node.id === targetId)
   assert.equal(target.data.workflowId, defaultWorkflow.id)
@@ -987,9 +1082,9 @@ test('an Image Workflow reference chain resolves a displayed default workflow th
   const root = await mkdtemp(join(tmpdir(), 'dsh-video-director-controller-rpc-'))
   t.after(async () => { await rm(root, { recursive: true, force: true }) })
   const store = new ProjectStore(root, 1024 * 1024)
-  const workflows = new WorkflowStore(root)
+  const workflows = new ComfyWorkflowStore(root)
   await Promise.all([store.init(), workflows.init()])
-  const nodes = new NodeRegistry(workflows)
+  const nodes = new VdNodeRegistry(workflows)
   const createdProject = await store.createProject({
     name: 'Image reference chain',
     sessionId: '00000000-0000-4000-8000-000000000094',
@@ -2133,6 +2228,265 @@ test('running a typed image-edit node binds each port by its own local index', a
   assert.equal(execution.bindings[1].mediaIndex, 1)
 })
 
+test('workflow submissions queue immutable snapshots behind an active run', async () => {
+  const Controller = await DirectorController()
+  const project = projectFixture('queue-session')
+  project.graph.nodes = [{ id: 'generate', type: 'director', position: { x: 0, y: 0 },
+    data: { kind: 'prompt-enhancer', title: 'Generate', providerId: 'ollama', prompt: 'first', status: 'idle' } }]
+  const starts = []
+  let release
+  const blocked = new Promise(resolve => { release = resolve })
+  const controller = new Controller(existingSessionContext(project, async (endpoint, payload) => {
+    if (endpoint === 'nodes/list') return { ok: true, value: { nodeDefinitions: [] } }
+    if (endpoint === 'jobs/start') {
+      const job = { id: `queued-${starts.length}`, projectId: project.id, nodeId: payload.nodeId,
+        clientRunId: payload.clientRunId, workflowRunId: payload.snapshot.request.workflowRunId,
+        status: 'queued', phase: 'queued', progress: 0, createdAt: project.createdAt, updatedAt: project.updatedAt }
+      starts.push({ job, prompt: payload.snapshot.request.prompt })
+      return { ok: true, value: { job } }
+    }
+    if (endpoint === 'jobs/get') {
+      const started = starts.find(row => row.job.id === payload.jobId)
+      if (started === starts[0]) await blocked
+      return { ok: true, value: { job: { ...started.job, status: 'completed', phase: 'completed',
+        result: { kind: 'text', text: started.prompt, providerId: 'ollama' } } } }
+    }
+    throw new Error(`unexpected endpoint ${endpoint}`)
+  }))
+  await controller.start()
+  const first = controller.runVdWorkflow({ mode: 'all' })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  controller.updateNode('generate', { prompt: 'second' })
+  const second = controller.runVdWorkflow({ mode: 'all' })
+  // Attach rejection handling immediately so the old busy-node error is deterministic.
+  const outcomes = Promise.allSettled([first, second])
+  controller.updateNode('generate', { prompt: 'later edit' })
+  try {
+    assert.equal(controller.getSnapshot().workflowRuns.filter(run => run.status === 'queued').length, 1)
+    assert.equal(starts.length, 1)
+  } finally { release() }
+  const results = await outcomes
+  assert.ok(results.every(result => result.status === 'fulfilled'))
+  assert.deepEqual(starts.map(row => row.prompt), ['first', 'second'])
+  const secondId = results[1].value
+  const exported = JSON.parse((await controller.exportVdWorkflow(secondId)).text)
+  assert.equal(exported.project.graph.nodes[0].data.prompt, 'second')
+  await controller.openVdWorkflow(secondId)
+  assert.equal(controller.getSnapshot().project.graph.nodes[0].data.prompt, 'second')
+  controller.undo()
+  assert.equal(controller.getSnapshot().project.graph.nodes[0].data.prompt, 'later edit')
+  controller.dispose()
+})
+
+test('cancelling a queued workflow never submits it or releases later work ahead of the active run', async () => {
+  const Controller = await DirectorController()
+  const project = projectFixture('cancel-queue-session')
+  project.graph.nodes = [{ id: 'generate', type: 'director', position: { x: 0, y: 0 },
+    data: { kind: 'prompt-enhancer', title: 'Generate', providerId: 'ollama', prompt: 'first', status: 'idle' } }]
+  const starts = []
+  let release
+  const blocked = new Promise(resolve => { release = resolve })
+  const controller = new Controller(existingSessionContext(project, async (endpoint, payload) => {
+    if (endpoint === 'nodes/list') return { ok: true, value: { nodeDefinitions: [] } }
+    if (endpoint === 'jobs/start') {
+      const job = { id: `job-${starts.length}`, projectId: project.id, nodeId: payload.nodeId,
+        clientRunId: payload.clientRunId, workflowRunId: payload.snapshot.request.workflowRunId,
+        status: 'queued', phase: 'queued', progress: 0, createdAt: project.createdAt, updatedAt: project.updatedAt }
+      starts.push({ job, prompt: payload.snapshot.request.prompt })
+      return { ok: true, value: { job } }
+    }
+    if (endpoint === 'jobs/get') {
+      const started = starts.find(row => row.job.id === payload.jobId)
+      if (started === starts[0]) {
+        await blocked
+        return { ok: true, value: { job: { ...started.job, status: 'failed', phase: 'failed', error: 'execution failed' } } }
+      }
+      return { ok: true, value: { job: { ...started.job, status: 'completed', phase: 'completed',
+        result: { kind: 'text', text: started.prompt, providerId: 'ollama' } } } }
+    }
+    throw new Error(`unexpected endpoint ${endpoint}`)
+  }))
+  await controller.start()
+  const first = controller.runVdWorkflow({ mode: 'all' })
+  controller.updateNode('generate', { prompt: 'cancel me' })
+  const second = controller.runVdWorkflow({ mode: 'all' })
+  const secondId = controller.getSnapshot().workflowRuns[0].id
+  controller.updateNode('generate', { prompt: 'third' })
+  const third = controller.runVdWorkflow({ mode: 'all' })
+  const outcomes = Promise.allSettled([first, second, third])
+  await controller.cancelVdRun(secondId)
+  await new Promise(resolve => setTimeout(resolve, 10))
+  try {
+    assert.equal(controller.getSnapshot().workflowRuns.find(run => run.id === secondId).status, 'cancelled')
+    assert.equal(starts.length, 1)
+  } finally { release() }
+  const results = await outcomes
+  controller.dispose()
+  assert.deepEqual(results.map(result => result.status), ['rejected', 'rejected', 'fulfilled'])
+  assert.deepEqual(starts.map(row => row.prompt), ['first', 'third'])
+})
+
+for (const remoteFailure of [false, true]) {
+  test(`cancelling an active VdWorkflow waits for remote jobs and ${remoteFailure ? 'preserves cancellation errors' : 'then releases its queue'}`, { timeout: 3_000 }, async () => {
+    const Controller = await DirectorController()
+    const project = projectFixture('active-cancel-session')
+    project.graph.nodes = [{ id: 'generate', type: 'director', position: { x: 0, y: 0 },
+      data: { kind: 'prompt-enhancer', title: 'Generate', providerId: 'ollama', prompt: 'test', status: 'idle' } }]
+    const starts = []
+    const cancels = []
+    let monitoring
+    const monitored = new Promise(resolve => { monitoring = resolve })
+    let stopRemote
+    const remoteStopped = new Promise(resolve => { stopRemote = resolve })
+    const controller = new Controller(existingSessionContext(project, async (endpoint, payload) => {
+      if (endpoint === 'nodes/list') return { ok: true, value: { nodeDefinitions: [] } }
+      if (endpoint === 'jobs/start') {
+        const job = { id: `cancel-${starts.length}`, projectId: project.id, nodeId: payload.nodeId,
+          clientRunId: payload.clientRunId, workflowRunId: payload.snapshot.request.workflowRunId,
+          status: 'running', phase: 'running', progress: 0, createdAt: project.createdAt, updatedAt: project.updatedAt }
+        starts.push(job)
+        return { ok: true, value: { job } }
+      }
+      if (endpoint === 'jobs/cancel') {
+        cancels.push(payload.jobId)
+        return { ok: true, value: { job: { ...starts[0], phase: 'cancelling' } } }
+      }
+      if (endpoint === 'jobs/get') {
+        const job = starts.find(row => row.id === payload.jobId)
+        if (job === starts[0]) {
+          monitoring()
+          await remoteStopped
+          return { ok: true, value: { job: { ...job, status: remoteFailure ? 'failed' : 'cancelled',
+            phase: remoteFailure ? 'failed' : 'cancelled', error: remoteFailure ? 'Remote cancellation denied' : 'Cancelled',
+            errorCode: remoteFailure ? 'video-director/remote-cancel-failed' : undefined } } }
+        }
+        return { ok: true, value: { job: { ...job, status: 'completed', phase: 'completed',
+          result: { kind: 'text', text: 'next', providerId: 'ollama' } } } }
+      }
+      throw new Error(`unexpected endpoint ${endpoint}`)
+    }))
+    await controller.start()
+    const first = controller.runVdWorkflow({ mode: 'all' })
+    const firstId = controller.getSnapshot().workflowRuns[0].id
+    const second = controller.runVdWorkflow({ mode: 'all' })
+    const outcomes = Promise.allSettled([first, second])
+    await monitored
+    await controller.cancelVdRun(firstId)
+    try {
+      assert.deepEqual(cancels, [starts[0].id])
+      assert.equal(starts.length, 1, 'the next submission must wait for remote cancellation')
+      assert.equal(controller.getSnapshot().workflowRuns.find(run => run.id === firstId).status, 'running')
+    } finally { stopRemote() }
+    const results = await outcomes
+    assert.deepEqual(results.map(row => row.status), ['rejected', 'fulfilled'])
+    const firstRun = controller.getSnapshot().workflowRuns.find(run => run.id === firstId)
+    assert.equal(firstRun.status, remoteFailure ? 'failed' : 'cancelled')
+    if (remoteFailure) assert.match(firstRun.error, /Remote cancellation denied/u)
+    controller.dispose()
+  })
+}
+
+test('VdWorkflow cancellation includes restored jobs absent from the canvas and surfaces request failures', async () => {
+  const Controller = await DirectorController()
+  const project = projectFixture('restored-cancel-session')
+  project.graph.nodes = []
+  project.jobs = ['ours-a', 'ours-b', 'unrelated'].map(id => ({ id, nodeId: id, projectId: project.id,
+    workflowRunId: id === 'unrelated' ? 'another-run' : 'our-run', status: 'running', phase: 'running',
+    createdAt: project.createdAt, updatedAt: project.updatedAt }))
+  const cancellations = []
+  const controller = new Controller(existingSessionContext(project, async (endpoint, payload) => {
+    if (endpoint === 'nodes/list') return { ok: true, value: { nodeDefinitions: [] } }
+    if (endpoint === 'jobs/cancel') {
+      cancellations.push(payload.jobId)
+      if (payload.jobId === 'ours-a') throw new Error('transport unavailable')
+      return { ok: true, value: { job: { ...project.jobs[1], phase: 'cancelling' } } }
+    }
+    throw new Error(`unexpected endpoint ${endpoint}`)
+  }))
+  await controller.start()
+  await assert.rejects(controller.cancelVdRun('our-run'), /Could not request cancellation for every job.*transport unavailable/u)
+  assert.deepEqual(cancellations.sort(), ['ours-a', 'ours-b'])
+  controller.dispose()
+})
+
+test('copy and paste captures nodes and internal edges, resets running state, and undoes as one edit', async () => {
+  const Controller = await DirectorController()
+  const project = projectFixture('clipboard-session')
+  project.graph.nodes = [
+    { id: 'text', type: 'director', position: { x: 10, y: 20 }, data: { kind: 'load-text', title: 'Source', text: 'original' } },
+    { id: 'generate', type: 'director', position: { x: 200, y: 70 }, data: { kind: 'prompt-enhancer', title: 'Generate', status: 'completed', text: 'old result', jobId: 'old-job', result: { kind: 'text', text: 'old result' } } },
+    { id: 'outside', type: 'director', position: { x: 400, y: 70 }, data: { kind: 'preview', title: 'Preview' } },
+  ]
+  project.graph.edges = [{ id: 'internal', source: 'text', target: 'generate', sourceHandle: 'out', targetHandle: 'in' },
+    { id: 'external', source: 'generate', target: 'outside' }]
+  const controller = new Controller(existingSessionContext(project, async () => ({ ok: true, value: { nodeDefinitions: [] } })))
+  await controller.start()
+  assert.equal(controller.canPasteNodes(), false)
+  controller.copyNodes(['text', 'generate'])
+  controller.updateNode('text', { text: 'later edit' })
+  const ids = controller.pasteNodes({ x: 500, y: 600 })
+  const graph = controller.getSnapshot().project.graph
+  assert.equal(ids.length, 2)
+  assert.equal(new Set(graph.nodes.map(node => node.id)).size, 5)
+  assert.deepEqual(graph.nodes.slice(-2).map(node => node.position), [{ x: 500, y: 600 }, { x: 690, y: 650 }])
+  assert.equal(graph.nodes.at(-2).data.text, 'original')
+  assert.equal(graph.nodes.at(-1).data.status, 'idle')
+  assert.equal(graph.nodes.at(-1).data.jobId, undefined)
+  assert.equal(graph.nodes.at(-1).data.result, undefined)
+  assert.equal(graph.edges.length, 3)
+  assert.equal(graph.edges.at(-1).source, ids[0])
+  assert.equal(graph.edges.at(-1).target, ids[1])
+  controller.undo()
+  assert.equal(controller.getSnapshot().project.graph.nodes.length, 3)
+  assert.equal(controller.getSnapshot().project.graph.nodes[0].data.text, 'later edit')
+  controller.dispose()
+})
+
+test('group Freeze toggles together and is atomic when a selected node is busy', async () => {
+  const Controller = await DirectorController()
+  const project = projectFixture('freeze-group-session')
+  project.graph.nodes = ['a', 'b'].map((id, i) => ({ id, type: 'director', position: { x: 100 * i, y: 0 },
+    data: { kind: 'load-text', title: id, frozen: i === 0, status: 'idle' } }))
+  const controller = new Controller(existingSessionContext(project, async () => ({ ok: true, value: { nodeDefinitions: [] } })))
+  await controller.start()
+  controller.toggleNodesFrozen(['a', 'b'])
+  assert.deepEqual(controller.getSnapshot().project.graph.nodes.map(node => node.data.frozen), [true, true])
+  controller.undo()
+  assert.deepEqual(controller.getSnapshot().project.graph.nodes.map(node => node.data.frozen), [true, false])
+  controller.toggleNodesFrozen(['a', 'b'])
+  controller.toggleNodesFrozen(['a', 'b'])
+  assert.deepEqual(controller.getSnapshot().project.graph.nodes.map(node => node.data.frozen), [false, false])
+  controller.updateNode('b', { status: 'running' })
+  assert.throws(() => controller.toggleNodesFrozen(['a', 'b']), /Cancel active jobs/u)
+  assert.deepEqual(controller.getSnapshot().project.graph.nodes.map(node => node.data.frozen), [false, false])
+  controller.dispose()
+})
+
+test('reset VRAM uses both configured local providers and reports partial failures', async () => {
+  const Controller = await DirectorController()
+  const project = projectFixture('reset-vram-session')
+  const calls = []
+  const ctx = existingSessionContext(project, async (endpoint, payload) => {
+    if (endpoint === 'nodes/list') return { ok: true, value: { nodeDefinitions: [] } }
+    if (endpoint === 'triggers/run') {
+      calls.push(payload.action)
+      if (payload.action === 'comfyui-clear') throw new Error('ComfyUI rejected unload')
+      return { ok: true, value: {} }
+    }
+    return { ok: true, value: { models: [], modelInputs: [] } }
+  })
+  const original = ctx.connection.rpc.call
+  ctx.connection.rpc.call = async (channel, endpoint, payload) => endpoint === 'providers/list'
+    ? { ok: true, value: { providers: [{ id: 'ollama', kind: 'ollama', baseUrl: 'http://ollama' }, { id: 'comfyui', kind: 'comfyui', baseUrl: 'http://comfyui' }] } }
+    : original(channel, endpoint, payload)
+  const controller = new Controller(ctx)
+  await controller.start()
+  await assert.rejects(controller.resetVram(), /ComfyUI rejected unload/u)
+  assert.deepEqual(calls.sort(), ['comfyui-clear', 'ollama-eject'])
+  assert.equal(controller.getSnapshot().error, 'ComfyUI rejected unload')
+  controller.dispose()
+})
+
 test('a workflow run waits for upstream results and persists grouped job metadata', async () => {
   const Controller = await DirectorController()
   const project = projectFixture('00000000-0000-4000-8000-000000000099')
@@ -2206,7 +2560,7 @@ test('a workflow run waits for upstream results and persists grouped job metadat
   }))
   await controller.start()
 
-  const workflowRunId = await controller.runWorkflow({ mode: 'all', batchSize: 1 })
+  const workflowRunId = await controller.runVdWorkflow({ mode: 'all', batchSize: 1 })
 
   assert.equal(starts.length, 2)
   assert.equal(starts[0].snapshot.request.workflowRunId, workflowRunId)
