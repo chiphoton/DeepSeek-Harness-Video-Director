@@ -22,6 +22,7 @@
     "skills/",
     "README.md",
     "README_zh.md",
+    "NOTICE.md",
     "LICENSE"
   ],
   "scripts": {
@@ -75,6 +76,7 @@
     "@types/react": "~18.3.1",
     "@types/react-dom": "~18.3.0",
     "esbuild": "0.28.2",
+    "jsdom": "29.1.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "typescript": "^6.0.3"

@@ -1,3 +1,4 @@
+import { t, useLanguage } from './i18n'
 import { type ReactNode, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
@@ -33,6 +34,7 @@ export function previewArtifactsFromResult(result: VdNodeResult | undefined): Pr
 }
 
 function ThumbnailContent({ artifact }: { artifact: PreviewArtifact }): ReactNode {
+  useLanguage()
   if (artifact.kind === 'image' && artifact.asset !== undefined) {
     return <img src={artifact.asset.url} alt="" draggable={false} loading="lazy" />
   }
@@ -55,6 +57,7 @@ export function ArtifactThumbnail(props: {
   variant?: 'node' | 'job'
   onOpen(artifact: PreviewArtifact): void
 }): ReactNode {
+  useLanguage()
   return (
     <button
       type="button"
@@ -73,6 +76,7 @@ export function ArtifactPreviewDialog(props: {
   initialPropertiesOpen?: boolean
   onClose(): void
 }): ReactNode {
+  useLanguage()
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [copied, setCopied] = useState(false)
@@ -222,20 +226,20 @@ export function ArtifactPreviewDialog(props: {
           </div>
           <div className="vd-artifact-dialog-actions">
             {props.artifact.kind === 'text' ? (
-              <button type="button" onClick={() => { void copyText() }}>{copied ? 'Copied' : 'Copy'}</button>
+              <button type="button" onClick={() => { void copyText() }}>{copied ? 'Copied' : t("Copy")}</button>
             ) : null}
-            <button type="button" className="vd-artifact-dialog-close" aria-label="Close artifact preview" title="Close" onClick={props.onClose}>
+            <button type="button" className="vd-artifact-dialog-close" aria-label={t("Close artifact preview")} title={t("Close")} onClick={props.onClose}>
               <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" /></svg>
             </button>
           </div>
         </header>
         {props.artifact.kind === 'image' && props.artifact.asset !== undefined ? (
           <>
-            <div className="vd-artifact-image-info" aria-label="Image properties">
-              <span><small>Dimensions</small><strong>{dimensions}</strong></span>
-              <span><small>Bit depth</small><strong>{bitDepth}</strong></span>
-              <span><small>Format</small><strong>{format}</strong></span>
-              <span><small>Date</small><strong>{date}</strong></span>
+            <div className="vd-artifact-image-info" aria-label={t("Image properties")}>
+              <span><small>{t("Dimensions")}</small><strong>{dimensions}</strong></span>
+              <span><small>{t("Bit depth")}</small><strong>{bitDepth}</strong></span>
+              <span><small>{t("Format")}</small><strong>{format}</strong></span>
+              <span><small>{t("Date")}</small><strong>{date}</strong></span>
             </div>
             <div
               className={`vd-artifact-dialog-content is-image${drag.current === null ? '' : ' is-dragging'}`}
@@ -327,10 +331,10 @@ export function ArtifactPreviewDialog(props: {
             }}
             onPointerDown={event => event.stopPropagation()}
           >
-            <button type="button" role="menuitem" onClick={saveArtifact}>Save {mediaLabel.toLowerCase()}…</button>
-            <button type="button" role="menuitem" onClick={() => { setContextMenu(null); setPropertiesOpen(true) }}>{mediaLabel} properties…</button>
+            <button type="button" role="menuitem" onClick={saveArtifact}>{t("Save")} {mediaLabel.toLowerCase()}…</button>
+            <button type="button" role="menuitem" onClick={() => { setContextMenu(null); setPropertiesOpen(true) }}>{mediaLabel} {t("properties…")}</button>
             {props.artifact.kind === 'image' ? (
-              <button type="button" role="menuitem" onClick={() => { setContextMenu(null); resetImageView() }}>Reset view</button>
+              <button type="button" role="menuitem" onClick={() => { setContextMenu(null); resetImageView() }}>{t("Reset view")}</button>
             ) : null}
           </div>
         ) : null}
@@ -343,21 +347,21 @@ export function ArtifactPreviewDialog(props: {
           >
             <section className="vd-image-properties-dialog" role="dialog" aria-modal="true" aria-labelledby={propertiesTitleId}>
               <header>
-                <div><strong id={propertiesTitleId}>{mediaLabel} properties</strong><span>{asset.name}</span></div>
+                <div><strong id={propertiesTitleId}>{mediaLabel} {t("properties")}</strong><span>{asset.name}</span></div>
                 <button type="button" aria-label={`Close ${mediaLabel.toLowerCase()} properties`} onClick={() => setPropertiesOpen(false)}>×</button>
               </header>
               <dl>
-                <div><dt>Dimensions</dt><dd>{props.artifact.kind === 'video' ? videoDimensions : dimensions}</dd></div>
-                {props.artifact.kind === 'video' ? <div><dt>Duration</dt><dd>{videoDuration}</dd></div> : <div><dt>Bit depth</dt><dd>{bitDepth}</dd></div>}
-                <div><dt>Format</dt><dd>{format}</dd></div>
-                <div><dt>Date</dt><dd>{date}</dd></div>
-                <div><dt>MIME type</dt><dd>{asset.mimeType}</dd></div>
-                <div><dt>File size</dt><dd>{new Intl.NumberFormat(undefined, { style: 'unit', unit: 'byte', unitDisplay: 'short' }).format(asset.size)}</dd></div>
+                <div><dt>{t("Dimensions")}</dt><dd>{props.artifact.kind === 'video' ? videoDimensions : dimensions}</dd></div>
+                {props.artifact.kind === 'video' ? <div><dt>{t("Duration")}</dt><dd>{videoDuration}</dd></div> : <div><dt>{t("Bit depth")}</dt><dd>{bitDepth}</dd></div>}
+                <div><dt>{t("Format")}</dt><dd>{format}</dd></div>
+                <div><dt>{t("Date")}</dt><dd>{date}</dd></div>
+                <div><dt>{t("MIME type")}</dt><dd>{asset.mimeType}</dd></div>
+                <div><dt>{t("File size")}</dt><dd>{new Intl.NumberFormat(undefined, { style: 'unit', unit: 'byte', unitDisplay: 'short' }).format(asset.size)}</dd></div>
                 <div><dt>SHA-256</dt><dd className="is-code">{asset.sha256}</dd></div>
               </dl>
               {props.artifact.kind === 'image' ? <div className="vd-image-metadata">
-                <strong>Metadata</strong>
-                {propertyError !== null ? <p>{propertyError}</p> : properties === null ? <p>Reading embedded metadata…</p> : properties.metadata.length === 0 ? <p>No embedded metadata found.</p> : (
+                <strong>{t("Metadata")}</strong>
+                {propertyError !== null ? <p>{propertyError}</p> : properties === null ? <p>{t("Reading embedded metadata…")}</p> : properties.metadata.length === 0 ? <p>{t("No embedded metadata found.")}</p> : (
                   <dl>{properties.metadata.map((entry, index) => <div key={`${entry.name}:${String(index)}`}><dt>{entry.name}</dt><dd>{entry.value}</dd></div>)}</dl>
                 )}
               </div> : null}

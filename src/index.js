@@ -2,13 +2,8 @@ import z from '@deepseek-ai/schemastery'
 import { readFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { JobManager } from './jobs.js'
-import { VdNodeRegistry } from './node-registry.js'
-import { ProviderSettings, PROVIDER_SETTINGS_NAMESPACE } from './provider-settings.js'
-import { ProjectStore } from './project-store.js'
-import { ProviderRuntime } from './providers.js'
-import { createDirectorRpc } from './rpc.js'
-import { ComfyWorkflowStore } from './workflow-store.js'
+import { createDirectorHost } from './director-host.js'
+import { PROVIDER_SETTINGS_NAMESPACE } from './provider-settings.js'
 
 export const name = 'video-director'
 export const inject = ['connection']
@@ -31,6 +26,7 @@ const ProviderSchema = z.object({
   requiresApiKey: z.boolean().default(false),
   model: z.string(),
   imageModel: z.string(),
+  fastMode: z.boolean().default(false),
   mcpTool: z.string(),
   mcpBaseUrl: z.string(),
   timeoutMs: z.natural().min(1_000).default(120_000),
@@ -43,6 +39,7 @@ const ProviderOverrideSchema = z.object({
   apiKey: z.string().role('secret'),
   model: z.string(),
   imageModel: z.string(),
+  fastMode: z.boolean(),
 })
 
 const RuntimeSettingsSchema = z.object({
@@ -59,39 +56,20 @@ export const Config = z.object({
 })
 
 export async function apply(ctx, config) {
-  const store = new ProjectStore(config.dataDir, config.maxAssetBytes)
-  await store.init()
-  const comfyWorkflows = new ComfyWorkflowStore(store.root)
-  await comfyWorkflows.init()
-  const vdNodes = new VdNodeRegistry(comfyWorkflows)
-
+  let host
   const assetRoutes = new Set()
   const registerAsset = async (asset) => {
     if (assetRoutes.has(asset.id)) return
     ctx.connection.fetch.register({
       path: asset.url,
       methods: ['GET', 'HEAD'],
-      fetch: request => store.assetResponse(asset.id, request),
+      fetch: request => host.store.assetResponse(asset.id, request),
     })
     assetRoutes.add(asset.id)
   }
-  for (const asset of store.listAssets()) await registerAsset(asset)
-
-  let providers
-  const providerSettings = new ProviderSettings({
-    providers: config.providers,
-    minimaxH3LicenseAccepted: config.minimaxH3LicenseAccepted,
-  }, resolved => {
-    providers?.configure(resolved.providers, resolved.minimaxH3LicenseAccepted)
-  })
-  const initialProviderSettings = providerSettings.resolved()
-  providers = new ProviderRuntime({
-    store,
-    registerAsset,
-    providers: initialProviderSettings.providers,
-    tools: ctx.get('tools'),
-    minimaxH3LicenseAccepted: initialProviderSettings.minimaxH3LicenseAccepted,
-  })
+  host = await createDirectorHost(config, { registerAsset, tools: ctx.get('tools') })
+  const { providerSettings } = host
+  ctx.on('dispose', () => host.close())
   ctx.inject(['settings'], (settingsCtx) => {
     settingsCtx.settings.installSection(ctx, PROVIDER_SETTINGS_NAMESPACE, RuntimeSettingsSchema, {
       providerOverrides: {},
@@ -101,17 +79,7 @@ export async function apply(ctx, config) {
       onChange: () => providerSettings.refresh(),
     })
   })
-  const jobs = new JobManager(store, providers, { concurrency: config.jobConcurrency })
-  await jobs.recover()
-  ctx.connection.rpc.handle('/video-director', createDirectorRpc({
-    store,
-    providers,
-    jobs,
-    registerAsset,
-    workflows: comfyWorkflows,
-    nodes: vdNodes,
-    providerSettings,
-  }))
+  ctx.connection.rpc.handle('/video-director', host.rpc)
   const skillUrl = new URL('../skills/comfyui-workflow-to-node/SKILL.md', import.meta.url)
   const skillContent = skillMarkdownBody(await readFile(skillUrl, 'utf8'))
   ctx.inject(['skills'], (skillsCtx) => {
@@ -125,5 +93,5 @@ export async function apply(ctx, config) {
       content: skillContent,
     })
   })
-  ctx.logger.info(`video-director: serving ${String((await store.listProjects()).length)} vd-project(s), ${String(comfyWorkflows.list().length)} registered comfyui-workflow(s), and ${String(vdNodes.list().length)} vd-node definition(s) from ${store.root}`)
+  ctx.logger.info(`video-director: serving ${String((await host.store.listProjects()).length)} vd-project(s), ${String(host.workflows.list().length)} registered comfyui-workflow(s), and ${String(host.nodes.list().length)} vd-node definition(s) from ${host.store.root}`)
 }

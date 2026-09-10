@@ -1,3 +1,4 @@
+import { t, useLanguage } from './i18n'
 import {
   createContext,
   Fragment,
@@ -30,7 +31,7 @@ import type {
 } from './types'
 import { referenceLabelsByKind, type DirectorReferencePreview } from './reference-previews'
 import { DEFAULT_TEXT_WORKFLOW_SYSTEM_PROMPT } from './default-system-prompt'
-import { effectiveOllamaModel, modelChoicePresentation, ollamaModelSupports } from './model-choices'
+import { codexModelForNode, effectiveOllamaModel, modelChoicePresentation, ollamaModelSupports } from './model-choices'
 import { fieldInputModeEnabled, fieldInputPortId, parameterInputCandidates } from './parameter-inputs'
 import { embeddedWorkflowInputPortIds, inputPortsFor, nodeDefinition, portHandleId, portsFor, shouldShowPortLabel, shouldShowReferencePanel } from './ports'
 import { createImeDraft, reduceImeDraft, type ImeDraftEvent, type ImeDraftState } from './ime-draft.js'
@@ -57,6 +58,7 @@ export interface DirectorRuntimeValue {
 const DirectorRuntimeContext = createContext<DirectorRuntimeValue | null>(null)
 
 export function DirectorRuntimeProvider(props: PropsWithChildren<{ value: DirectorRuntimeValue }>): ReactNode {
+  useLanguage()
   return (
     <DirectorRuntimeContext.Provider value={props.value}>
       {props.children}
@@ -193,6 +195,7 @@ type ImeSafeTextareaProps = Omit<
 }
 
 function ImeSafeTextarea({ value, onValueChange, ...props }: ImeSafeTextareaProps): ReactNode {
+  useLanguage()
   const ime = useImeSafeValue(value, onValueChange)
   return (
     <textarea
@@ -217,6 +220,7 @@ type ImeSafeInputProps = Omit<
 }
 
 function ImeSafeInput({ value, onValueChange, ...props }: ImeSafeInputProps): ReactNode {
+  useLanguage()
   const ime = useImeSafeValue(value, onValueChange)
   return (
     <input
@@ -339,6 +343,7 @@ function ModelActionButton(props: {
   busy?: boolean
   onClick(): void
 }): ReactNode {
+  useLanguage()
   return (
     <span className="vd-model-action">
       <button
@@ -374,6 +379,7 @@ function stopWheel(event: React.WheelEvent): void {
 }
 
 function StatusView(props: { data: DirectorNodeData }): ReactNode {
+  useLanguage()
   const status = props.data.status ?? 'idle'
   const frozen = props.data.frozen === true
   const progress = Math.max(0, Math.min(1, props.data.progress ?? 0))
@@ -390,10 +396,10 @@ function StatusView(props: { data: DirectorNodeData }): ReactNode {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, color, fontSize: 10 }}>
         <span style={{ width: 6, height: 6, borderRadius: '50%', background: color, flex: '0 0 auto' }} />
-        <span style={{ textTransform: 'uppercase', letterSpacing: '.06em' }}>{frozen ? 'FREEZED' : status}</span>
+        <span style={{ textTransform: 'uppercase', letterSpacing: '.06em' }}>{t(frozen ? 'FROZEN' : status)}</span>
         {!frozen && props.data.phase !== undefined && props.data.phase !== '' ? (
           <span style={{ color: palette.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {props.data.phase}
+            {t(props.data.phase)}
           </span>
         ) : null}
         {!frozen && (status === 'queued' || status === 'running') ? <span style={{ marginLeft: 'auto' }}>{Math.round(progress * 100)}%</span> : null}
@@ -420,6 +426,7 @@ function JsonEditor<T>(props: {
   invalidMessage: string
   onApply(value: T): void
 }): ReactNode {
+  useLanguage()
   const encoded = useMemo(() => JSON.stringify(props.value, null, 2) ?? '', [props.value])
   const [draft, setDraft] = useState(encoded)
   const [error, setError] = useState<string | null>(null)
@@ -454,7 +461,7 @@ function JsonEditor<T>(props: {
         style={{ ...fieldStyle, resize: 'vertical', lineHeight: 1.4, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}
       />
       <span style={{ display: 'flex', alignItems: 'center', minHeight: 28, gap: 8 }}>
-        <button type="button" className="nodrag" onClick={apply} style={buttonStyle}>Apply JSON</button>
+        <button type="button" className="nodrag" onClick={apply} style={buttonStyle}>{t("Apply JSON")}</button>
         {error !== null ? <span style={{ color: palette.danger, fontSize: 10, lineHeight: 1.3 }}>{error}</span> : null}
       </span>
     </label>
@@ -462,12 +469,13 @@ function JsonEditor<T>(props: {
 }
 
 function TextBody(props: { id: string; data: DirectorNodeData; runtime: DirectorRuntimeValue | null }): ReactNode {
+  useLanguage()
   return (
     <ImeSafeTextarea
       className="nodrag nowheel"
       value={props.data.text ?? ''}
       rows={7}
-      placeholder="Write or paste text…"
+      placeholder={t("Write or paste text…")}
       onWheel={stopWheel}
       onValueChange={value => props.runtime?.onChange(props.id, { text: value })}
       style={{ ...fieldStyle, resize: 'vertical', minHeight: 112, lineHeight: 1.5 }}
@@ -476,12 +484,13 @@ function TextBody(props: { id: string; data: DirectorNodeData; runtime: Director
 }
 
 function MediaPreview(props: { data: DirectorNodeData; onDuration(duration: number): void; onEditSketch(): void }): ReactNode {
+  useLanguage()
   const kind = mediaKind(props.data)
   const asset = props.data.asset
   if (asset === undefined) {
     return (
       <div style={{ minHeight: 90, borderRadius: 10, border: `1px dashed ${palette.border}`, display: 'grid', placeItems: 'center', color: palette.muted, fontSize: 11 }}>
-        No media attached
+        {t("No media attached")}
       </div>
     )
   }
@@ -491,12 +500,12 @@ function MediaPreview(props: { data: DirectorNodeData; onDuration(duration: numb
         type="button"
         className="nodrag nowheel vd-sketch-edit-preview"
         aria-label={`Edit sketch ${asset.name}`}
-        title="Edit sketch"
+        title={t("Edit sketch")}
         onClick={props.onEditSketch}
         onWheel={stopWheel}
       >
         <img src={asset.url} alt={asset.name} draggable={false} loading="lazy" />
-        <span>Edit sketch</span>
+        <span>{t("Edit sketch")}</span>
       </button>
     )
   }
@@ -542,6 +551,7 @@ function ReferenceAssetPreview(props: {
   kind: MediaKind
   label: string
 }): ReactNode {
+  useLanguage()
   if (props.kind === 'image' || props.kind === 'sketch' || props.kind === 'mask') {
     return <img src={props.asset.url} alt={props.label} draggable={false} loading="lazy" />
   }
@@ -557,6 +567,7 @@ function ReferenceAssetPreview(props: {
 function ReferenceThumbnail(props: {
   reference: DirectorReferencePreview
 }): ReactNode {
+  useLanguage()
   const { reference } = props
   if (reference.asset !== undefined && (reference.kind === 'image' || reference.kind === 'sketch' || reference.kind === 'mask')) {
     return <img src={reference.asset.url} alt="" draggable={false} loading="lazy" />
@@ -585,6 +596,7 @@ function ReferencePreviewDialog(props: {
   label?: string
   onClose(): void
 }): ReactNode {
+  useLanguage()
   const label = props.label ?? `Reference ${String(props.index + 1)}`
   useEffect(() => {
     const keyDown = (event: globalThis.KeyboardEvent): void => {
@@ -615,7 +627,7 @@ function ReferencePreviewDialog(props: {
             <strong id="vd-reference-dialog-title">{label}</strong>
             <span>{props.reference.kind}</span>
           </div>
-          <button type="button" aria-label={`Close ${label} preview`} title="Close" onClick={props.onClose}>
+          <button type="button" aria-label={`Close ${label} preview`} title={t("Close")} onClick={props.onClose}>
             <svg viewBox="0 0 20 20" aria-hidden="true">
               <path d="M5 5l10 10M15 5L5 15" />
             </svg>
@@ -627,7 +639,7 @@ function ReferencePreviewDialog(props: {
           ) : props.reference.kind === 'text' ? (
             <p>{props.reference.text?.trim() || 'No text content'}</p>
           ) : (
-            <p>No preview available</p>
+            <p>{t("No preview available")}</p>
           )}
         </div>
         <footer title={props.reference.sourceTitle}>{props.reference.sourceTitle}</footer>
@@ -642,6 +654,7 @@ function SystemPromptEditorDialog(props: {
   onClose(): void
   onSave(value: string): void
 }): ReactNode {
+  useLanguage()
   const [history, setHistory] = useState(() => [props.value])
   const [historyIndex, setHistoryIndex] = useState(0)
   const draft = history[historyIndex] ?? props.value
@@ -682,25 +695,25 @@ function SystemPromptEditorDialog(props: {
       >
         <header>
           <div>
-            <strong id="vd-system-prompt-editor-title">System Prompt</strong>
-            <span>Markdown editor</span>
+            <strong id="vd-system-prompt-editor-title">{t("System Prompt")}</strong>
+            <span>{t("Markdown editor")}</span>
           </div>
-          <button type="button" className="vd-system-prompt-editor-close" aria-label="Close system prompt editor" title="Close" onClick={props.onClose}>
+          <button type="button" className="vd-system-prompt-editor-close" aria-label={t("Close system prompt editor")} title={t("Close")} onClick={props.onClose}>
             <svg viewBox="0 0 20 20" aria-hidden="true">
               <path d="M5 5l10 10M15 5L5 15" />
             </svg>
           </button>
         </header>
         <div className="vd-system-prompt-editor-toolbar">
-          <button type="button" onClick={() => replaceDraft(DEFAULT_TEXT_WORKFLOW_SYSTEM_PROMPT)} disabled={draft === DEFAULT_TEXT_WORKFLOW_SYSTEM_PROMPT}>Reset</button>
+          <button type="button" onClick={() => replaceDraft(DEFAULT_TEXT_WORKFLOW_SYSTEM_PROMPT)} disabled={draft === DEFAULT_TEXT_WORKFLOW_SYSTEM_PROMPT}>{t("Reset")}</button>
           <span aria-hidden="true" />
-          <button type="button" onClick={undo} disabled={!canUndo}>Undo</button>
-          <button type="button" onClick={redo} disabled={!canRedo}>Redo</button>
-          <small>{draft.length.toLocaleString()} characters</small>
+          <button type="button" onClick={undo} disabled={!canUndo}>{t("Undo")}</button>
+          <button type="button" onClick={redo} disabled={!canRedo}>{t("Redo")}</button>
+          <small>{draft.length.toLocaleString()} {t("characters")}</small>
         </div>
         <textarea
           autoFocus
-          aria-label="System Prompt Markdown editor"
+          aria-label={t("System Prompt Markdown editor")}
           spellCheck={false}
           value={draft}
           onChange={event => replaceDraft(event.target.value)}
@@ -717,8 +730,8 @@ function SystemPromptEditorDialog(props: {
           }}
         />
         <footer>
-          <span>{draft === props.value ? 'No unsaved changes' : 'Unsaved changes'}</span>
-          <button type="button" onClick={() => props.onSave(draft)}>Save</button>
+          <span>{draft === props.value ? t("No unsaved changes") : 'Unsaved changes'}</span>
+          <button type="button" onClick={() => props.onSave(draft)}>{t("Save")}</button>
         </footer>
       </section>
     </div>,
@@ -727,6 +740,7 @@ function SystemPromptEditorDialog(props: {
 }
 
 function VideoSizeReferenceDialog(props: { onClose(): void }): ReactNode {
+  useLanguage()
   return createPortal(
     <div
       className="vd-system-prompt-editor-backdrop"
@@ -747,10 +761,10 @@ function VideoSizeReferenceDialog(props: { onClose(): void }): ReactNode {
       >
         <header>
           <div>
-            <strong id="vd-size-reference-title">Note: Size Settings Reference</strong>
-            <span>Read only · source workflow table</span>
+            <strong id="vd-size-reference-title">{t("Note: Size Settings Reference")}</strong>
+            <span>{t("Read only · source workflow table")}</span>
           </div>
-          <button type="button" className="vd-system-prompt-editor-close" aria-label="Close size settings reference" title="Close" onClick={props.onClose}>
+          <button type="button" className="vd-system-prompt-editor-close" aria-label={t("Close size settings reference")} title={t("Close")} onClick={props.onClose}>
             <svg viewBox="0 0 20 20" aria-hidden="true">
               <path d="M5 5l10 10M15 5L5 15" />
             </svg>
@@ -759,7 +773,7 @@ function VideoSizeReferenceDialog(props: { onClose(): void }): ReactNode {
         <div className="vd-size-reference-table-wrap">
           <table>
             <thead>
-              <tr><th>megapixels</th><th>Aspect</th><th>Output (multiple=32)</th></tr>
+              <tr><th>{t("megapixels")}</th><th>{t("Aspect")}</th><th>{t("Output (multiple=32)")}</th></tr>
             </thead>
             <tbody>
               {VIDEO_SIZE_REFERENCE.map(([megapixels, aspect, output]) => (
@@ -779,22 +793,23 @@ function PromptReferencesPanel(props: {
   referencePort?: VdPortDescriptor
   inputPorts: readonly VdPortDescriptor[]
 }): ReactNode {
+  useLanguage()
   const [openReferenceId, setOpenReferenceId] = useState<string | null>(null)
   const labels = referenceLabelsByKind(props.references)
   const openReferenceIndex = props.references.findIndex(reference => reference.edgeId === openReferenceId)
   const openReference = openReferenceIndex < 0 ? undefined : props.references[openReferenceIndex]
   return (
     <>
-      <section className="vd-prompt-references nodrag nowheel" aria-label="References" onWheel={stopWheel}>
+      <section className="vd-prompt-references nodrag nowheel" aria-label={t("References")} onWheel={stopWheel}>
         {props.referencePort === undefined ? null : (
           <PromptReferenceHandle port={props.referencePort} ports={props.inputPorts} top={16} />
         )}
         <header>
-          <strong>References</strong>
+          <strong>{t("References")}</strong>
           <span>{String(props.references.length)}</span>
         </header>
         {props.references.length === 0 ? (
-          <div className="vd-prompt-references-empty">No references connected</div>
+          <div className="vd-prompt-references-empty">{t("No references connected")}</div>
         ) : (
           <div className="vd-prompt-reference-list">
             {props.references.map((reference, index) => {
@@ -831,6 +846,7 @@ function PromptReferencesPanel(props: {
 }
 
 function TrimFields(props: { id: string; data: DirectorNodeData; duration?: number; runtime: DirectorRuntimeValue | null }): ReactNode {
+  useLanguage()
   const start = props.data.trim?.start ?? 0
   const end = props.data.trim?.end
   const update = (patch: Partial<NonNullable<DirectorNodeData['trim']>>): void => {
@@ -839,7 +855,7 @@ function TrimFields(props: { id: string; data: DirectorNodeData; duration?: numb
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
       <label style={labelStyle}>
-        <span>Trim start · sec</span>
+        <span>{t("Trim start · sec")}</span>
         <input
           className="nodrag nowheel"
           type="number"
@@ -853,7 +869,7 @@ function TrimFields(props: { id: string; data: DirectorNodeData; duration?: numb
         />
       </label>
       <label style={labelStyle}>
-        <span>Trim end · sec{props.duration === undefined ? '' : ` / ${props.duration.toFixed(2)}`}</span>
+        <span>{t("Trim end · sec")}{props.duration === undefined ? '' : ` / ${props.duration.toFixed(2)}`}</span>
         <input
           className="nodrag nowheel"
           type="number"
@@ -872,6 +888,7 @@ function TrimFields(props: { id: string; data: DirectorNodeData; duration?: numb
 }
 
 function TransformFields(props: { id: string; data: DirectorNodeData; runtime: DirectorRuntimeValue | null }): ReactNode {
+  useLanguage()
   const transform = props.data.transform ?? {}
   const update = (patch: NonNullable<DirectorNodeData['transform']>): void => {
     props.runtime?.onChange(props.id, { transform: { ...transform, ...patch } })
@@ -879,7 +896,7 @@ function TransformFields(props: { id: string; data: DirectorNodeData; runtime: D
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1.1fr .9fr .9fr', gap: 8 }}>
       <label style={labelStyle}>
-        <span>Aspect</span>
+        <span>{t("Aspect")}</span>
         <select
           className="nodrag"
           value={transform.aspectRatio ?? ''}
@@ -890,18 +907,19 @@ function TransformFields(props: { id: string; data: DirectorNodeData; runtime: D
         </select>
       </label>
       <label style={labelStyle}>
-        <span>Width</span>
-        <input className="nodrag nowheel" type="number" min={1} value={transform.width ?? ''} placeholder="auto" onWheel={stopWheel} onChange={event => update({ width: numberValue(event.target.value) })} style={fieldStyle} />
+        <span>{t("Width")}</span>
+        <input className="nodrag nowheel" type="number" min={1} value={transform.width ?? ''} placeholder={t("auto")} onWheel={stopWheel} onChange={event => update({ width: numberValue(event.target.value) })} style={fieldStyle} />
       </label>
       <label style={labelStyle}>
-        <span>Height</span>
-        <input className="nodrag nowheel" type="number" min={1} value={transform.height ?? ''} placeholder="auto" onWheel={stopWheel} onChange={event => update({ height: numberValue(event.target.value) })} style={fieldStyle} />
+        <span>{t("Height")}</span>
+        <input className="nodrag nowheel" type="number" min={1} value={transform.height ?? ''} placeholder={t("auto")} onWheel={stopWheel} onChange={event => update({ height: numberValue(event.target.value) })} style={fieldStyle} />
       </label>
     </div>
   )
 }
 
 function MediaBody(props: { id: string; data: DirectorNodeData; runtime: DirectorRuntimeValue | null }): ReactNode {
+  useLanguage()
   const kind = mediaKind(props.data)
   const [duration, setDuration] = useState<number | undefined>(undefined)
   return (
@@ -919,7 +937,7 @@ function MediaBody(props: { id: string; data: DirectorNodeData; runtime: Directo
       ) : null}
       {(kind === 'audio' || kind === 'video') ? <TrimFields id={props.id} data={props.data} duration={duration} runtime={props.runtime} /> : null}
       {(kind === 'image' || kind === 'video') ? <TransformFields id={props.id} data={props.data} runtime={props.runtime} /> : null}
-      {props.data.maskAsset !== undefined ? <span style={{ alignSelf: 'flex-end', color: palette.accent, fontSize: 10 }}>MASK ATTACHED</span> : null}
+      {props.data.maskAsset !== undefined ? <span style={{ alignSelf: 'flex-end', color: palette.accent, fontSize: 10 }}>{t("MASK ATTACHED")}</span> : null}
     </div>
   )
 }
@@ -961,23 +979,24 @@ function ParameterInputPlaceholder(props: {
   fieldId: string
   inputPorts: readonly VdPortDescriptor[]
 }): ReactNode {
+  useLanguage()
   const port = props.inputPorts.find(candidate => candidate.id === fieldInputPortId(props.fieldId))
   return (
     <div
       className="vd-field-input-placeholder nodrag"
       role="group"
-      aria-label={`${props.label} 文本输入端口`}
+      aria-label={t("{0} 文本输入端口", props.label)}
     >
       {port === undefined ? null : <PromptReferenceHandle port={port} ports={props.inputPorts} top="50%" />}
       <span className="vd-field-input-placeholder-heading">
         <strong>{props.label}</strong>
-        <small>INPUT · TEXT</small>
+        <small>{t("INPUT · TEXT")}</small>
       </span>
       <span className="vd-field-input-placeholder-copy">
         <span aria-hidden>◉</span>
-        <span>由上游文本驱动</span>
+        <span>{t("由上游文本驱动")}</span>
       </span>
-      <small>未连接时使用当前值；连接后由上游覆盖。</small>
+      <small>{t("未连接时使用当前值；连接后由上游覆盖。")}</small>
     </div>
   )
 }
@@ -1001,6 +1020,7 @@ function ComfyWorkflowParameterField(props: {
   inputPorts: readonly VdPortDescriptor[]
   choices?: string[]
 }): ReactNode {
+  useLanguage()
   const value = parameterValue(props.data, props.parameter)
   const update = (next: string | number | boolean): void => {
     props.runtime?.onChange(props.id, {
@@ -1035,7 +1055,7 @@ function ComfyWorkflowParameterField(props: {
       <label title={props.parameter.description || props.parameter.label} style={labelStyle}>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{props.parameter.label}</span>
         <select className="nodrag" value={current} disabled={choicePresentation.disabled} onChange={event => update(event.target.value)} style={fieldStyle}>
-          {choicePresentation.currentUnavailable ? <option value={current}>{current} · workflow default（API 未返回）</option> : null}
+          {choicePresentation.currentUnavailable ? <option value={current}>{current} {t("· workflow default（API 未返回）")}</option> : null}
           {choices.map(choice => <option key={choice} value={choice}>{choice}</option>)}
         </select>
       </label>
@@ -1050,7 +1070,7 @@ function ComfyWorkflowParameterField(props: {
           className="nodrag nowheel"
           value={String(value)}
           rows={3}
-          placeholder={props.parameter.id === 'prompt' ? PROMPT_PLACEHOLDER : undefined}
+          placeholder={props.parameter.id === 'prompt' ? t(PROMPT_PLACEHOLDER) : undefined}
           onWheel={stopWheel}
           onValueChange={update}
           style={{ ...fieldStyle, resize: 'vertical' }}
@@ -1076,7 +1096,7 @@ function ComfyWorkflowParameterField(props: {
         className="nodrag nowheel"
         type="text"
         value={String(value)}
-        placeholder={props.parameter.id === 'prompt' ? PROMPT_PLACEHOLDER : undefined}
+        placeholder={props.parameter.id === 'prompt' ? t(PROMPT_PLACEHOLDER) : undefined}
         onWheel={stopWheel}
         onValueChange={update}
         style={fieldStyle}
@@ -1094,6 +1114,7 @@ function ComfyWorkflowParameters(props: {
   placement: 'primary' | 'advanced'
   provider?: ProviderDescriptor
 }): ReactNode {
+  useLanguage()
   const groups = useMemo(() => {
     const grouped = new Map<string, ComfyWorkflowParameter[]>()
     const parameters = props.workflow.parameters
@@ -1109,7 +1130,7 @@ function ComfyWorkflowParameters(props: {
   if (groups.length === 0) return null
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <span style={{ color: palette.secondary, fontSize: 10, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase' }}>{props.placement === 'primary' ? 'Main parameters' : 'Workflow parameters'}</span>
+      <span style={{ color: palette.secondary, fontSize: 10, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase' }}>{props.placement === 'primary' ? t("Main parameters") : 'Workflow parameters'}</span>
       {groups.map(([group, parameters]) => (
         <fieldset key={group} style={{ display: 'grid', gridTemplateColumns: parameters.length > 1 ? 'repeat(2, minmax(0, 1fr))' : '1fr', gap: 8, minWidth: 0, margin: 0, padding: 9, border: `1px solid ${palette.subtleBorder}`, borderRadius: 9, background: '#f8fafc' }}>
           <legend style={{ padding: '0 4px', color: palette.muted, fontSize: 9, fontWeight: 650 }}>{group}</legend>
@@ -1143,6 +1164,7 @@ function DefinitionField(props: {
   inputPorts: readonly VdPortDescriptor[]
   choices?: string[]
 }): ReactNode {
+  useLanguage()
   const stored = NODE_DATA_FIELD_IDS.has(props.field.id)
     ? props.data[props.field.id]
     : props.data.workflowValues?.[props.field.id]
@@ -1173,7 +1195,7 @@ function DefinitionField(props: {
       <label title={props.field.description || props.field.label} style={labelStyle}>
         <span>{props.field.label}</span>
         <select className="nodrag" value={current} disabled={choicePresentation.disabled} onChange={event => update(event.target.value)} style={fieldStyle}>
-          {choicePresentation.currentUnavailable ? <option value={current}>{current} · workflow default（API 未返回）</option> : null}
+          {choicePresentation.currentUnavailable ? <option value={current}>{current} {t("· workflow default（API 未返回）")}</option> : null}
           {choices.map(choice => <option key={choice} value={choice}>{choice}</option>)}
         </select>
       </label>
@@ -1187,7 +1209,7 @@ function DefinitionField(props: {
           className="nodrag nowheel"
           value={String(value)}
           rows={props.field.id === 'prompt' ? 4 : 2}
-          placeholder={props.field.id === 'prompt' ? PROMPT_PLACEHOLDER : undefined}
+          placeholder={props.field.id === 'prompt' ? t(PROMPT_PLACEHOLDER) : undefined}
           onWheel={stopWheel}
           onValueChange={update}
           style={{ ...fieldStyle, resize: 'vertical', lineHeight: 1.45 }}
@@ -1217,7 +1239,7 @@ function DefinitionField(props: {
         value={String(value)}
         minLength={props.field.minLength}
         maxLength={props.field.maxLength}
-        placeholder={props.field.id === 'prompt' ? PROMPT_PLACEHOLDER : undefined}
+        placeholder={props.field.id === 'prompt' ? t(PROMPT_PLACEHOLDER) : undefined}
         onWheel={stopWheel}
         onValueChange={update}
         style={fieldStyle}
@@ -1236,6 +1258,7 @@ function DefinitionFields(props: {
   provider?: ProviderDescriptor
   workflow?: ComfyWorkflowDescriptor
 }): ReactNode {
+  useLanguage()
   const fields = props.definition.fields
     .filter(field => field.placement === props.placement)
     .sort((left, right) => (left.order ?? 0) - (right.order ?? 0))
@@ -1264,6 +1287,7 @@ function GenerationNodeBody(props: {
   inputPorts: readonly VdPortDescriptor[]
   referencePort?: VdPortDescriptor
 }): ReactNode {
+  useLanguage()
   const [systemPromptEditorOpen, setSystemPromptEditorOpen] = useState(false)
   const [sizeReferenceOpen, setSizeReferenceOpen] = useState(false)
   const textWorkflow = props.data.kind === 'prompt-enhancer'
@@ -1290,11 +1314,13 @@ function GenerationNodeBody(props: {
   const modelPlaceholder = provider?.imageModel ?? provider?.model ?? (h3 ? 'minimax-h3' : 'model or family')
   const legacyModelId = props.data.modelFamily === 'minimax-h3' ? undefined : props.data.modelFamily
   const selectedModelId = props.data.modelId ?? legacyModelId ?? ''
-  const availableModels = provider?.availableModels ?? []
+  const needsImageInput = imageWorkflow || (props.runtime?.references[props.id] ?? []).some(reference => ['image', 'sketch', 'mask'].includes(reference.kind))
+  const availableModels = (provider?.availableModels ?? []).filter(id => provider?.kind !== 'codex-plan' || !needsImageInput
+    || provider.codexModels?.find(model => model.id === id)?.inputModalities.includes('image') !== false)
   const effectiveModelId = provider?.kind === 'ollama'
     ? effectiveOllamaModel(availableModels, provider.model, props.data.modelId) ?? ''
     : provider?.kind === 'codex-plan'
-      ? (availableModels.includes(selectedModelId) ? selectedModelId : (provider.model ?? availableModels[0] ?? ''))
+      ? codexModelForNode(props.data, provider) ?? ''
       : selectedModelId
   const selectedModelDetails = provider?.modelDetails?.find(details => details.id === effectiveModelId)
   const thinkingSupported = ollamaModelSupports(provider?.modelDetails, effectiveModelId || undefined, 'thinking')
@@ -1379,10 +1405,10 @@ function GenerationNodeBody(props: {
           ? 'minmax(0, .64fr) minmax(0, 1.36fr) 28px 28px'
           : 'minmax(0, .64fr) minmax(0, 1.36fr) 28px'
         : props.data.kind === 'image-generation' && imageModeVisible
-          ? 'minmax(105px, .72fr) minmax(0, 1fr) minmax(70px, .46fr)'
-          : 'minmax(105px, .62fr) minmax(0, 1.38fr)', gap: textWorkflow ? 6 : 8 }}>
+          ? `minmax(105px, .72fr) minmax(0, 1fr) minmax(70px, .46fr)${provider?.kind === 'codex-plan' ? ' 28px' : ''}`
+          : `minmax(105px, .62fr) minmax(0, 1.38fr)${imageWorkflow && provider?.kind === 'codex-plan' ? ' 28px' : ''}`, gap: textWorkflow ? 6 : 8 }}>
         <label style={labelStyle}>
-          <span>Provider</span>
+          <span>{t("Provider")}</span>
           <select
             className="nodrag"
             value={selectedProviderId ?? ''}
@@ -1418,7 +1444,7 @@ function GenerationNodeBody(props: {
         </label>
         {registryProvider && !pinnedWorkflow ? (
           <label style={labelStyle}>
-            <span>Workflow</span>
+            <span>{t("Workflow")}</span>
             <select
               className="nodrag"
               value={registryMediaWorkflow
@@ -1429,12 +1455,12 @@ function GenerationNodeBody(props: {
               }}
               style={fieldStyle}
             >
-              {registryMediaWorkflow ? null : <option value="">Select workflow</option>}
-              {!registryMediaWorkflow && legacyInlineWorkflow ? <option value="__legacy-inline__">Legacy inline workflow</option> : null}
+              {registryMediaWorkflow ? null : <option value="">{t("Select workflow")}</option>}
+              {!registryMediaWorkflow && legacyInlineWorkflow ? <option value="__legacy-inline__">{t("Legacy inline workflow")}</option> : null}
               {props.data.workflowId !== undefined && selectedWorkflow === undefined ? (
-                <option value={props.data.workflowId}>Missing workflow · {props.data.workflowId}</option>
+                <option value={props.data.workflowId}>{t("Missing workflow ·")} {props.data.workflowId}</option>
               ) : null}
-              {workflows.length === 0 ? <option value="" disabled>No compatible workflows</option> : null}
+              {workflows.length === 0 ? <option value="" disabled>{t("No compatible workflows")}</option> : null}
               {workflows.map(workflow => (
                 <option key={workflow.id} value={workflow.id}>
                   {workflow.name}{registryMediaWorkflow ? '' : `${workflow.kind === 'image-edit' ? ' · image edit' : ''}${workflow.builtIn ? ' · built-in' : ''}`}
@@ -1444,14 +1470,14 @@ function GenerationNodeBody(props: {
           </label>
         ) : pinnedWorkflow ? (
           <label style={labelStyle}>
-            <span>Custom Node</span>
+            <span>{t("Custom Node")}</span>
             <div style={{ ...fieldStyle, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', background: '#f8fafc' }} title={`${definition?.type ?? ''}@${definition?.version ?? ''}`}>
               {definition?.title ?? props.data.title}
             </div>
           </label>
         ) : provider?.kind === 'ollama' || provider?.kind === 'codex-plan' ? (
           <label style={labelStyle}>
-            <span>Model</span>
+            <span>{t("Model")}</span>
             <select
               className="nodrag"
               value={effectiveModelId}
@@ -1462,15 +1488,16 @@ function GenerationNodeBody(props: {
               })}
               style={fieldStyle}
             >
-              {availableModels.length === 0 ? (
-                <option value="">{provider.modelDiscovery?.state === 'loading' ? 'Loading models…' : '-- No available models --'}</option>
+              {effectiveModelId !== '' && !availableModels.includes(effectiveModelId) ? <option value={effectiveModelId} disabled>{effectiveModelId} · {t("Unavailable")}</option> : null}
+              {effectiveModelId === '' ? (
+                <option value="">{provider.modelDiscovery?.state === 'loading' ? t("Loading models…") : t("No available models")}</option>
               ) : null}
-              {availableModels.map(model => <option key={model} value={model}>{model}</option>)}
+              {availableModels.map(model => <option key={model} value={model}>{provider.codexModels?.find(candidate => candidate.id === model)?.displayName ?? model}</option>)}
             </select>
           </label>
         ) : (
           <label style={labelStyle}>
-            <span>Model</span>
+            <span>{t("Model")}</span>
             <input
               className="nodrag"
               value={selectedModelId}
@@ -1485,26 +1512,26 @@ function GenerationNodeBody(props: {
         )}
         {imageModeVisible ? (
           <label style={labelStyle}>
-            <span>Mode</span>
+            <span>{t("Mode")}</span>
             <select
               className="nodrag"
-              aria-label="Image mode"
+              aria-label={t("Image mode")}
               value={props.data.imageMode ?? 'generate'}
               onChange={event => props.runtime?.onChange(props.id, {
                 imageMode: event.target.value === 'edit' ? 'edit' : 'generate',
               })}
               style={fieldStyle}
             >
-              <option value="generate">Gen</option>
-              <option value="edit">Edit</option>
+              <option value="generate">{t("Gen")}</option>
+              <option value="edit">{t("Edit")}</option>
             </select>
           </label>
         ) : null}
-        {textWorkflow ? (
+        {textWorkflow || (imageWorkflow && provider?.kind === 'codex-plan') ? (
           <ModelActionButton
             action="refresh"
-            label={modelDiscoveryLoading ? 'Refreshing models…' : 'Refresh models'}
-            disabled={provider?.kind !== 'ollama' || provider.configured === false || modelDiscoveryLoading}
+            label={modelDiscoveryLoading ? t('Refreshing models…') : t('Refresh models')}
+            disabled={(provider?.kind !== 'ollama' && provider?.kind !== 'codex-plan') || provider.configured === false || modelDiscoveryLoading}
             busy={modelDiscoveryLoading}
             onClick={() => {
               if (provider !== undefined) void props.runtime?.onRefreshModels(provider.id)
@@ -1541,20 +1568,20 @@ function GenerationNodeBody(props: {
       ) : (
         <>
           {fieldInputModeEnabled(props.data, 'prompt') ? (
-            <ParameterInputPlaceholder label="Prompt" fieldId="prompt" inputPorts={props.inputPorts} />
+            <ParameterInputPlaceholder label={t("Prompt")} fieldId="prompt" inputPorts={props.inputPorts} />
           ) : (
             <label style={labelStyle}>
-              <span>Prompt</span>
+              <span>{t("Prompt")}</span>
               <div style={{ position: 'relative' }}>
                 {referencePanelWorkflow || props.referencePort === undefined ? null : (
                   <PromptReferenceHandle port={props.referencePort} ports={props.inputPorts} />
                 )}
                 <ImeSafeTextarea
                   className="nodrag nowheel"
-                  aria-label="Prompt"
+                  aria-label={t("Prompt")}
                   value={props.data.prompt ?? ''}
                   rows={4}
-                  placeholder={PROMPT_PLACEHOLDER}
+                  placeholder={t(PROMPT_PLACEHOLDER)}
                   onWheel={stopWheel}
                   onValueChange={value => props.runtime?.onChange(props.id, { prompt: value })}
                   style={{ ...fieldStyle, resize: 'vertical', lineHeight: 1.45 }}
@@ -1571,27 +1598,27 @@ function GenerationNodeBody(props: {
           ) : null}
           {registeredVideoWorkflow && selectedWorkflow !== undefined ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <span style={{ color: palette.secondary, fontSize: 10, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase' }}>Main parameters</span>
+              <span style={{ color: palette.secondary, fontSize: 10, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase' }}>{t("Main parameters")}</span>
               <fieldset style={{ display: 'grid', gridTemplateColumns: textImageVideoWorkflow ? 'repeat(2, minmax(0, 1fr))' : 'minmax(0, 1fr)', gap: 8, minWidth: 0, margin: 0, padding: 9, border: `1px solid ${palette.subtleBorder}`, borderRadius: 9, background: '#f8fafc' }}>
-                <legend style={{ padding: '0 4px', color: palette.muted, fontSize: 9, fontWeight: 650 }}>Video</legend>
+                <legend style={{ padding: '0 4px', color: palette.muted, fontSize: 9, fontWeight: 650 }}>{t("Video")}</legend>
                 {textImageVideoWorkflow ? (
                   <label style={labelStyle}>
-                    <span>Mode</span>
+                    <span>{t("Mode")}</span>
                     <select
                       className="nodrag"
-                      aria-label="Video mode"
+                      aria-label={t("Video mode")}
                       value={props.data.videoMode ?? 'text-to-video'}
                       onChange={event => props.runtime?.onChange(props.id, {
                         videoMode: event.target.value as NonNullable<DirectorNodeData['videoMode']>,
                       })}
                       style={fieldStyle}
                     >
-                      {VIDEO_MODE_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                      {VIDEO_MODE_OPTIONS.map(option => <option key={option.value} value={option.value}>{t(option.label)}</option>)}
                     </select>
                   </label>
                 ) : null}
                 <label style={labelStyle}>
-                  <span>Duration</span>
+                  <span>{t("Duration")}</span>
                   <input
                     className="nodrag nowheel"
                     type="number"
@@ -1606,7 +1633,7 @@ function GenerationNodeBody(props: {
                 </label>
               </fieldset>
               <fieldset style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, minWidth: 0, margin: 0, padding: 9, border: `1px solid ${palette.subtleBorder}`, borderRadius: 9, background: '#f8fafc' }}>
-                <legend style={{ padding: '0 4px', color: palette.muted, fontSize: 9, fontWeight: 650 }}>Resolution Selector</legend>
+                <legend style={{ padding: '0 4px', color: palette.muted, fontSize: 9, fontWeight: 650 }}>{t("Resolution Selector")}</legend>
                 {videoAspectRatioParameter === undefined ? null : (
                   <ComfyWorkflowParameterField
                     id={props.id}
@@ -1622,15 +1649,15 @@ function GenerationNodeBody(props: {
                     <button
                       type="button"
                       className="nodrag vd-megapixels-help"
-                      aria-label="Open Note: Size Settings Reference"
-                      title="Open the read-only size settings reference"
+                      aria-label={t("Open Note: Size Settings Reference")}
+                      title={t("Open the read-only size settings reference")}
                       onClick={() => setSizeReferenceOpen(true)}
                     >
-                      MegaPixels ↗
+                      {t("MegaPixels ↗")}
                     </button>
                     <select
                       className="nodrag"
-                      aria-label="MegaPixels"
+                      aria-label={t("MegaPixels")}
                       value={String(parameterValue(props.data, videoMegapixelsParameter))}
                       onChange={event => props.runtime?.onChange(props.id, {
                         workflowValues: {
@@ -1650,11 +1677,11 @@ function GenerationNodeBody(props: {
             </div>
           ) : registeredImageDimensions && selectedWorkflow !== undefined ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <span style={{ color: palette.secondary, fontSize: 10, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase' }}>Main parameters</span>
+              <span style={{ color: palette.secondary, fontSize: 10, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase' }}>{t("Main parameters")}</span>
               <fieldset style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, minWidth: 0, margin: 0, padding: 9, border: `1px solid ${palette.subtleBorder}`, borderRadius: 9, background: '#f8fafc' }}>
-                <legend style={{ padding: '0 4px', color: palette.muted, fontSize: 9, fontWeight: 650 }}>Image size</legend>
+                <legend style={{ padding: '0 4px', color: palette.muted, fontSize: 9, fontWeight: 650 }}>{t("Image size")}</legend>
                 <label style={labelStyle}>
-                  <span>Width</span>
+                  <span>{t("Width")}</span>
                   <input
                     className="nodrag nowheel"
                     type="number"
@@ -1667,7 +1694,7 @@ function GenerationNodeBody(props: {
                   />
                 </label>
                 <label style={labelStyle}>
-                  <span>Height</span>
+                  <span>{t("Height")}</span>
                   <input
                     className="nodrag nowheel"
                     type="number"
@@ -1683,11 +1710,11 @@ function GenerationNodeBody(props: {
             </div>
           ) : registeredAudioWorkflow ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <span style={{ color: palette.secondary, fontSize: 10, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase' }}>Main parameters</span>
+              <span style={{ color: palette.secondary, fontSize: 10, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase' }}>{t("Main parameters")}</span>
               <fieldset style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, minWidth: 0, margin: 0, padding: 9, border: `1px solid ${palette.subtleBorder}`, borderRadius: 9, background: '#f8fafc' }}>
-                <legend style={{ padding: '0 4px', color: palette.muted, fontSize: 9, fontWeight: 650 }}>Output</legend>
+                <legend style={{ padding: '0 4px', color: palette.muted, fontSize: 9, fontWeight: 650 }}>{t("Output")}</legend>
                 <label style={labelStyle}>
-                  <span>Duration</span>
+                  <span>{t("Duration")}</span>
                   <input
                     className="nodrag nowheel"
                     type="number"
@@ -1736,7 +1763,7 @@ function GenerationNodeBody(props: {
 
       <details className="nodrag nowheel" onWheel={stopWheel} style={{ border: `1px solid ${palette.subtleBorder}`, borderRadius: 9, background: '#f8fafc' }}>
         <summary style={{ padding: '8px 9px', color: palette.secondary, cursor: 'pointer', fontSize: 11, fontWeight: 650, userSelect: 'none' }}>
-          Advanced · {String(advancedCount)} fields
+          {t("Advanced ·")} {String(advancedCount)} {t("fields")}
         </summary>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '2px 9px 9px' }}>
 
@@ -1749,16 +1776,16 @@ function GenerationNodeBody(props: {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
           <div style={labelStyle}>
             <span className="vd-system-prompt-heading">
-              <span>System Prompt</span>
-              <button type="button" className="nodrag" onClick={() => setSystemPromptEditorOpen(true)}>(inspect default)</button>
+              <span>{t("System Prompt")}</span>
+              <button type="button" className="nodrag" onClick={() => setSystemPromptEditorOpen(true)}>{t("(inspect default)")}</button>
             </span>
             <textarea
               className="nodrag nowheel"
-              aria-label="System Prompt"
+              aria-label={t("System Prompt")}
               value={effectiveSystemPrompt}
               rows={3}
               readOnly
-              title="Use (inspect default) to edit this Markdown system prompt."
+              title={t("Use (inspect default) to edit this Markdown system prompt.")}
               onWheel={stopWheel}
               style={{ ...fieldStyle, resize: 'vertical', lineHeight: 1.4 }}
             />
@@ -1766,7 +1793,7 @@ function GenerationNodeBody(props: {
           {provider?.kind === 'ollama' ? (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
             <label style={labelStyle}>
-              <span>Context length</span>
+              <span>{t("Context length")}</span>
               <input
                 className="nodrag nowheel"
                 type="number"
@@ -1793,7 +1820,7 @@ function GenerationNodeBody(props: {
                 checked={thinkingSupported && props.data.thinking === true}
                 onChange={event => props.runtime?.onChange(props.id, { thinking: event.target.checked })}
               />
-              Thinking{thinkingSupported ? '' : ' · unsupported'}
+              {t("Thinking")}{thinkingSupported ? '' : ' · unsupported'}
             </label>
           </div>
           ) : null}
@@ -1801,15 +1828,15 @@ function GenerationNodeBody(props: {
       ) : null}
 
       {!registrySpecificControls && props.data.kind !== 'prompt-enhancer' && fieldInputModeEnabled(props.data, 'negativePrompt') ? (
-        <ParameterInputPlaceholder label="Negative prompt" fieldId="negativePrompt" inputPorts={props.inputPorts} />
+        <ParameterInputPlaceholder label={t("Negative prompt")} fieldId="negativePrompt" inputPorts={props.inputPorts} />
       ) : !registrySpecificControls && props.data.kind !== 'prompt-enhancer' ? (
         <label style={labelStyle}>
-          <span>Negative prompt</span>
+          <span>{t("Negative prompt")}</span>
           <ImeSafeTextarea
             className="nodrag nowheel"
             value={props.data.negativePrompt ?? ''}
             rows={2}
-            placeholder="Optional exclusions…"
+            placeholder={t("Optional exclusions…")}
             onWheel={stopWheel}
             onValueChange={value => props.runtime?.onChange(props.id, { negativePrompt: value })}
             style={{ ...fieldStyle, resize: 'vertical', lineHeight: 1.4 }}
@@ -1819,9 +1846,9 @@ function GenerationNodeBody(props: {
 
       {workflowSeedControls ? (
         <fieldset style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, minWidth: 0, margin: 0, padding: 9, border: `1px solid ${palette.subtleBorder}`, borderRadius: 9, background: '#f8fafc' }}>
-          <legend style={{ padding: '0 4px', color: palette.muted, fontSize: 9, fontWeight: 650 }}>Seed</legend>
+          <legend style={{ padding: '0 4px', color: palette.muted, fontSize: 9, fontWeight: 650 }}>{t("Seed")}</legend>
           <label style={labelStyle}>
-            <span>Seed</span>
+            <span>{t("Seed")}</span>
             <input
               className="nodrag nowheel"
               type="number"
@@ -1834,7 +1861,7 @@ function GenerationNodeBody(props: {
             />
           </label>
           <label style={labelStyle}>
-            <span>Control after generate</span>
+            <span>{t("Control after generate")}</span>
             <select
               className="nodrag"
               value={props.data.seedControlAfterGenerate ?? 'fixed'}
@@ -1843,10 +1870,10 @@ function GenerationNodeBody(props: {
               })}
               style={fieldStyle}
             >
-              <option value="fixed">fixed</option>
-              <option value="increment">increment</option>
-              <option value="decrement">decrement</option>
-              <option value="randomize">randomize</option>
+              <option value="fixed">{t("fixed")}</option>
+              <option value="increment">{t("increment")}</option>
+              <option value="decrement">{t("decrement")}</option>
+              <option value="randomize">{t("randomize")}</option>
             </select>
           </label>
         </fieldset>
@@ -1858,9 +1885,9 @@ function GenerationNodeBody(props: {
 
       {registeredAudioWorkflow ? (
         <fieldset style={{ minWidth: 0, margin: 0, padding: 9, border: `1px solid ${palette.subtleBorder}`, borderRadius: 9, background: '#f8fafc' }}>
-          <legend style={{ padding: '0 4px', color: palette.muted, fontSize: 9, fontWeight: 650 }}>Sampling</legend>
+          <legend style={{ padding: '0 4px', color: palette.muted, fontSize: 9, fontWeight: 650 }}>{t("Sampling")}</legend>
           <label style={labelStyle}>
-            <span>Sampling steps</span>
+            <span>{t("Sampling steps")}</span>
             <input
               className="nodrag nowheel"
               type="number"
@@ -1878,9 +1905,9 @@ function GenerationNodeBody(props: {
 
       {registeredVideoWorkflow ? (
         <fieldset style={{ minWidth: 0, margin: 0, padding: 9, border: `1px solid ${palette.subtleBorder}`, borderRadius: 9, background: '#f8fafc' }}>
-          <legend style={{ padding: '0 4px', color: palette.muted, fontSize: 9, fontWeight: 650 }}>Sampling</legend>
+          <legend style={{ padding: '0 4px', color: palette.muted, fontSize: 9, fontWeight: 650 }}>{t("Sampling")}</legend>
           <label style={labelStyle}>
-            <span>Steps</span>
+            <span>{t("Steps")}</span>
             <input
               className="nodrag nowheel"
               type="number"
@@ -1898,21 +1925,21 @@ function GenerationNodeBody(props: {
       {dimensioned && !registrySpecificControls ? (
         <div style={{ display: 'grid', gridTemplateColumns: timed ? 'repeat(4, 1fr)' : 'repeat(3, 1fr)', gap: 7 }}>
           <label style={labelStyle}>
-            <span>Width</span>
+            <span>{t("Width")}</span>
             <input className="nodrag nowheel" type="number" min={1} step={h3 ? 32 : 1} value={props.data.width ?? ''} onWheel={stopWheel} onChange={event => props.runtime?.onChange(props.id, { width: numberValue(event.target.value) })} style={fieldStyle} />
           </label>
           <label style={labelStyle}>
-            <span>Height</span>
+            <span>{t("Height")}</span>
             <input className="nodrag nowheel" type="number" min={1} step={h3 ? 32 : 1} value={props.data.height ?? ''} onWheel={stopWheel} onChange={event => props.runtime?.onChange(props.id, { height: numberValue(event.target.value) })} style={fieldStyle} />
           </label>
           {timed ? (
             <label style={labelStyle}>
-              <span>Duration</span>
+              <span>{t("Duration")}</span>
               <input className="nodrag nowheel" type="number" min={0.1} max={h3 ? 15 : undefined} step="0.1" value={props.data.duration ?? ''} onWheel={stopWheel} onChange={event => props.runtime?.onChange(props.id, { duration: numberValue(event.target.value) })} style={fieldStyle} />
             </label>
           ) : null}
           <label style={labelStyle}>
-            <span>{timed ? 'FPS' : 'Seed'}</span>
+            <span>{timed ? 'FPS' : t("Seed")}</span>
             <input
               className="nodrag nowheel"
               type="number"
@@ -1934,7 +1961,7 @@ function GenerationNodeBody(props: {
             checked={props.data.includeAudio === true}
             onChange={event => props.runtime?.onChange(props.id, { includeAudio: event.target.checked })}
           />
-          Include reference video audio when its role permits it
+          {t("Include reference video audio when its role permits it")}
         </label>
       ) : null}
 
@@ -1942,7 +1969,7 @@ function GenerationNodeBody(props: {
         <>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr .8fr 1fr', gap: 7 }}>
             <label style={labelStyle}>
-              <span>H3 variant</span>
+              <span>{t("H3 variant")}</span>
               <select
                 className="nodrag"
                 value={props.data.variant ?? 'standard'}
@@ -1955,12 +1982,12 @@ function GenerationNodeBody(props: {
                 }}
                 style={fieldStyle}
               >
-                <option value="standard" disabled={turboTopology}>Standard{turboTopology ? ' · replace graph first' : ''}</option>
+                <option value="standard" disabled={turboTopology}>{t("Standard")}{turboTopology ? ' · replace graph first' : ''}</option>
                 <option value="turbo">Turbo LoRA</option>
               </select>
             </label>
             <label style={labelStyle}>
-              <span>Steps{props.data.variant === 'turbo' ? ' · 4–8' : ''}</span>
+              <span>{t("Steps")}{props.data.variant === 'turbo' ? ' · 4–8' : ''}</span>
               <input
                 className="nodrag nowheel"
                 type="number"
@@ -1974,7 +2001,7 @@ function GenerationNodeBody(props: {
               />
             </label>
             <label style={labelStyle}>
-              <span>Scheduler</span>
+              <span>{t("Scheduler")}</span>
               <select className="nodrag" value={props.data.scheduler ?? 'simple'} onChange={() => props.runtime?.onChange(props.id, { scheduler: 'simple' })} style={fieldStyle}>
                 <option value="simple">simple</option>
               </select>
@@ -1992,10 +2019,10 @@ function GenerationNodeBody(props: {
 
       {legacyInlineWorkflow && !registryMediaWorkflow ? (
         <details className="nodrag nowheel" onWheel={stopWheel} style={{ borderTop: `1px solid ${palette.subtleBorder}`, paddingTop: 8 }}>
-          <summary style={{ color: palette.secondary, cursor: 'pointer', fontSize: 11, userSelect: 'none' }}>Legacy inline workflow JSON &amp; bindings</summary>
+          <summary style={{ color: palette.secondary, cursor: 'pointer', fontSize: 11, userSelect: 'none' }}>{t("Legacy inline workflow JSON & bindings")}</summary>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingTop: 10 }}>
             <JsonEditor
-              label="ComfyUI API workflow"
+              label={t("ComfyUI API workflow")}
               value={props.data.workflow ?? {}}
               rows={9}
               validate={isObject}
@@ -2003,7 +2030,7 @@ function GenerationNodeBody(props: {
               onApply={workflow => props.runtime?.onChange(props.id, { workflow })}
             />
             <JsonEditor
-              label="Bindings"
+              label={t("Bindings")}
               value={props.data.bindings ?? []}
               rows={6}
               validate={isBindings}
@@ -2038,6 +2065,7 @@ function GenerationNodeBody(props: {
 }
 
 function OutputTextBody(props: { data: DirectorNodeData }): ReactNode {
+  useLanguage()
   return (
     <div>
       <div style={{ padding: 10, minHeight: 80, borderRadius: 9, background: palette.field, color: palette.ink, fontSize: 11, lineHeight: 1.5, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
@@ -2069,6 +2097,7 @@ function outputFileName(base: string, assetName: string, index: number, total: n
 }
 
 function OutputSinkBody(props: { id: string; data: DirectorNodeData; runtime: DirectorRuntimeValue | null }): ReactNode {
+  useLanguage()
   const assets = props.data.assets ?? (props.data.asset === undefined ? [] : [props.data.asset])
   const text = props.data.text
   const isSave = props.data.kind === 'save'
@@ -2079,7 +2108,7 @@ function OutputSinkBody(props: { id: string; data: DirectorNodeData; runtime: Di
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {empty ? (
           <div style={{ minHeight: 92, borderRadius: 10, border: `1px dashed ${palette.border}`, display: 'grid', placeItems: 'center', padding: 12, color: palette.muted, fontSize: 11, textAlign: 'center' }}>
-            Connect a generator and run it to receive output.
+            {t("Connect a generator and run it to receive output.")}
           </div>
         ) : null}
         {text !== undefined && text !== '' ? (
@@ -2094,7 +2123,7 @@ function OutputSinkBody(props: { id: string; data: DirectorNodeData; runtime: Di
         {isSave ? (
           <>
             <label style={labelStyle}>
-              <span>Output name</span>
+              <span>{t("Output name")}</span>
               <input
                 className="nodrag"
                 value={props.data.outputName ?? ''}
@@ -2106,16 +2135,16 @@ function OutputSinkBody(props: { id: string; data: DirectorNodeData; runtime: Di
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
               {assets.map((asset, index) => (
                 <button key={asset.id} type="button" className="nodrag" onClick={() => downloadUrl(asset.url, outputFileName(props.data.outputName ?? '', asset.name, index, assets.length))} style={{ ...buttonStyle, background: palette.accent, color: '#fff' }}>
-                  Download{assets.length > 1 ? ` ${String(index + 1)}` : ''}
+                  {t("Download")}{assets.length > 1 ? ` ${String(index + 1)}` : ''}
                 </button>
               ))}
               {text !== undefined && text !== '' ? (
                 <button type="button" className="nodrag" onClick={() => downloadText(text, props.data.outputName?.trim() || 'output.txt')} style={{ ...buttonStyle, background: palette.accent, color: '#fff' }}>
-                  Download text
+                  {t("Download text")}
                 </button>
               ) : null}
             </div>
-            {!empty ? <span style={{ color: palette.muted, fontSize: 9, lineHeight: 1.4 }}>Outputs already live in the project asset store; Download exports a local copy without duplicating server bytes.</span> : null}
+            {!empty ? <span style={{ color: palette.muted, fontSize: 9, lineHeight: 1.4 }}>{t("Outputs already live in the project asset store; Download exports a local copy without duplicating server bytes.")}</span> : null}
           </>
         ) : null}
       </div>
@@ -2131,6 +2160,7 @@ function PromptReferenceHandle(props: {
   ports: readonly VdPortDescriptor[]
   top?: number | string
 }): ReactNode {
+  useLanguage()
   const label = `${props.port.label}${props.port.required ? ' *' : ''}`
   const description = `${label} · ${props.port.types.join(' / ')}${props.port.multiple ? ' · multiple' : ''}`
   return (
@@ -2161,6 +2191,7 @@ function PortHandles(props: {
   allPorts?: readonly VdPortDescriptor[]
   showLabels?: boolean
 }): ReactNode {
+  useLanguage()
   const incoming = props.direction === 'input'
   return props.ports.map((port, index) => {
     const top = props.ports.length === 1
@@ -2214,6 +2245,7 @@ function TriggerBody(props: {
   data: DirectorNodeData
   runtime: DirectorRuntimeValue | null
 }): ReactNode {
+  useLanguage()
   const action = props.data.kind === 'ollama-eject'
     ? 'ollama-eject'
     : props.data.kind === 'comfyui-clear' ? 'comfyui-clear' : props.data.vramAction ?? 'skip'
@@ -2233,10 +2265,10 @@ function TriggerBody(props: {
     <div style={{ display: 'grid', gap: 9 }}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 34px', gap: 7, alignItems: 'end' }}>
         <label style={labelStyle}>
-          <span>VRAM action</span>
+          <span>{t("VRAM action")}</span>
           <select
             className="nodrag nowheel"
-            aria-label="VRAM action"
+            aria-label={t("VRAM action")}
             value={action}
             disabled={running}
             onChange={event => props.runtime?.onChange(props.id, {
@@ -2246,16 +2278,16 @@ function TriggerBody(props: {
             })}
             style={{ ...fieldStyle, minWidth: 0 }}
           >
-            <option value="skip">-- SKIP -- — by pass &amp; no actions to take</option>
-            <option value="ollama-eject">Ollama — eject all loaded models</option>
-            <option value="comfyui-clear">ComfyUI — unload models &amp; clear cache</option>
+            <option value="skip">{t("-- SKIP -- — by pass & no actions to take")}</option>
+            <option value="ollama-eject">{t("Ollama — eject all loaded models")}</option>
+            <option value="comfyui-clear">{t("ComfyUI — unload models & clear cache")}</option>
           </select>
         </label>
         <button
           type="button"
           className="nodrag nopan"
-          aria-label="Run VRAM trigger now"
-          title="Run VRAM trigger now"
+          aria-label={t("Run VRAM trigger now")}
+          title={t("Run VRAM trigger now")}
           disabled={running}
           onClick={() => { void props.runtime?.onRunNode(props.id).catch(() => {}) }}
           style={{
@@ -2274,10 +2306,10 @@ function TriggerBody(props: {
       </div>
       <span style={{ color: palette.muted, fontSize: 9, lineHeight: 1.35 }}>{description}</span>
       {action === 'comfyui-clear' ? <label style={labelStyle}>
-        <span>Release model wait (seconds)</span>
+        <span>{t("Release model wait (seconds)")}</span>
         <input
           className="nodrag nowheel"
-          aria-label="Release model wait seconds"
+          aria-label={t("Release model wait seconds")}
           type="number"
           min={0}
           max={300}
@@ -2294,13 +2326,14 @@ function TriggerBody(props: {
           }}
           style={fieldStyle}
         />
-        <span style={{ color: palette.muted, fontSize: 8.5 }}>Wait after ComfyUI accepts <code>/free</code> before continuing.</span>
+        <span style={{ color: palette.muted, fontSize: 8.5 }}>{t("Wait after ComfyUI accepts")} <code>/free</code> {t("before continuing.")}</span>
       </label> : null}
     </div>
   )
 }
 
 export const DirectorNodeView = memo(function DirectorNodeView(props: NodeProps<DirectorFlowNode>): ReactNode {
+  useLanguage()
   const runtime = useDirectorRuntime()
   const updateNodeInternals = useUpdateNodeInternals()
   const isWorkflow = WORKFLOW_KINDS.has(props.data.kind)
@@ -2360,10 +2393,10 @@ export const DirectorNodeView = memo(function DirectorNodeView(props: NodeProps<
       {definition === undefined && hasSource ? <Handle type="source" id="out" position={Position.Right} style={{ width: 10, height: 10, border: `2px solid ${palette.panel}`, background: palette.accent }} /> : null}
 
       <header style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 11px', borderBottom: `1px solid ${palette.subtleBorder}`, background: palette.raised, borderRadius: '13px 13px 0 0' }}>
-        <span style={{ color: palette.accent, fontSize: 9, fontWeight: 750, letterSpacing: '.09em', flex: '0 0 auto' }}>{kindLabel(props.data.kind)}</span>
+        <span style={{ color: palette.accent, fontSize: 9, fontWeight: 750, letterSpacing: '.09em', flex: '0 0 auto' }}>{t(kindLabel(props.data.kind))}</span>
         <input
           className="nodrag"
-          aria-label="Node title"
+          aria-label={t("Node title")}
           value={props.data.title}
           onChange={event => runtime?.onChange(props.id, { title: event.target.value })}
           style={{ minWidth: 0, flex: 1, border: 0, outline: 0, background: 'transparent', color: palette.ink, font: 'inherit', fontSize: 12, fontWeight: 650, textAlign: 'right' }}

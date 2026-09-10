@@ -1,3 +1,4 @@
+import { t, useLanguage } from './i18n'
 import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
@@ -95,6 +96,7 @@ async function exportPng(canvas: HTMLCanvasElement): Promise<Blob> {
 }
 
 export function MaskModal(props: MaskModalProps): ReactNode {
+  useLanguage()
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const activeRef = useRef<MaskStroke | null>(null)
   const [size, setSize] = useState<{ width: number; height: number } | null>(null)
@@ -276,26 +278,26 @@ export function MaskModal(props: MaskModalProps): ReactNode {
     >
       <section style={{ width: 'min(1020px, 96vw)', maxHeight: '94vh', display: 'flex', flexDirection: 'column', borderRadius: 16, overflow: 'hidden', border: '1px solid rgba(255,255,255,.14)', background: '#151515', color: '#f4f4f4', boxShadow: '0 28px 90px rgba(0,0,0,.58)', fontFamily: 'var(--dsw-alias-font, Inter, ui-sans-serif, system-ui, sans-serif)' }}>
         <header style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderBottom: '1px solid rgba(255,255,255,.09)', background: '#1d1d1d' }}>
-          <strong style={{ fontSize: 13 }}>{props.title ?? 'Create mask copy'}</strong>
+          <strong style={{ fontSize: 13 }}>{props.title ?? t("Create mask copy")}</strong>
           <span title={props.sourceName} style={{ minWidth: 0, maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'rgba(255,255,255,.45)', fontSize: 11 }}>
             {props.sourceName ?? 'Paint white where the workflow may edit'}
           </span>
           {size !== null ? <span style={{ color: 'rgba(255,255,255,.38)', fontSize: 10 }}>{size.width} × {size.height}</span> : null}
           <span style={{ flex: 1 }} />
-          <button type="button" disabled={busy} onClick={props.onCancel} style={buttonStyle}>Close</button>
+          <button type="button" disabled={busy} onClick={props.onCancel} style={buttonStyle}>{t("Close")}</button>
         </header>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,.08)' }}>
-          <button type="button" onClick={() => setMode('paint')} style={{ ...buttonStyle, background: mode === 'paint' ? 'rgba(122,162,255,.22)' : buttonStyle.background }}>Paint mask</button>
-          <button type="button" onClick={() => setMode('erase')} style={{ ...buttonStyle, background: mode === 'erase' ? 'rgba(122,162,255,.22)' : buttonStyle.background }}>Erase mask</button>
+          <button type="button" onClick={() => setMode('paint')} style={{ ...buttonStyle, background: mode === 'paint' ? 'rgba(122,162,255,.22)' : buttonStyle.background }}>{t("Paint mask")}</button>
+          <button type="button" onClick={() => setMode('erase')} style={{ ...buttonStyle, background: mode === 'erase' ? 'rgba(122,162,255,.22)' : buttonStyle.background }}>{t("Erase mask")}</button>
           <label style={{ display: 'flex', alignItems: 'center', gap: 7, color: 'rgba(255,255,255,.62)', fontSize: 11 }}>
-            Brush {brush}px
+            {t("Brush")} {brush}px
             <input type="range" min={2} max={320} value={brush} onChange={event => setBrush(Number(event.target.value))} style={{ width: 150 }} />
           </label>
           <span style={{ flex: 1 }} />
-          <button type="button" disabled={strokes.length === 0} onClick={undo} style={buttonStyle}>Undo</button>
-          <button type="button" disabled={redo.length === 0} onClick={redoStroke} style={buttonStyle}>Redo</button>
-          <button type="button" disabled={strokes.length === 0} onClick={() => { setRedo([...redo, ...strokes]); setStrokes([]) }} style={buttonStyle}>Clear</button>
+          <button type="button" disabled={strokes.length === 0} onClick={undo} style={buttonStyle}>{t("Undo")}</button>
+          <button type="button" disabled={redo.length === 0} onClick={redoStroke} style={buttonStyle}>{t("Redo")}</button>
+          <button type="button" disabled={strokes.length === 0} onClick={() => { setRedo([...redo, ...strokes]); setStrokes([]) }} style={buttonStyle}>{t("Clear")}</button>
         </div>
 
         <div style={{ minHeight: 0, flex: 1, overflow: 'auto', padding: 14, display: 'grid', placeItems: 'center', background: '#090909' }}>
@@ -326,23 +328,23 @@ export function MaskModal(props: MaskModalProps): ReactNode {
               ref={canvasRef}
               width={size?.width ?? 1}
               height={size?.height ?? 1}
-              aria-label="Image mask drawing canvas"
+              aria-label={t("Image mask drawing canvas")}
               onPointerDown={startStroke}
               onPointerMove={continueStroke}
               onPointerUp={finishStroke}
               onPointerCancel={finishStroke}
               style={{ position: 'absolute', inset: 0, display: 'block', width: '100%', height: '100%', cursor: mode === 'erase' ? 'cell' : 'crosshair', touchAction: 'none', mixBlendMode: 'screen', opacity: .72 }}
             />
-            {size === null ? <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: 'rgba(255,255,255,.48)', fontSize: 12, background: '#111' }}>Loading source {sourceKind}…</div> : null}
+            {size === null ? <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: 'rgba(255,255,255,.48)', fontSize: 12, background: '#111' }}>{t("Loading source")} {sourceKind}…</div> : null}
           </div>
         </div>
 
         <footer style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', borderTop: '1px solid rgba(255,255,255,.09)', background: '#1a1a1a' }}>
-          {error !== null ? <span role="alert" style={{ color: '#ff948b', fontSize: 11 }}>{error}</span> : <span style={{ color: 'rgba(255,255,255,.42)', fontSize: 11 }}>White = editable · Black = preserve · export is a grayscale PNG</span>}
+          {error !== null ? <span role="alert" style={{ color: '#ff948b', fontSize: 11 }}>{error}</span> : <span style={{ color: 'rgba(255,255,255,.42)', fontSize: 11 }}>{t("White = editable · Black = preserve · export is a grayscale PNG")}</span>}
           <span style={{ flex: 1 }} />
-          <button type="button" disabled={busy} onClick={props.onCancel} style={buttonStyle}>Cancel</button>
+          <button type="button" disabled={busy} onClick={props.onCancel} style={buttonStyle}>{t("Cancel")}</button>
           <button type="button" disabled={busy || size === null} onClick={() => { void submit() }} style={{ ...buttonStyle, minWidth: 126, background: busy || size === null ? 'rgba(255,255,255,.08)' : '#f3f3f3', color: busy || size === null ? 'rgba(255,255,255,.45)' : '#111', fontWeight: 700 }}>
-            {busy ? 'Saving…' : 'Create masked copy'}
+            {busy ? t("Saving…") : 'Create masked copy'}
           </button>
         </footer>
       </section>

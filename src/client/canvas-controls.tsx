@@ -1,3 +1,4 @@
+import { t, useLanguage } from './i18n'
 import { type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject, useEffect, useRef, useState } from 'react'
 
 export type CanvasInteractionMode = 'select' | 'hand'
@@ -18,6 +19,7 @@ export function scrollableCanvasField(target: EventTarget | null): boolean {
 }
 
 function ModeIcon({ mode }: { mode: CanvasInteractionMode }) {
+  useLanguage()
   return <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
     <path d={mode === 'select'
       ? 'M4 3 20 11 12 13 9 21 4 3Z'
@@ -33,6 +35,7 @@ function CanvasMenu({ label, className = '', style, children, anchor, onClose }:
   children: ReactNode
   onClose(): void
 }) {
+  useLanguage()
   const menuRef = useRef<HTMLDivElement>(null)
   const closeRef = useRef(onClose)
   closeRef.current = onClose
@@ -68,20 +71,21 @@ function CanvasMenu({ label, className = '', style, children, anchor, onClose }:
 }
 
 export function CanvasModeControl({ mode, onChange }: { mode: CanvasInteractionMode; onChange(mode: CanvasInteractionMode): void }) {
+  useLanguage()
   const [open, setOpen] = useState(false)
   const buttonRef = useRef<HTMLButtonElement>(null)
   return <div className="vd-mode-control">
     <button ref={buttonRef} type="button" className="react-flow__controls-button vd-mode-button"
-      aria-label={`Canvas mode: ${mode === 'select' ? 'Select' : 'Hand'}`} aria-haspopup="menu" aria-expanded={open}
-      title={mode === 'select' ? 'Select (V): click to select, drag nodes to move; Ctrl/⌘-drag to select a group' : 'Hand (H): drag anywhere to pan; Ctrl/⌘-drag to select a group'}
+      aria-label={t('Canvas mode: {0}', t(mode === 'select' ? 'Select' : 'Hand'))} aria-haspopup="menu" aria-expanded={open}
+      title={t(mode === 'select' ? 'Select (V): click to select, drag nodes to move; Ctrl/⌘-drag to select a group' : 'Hand (H): drag anywhere to pan; Ctrl/⌘-drag to select a group')}
       onClick={() => setOpen(value => !value)}>
       <ModeIcon mode={mode} /><span className="vd-mode-chevron" aria-hidden>⌄</span>
     </button>
-    {open ? <CanvasMenu label="Canvas interaction mode" className="vd-mode-menu" anchor={buttonRef}
+    {open ? <CanvasMenu label={t("Canvas interaction mode")} className="vd-mode-menu" anchor={buttonRef}
       onClose={() => { setOpen(false); buttonRef.current?.focus() }}>
       {(['select', 'hand'] as const).map(value => <button key={value} type="button" role="menuitemradio"
         aria-checked={mode === value} onClick={() => { onChange(value); setOpen(false); buttonRef.current?.focus() }}>
-        <ModeIcon mode={value} /><span>{value === 'select' ? 'Select' : 'Hand'}</span><kbd>{value === 'select' ? 'V' : 'H'}</kbd>
+        <ModeIcon mode={value} /><span>{value === 'select' ? t("Select") : t("Hand")}</span><kbd>{value === 'select' ? 'V' : 'H'}</kbd>
       </button>)}
     </CanvasMenu> : null}
   </div>
@@ -96,9 +100,10 @@ export function CanvasContextMenu({ position, canPaste, resettingVram, onMap, on
   onPaste(): void
   onClose(): void
 }) {
-  return <CanvasMenu label="Canvas menu" className="vd-pane-context-menu" style={{ left: position.x, top: position.y }} onClose={onClose}>
-    <button type="button" role="menuitem" onClick={onMap}><span aria-hidden>⊞</span><span>Add vd-node…</span></button>
-    <button type="button" role="menuitem" disabled={resettingVram} onClick={onResetVram}><span aria-hidden>↻</span><span>{resettingVram ? 'Resetting VRAM…' : 'Reset VRAM'}</span></button>
-    <button type="button" role="menuitem" disabled={!canPaste} onClick={onPaste}><span aria-hidden>▣</span><span>Paste</span><kbd>Ctrl+V</kbd></button>
+  useLanguage()
+  return <CanvasMenu label={t("Canvas menu")} className="vd-pane-context-menu" style={{ left: position.x, top: position.y }} onClose={onClose}>
+    <button type="button" role="menuitem" onClick={onMap}><span aria-hidden>⊞</span><span>{t("Add vd-node…")}</span></button>
+    <button type="button" role="menuitem" disabled={resettingVram} onClick={onResetVram}><span aria-hidden>↻</span><span>{resettingVram ? t("Resetting VRAM…") : t("Reset VRAM")}</span></button>
+    <button type="button" role="menuitem" disabled={!canPaste} onClick={onPaste}><span aria-hidden>▣</span><span>{t("Paste")}</span><kbd>Ctrl+V</kbd></button>
   </CanvasMenu>
 }

@@ -1,6 +1,7 @@
 import { createHash, randomInt, randomUUID } from 'node:crypto'
 import { basename, extname } from 'node:path'
-import { CODEX_PLAN_MODELS, CodexPlanImageRuntime } from './codex-plan-provider.js'
+import { CodexPlanImageRuntime } from './codex-plan-provider.js'
+import { CodexModelCatalog } from './codex-model-catalog.js'
 import { DirectorInputError, record, string } from './validation.js'
 
 const MCP_OPERATION_ALLOWLIST = new Set([
@@ -412,8 +413,10 @@ export class ProviderRuntime {
     this.tools = options.tools
     this.providers = new Map()
     this.minimaxH3LicenseAccepted = true
+    this.codexModels = options.codexModels ?? new CodexModelCatalog()
     this.codexPlan = new CodexPlanImageRuntime({
       store: this.store,
+      codexModels: this.codexModels,
       registerAsset: this.registerAsset,
       ...(options.createCodex === undefined ? {} : { createCodex: options.createCodex }),
       ...(options.temporaryRoot === undefined ? {} : { temporaryRoot: options.temporaryRoot }),
@@ -453,6 +456,7 @@ export class ProviderRuntime {
   }
 
   publicCatalog() {
+    const codexCatalog = this.codexModels.snapshot()
     return [...this.providers.values()].map(provider => ({
       id: provider.id,
       label: provider.label,
@@ -479,7 +483,13 @@ export class ProviderRuntime {
             ? typeof provider.baseUrl === 'string' && provider.baseUrl.length > 0
             : true,
       minimaxH3Unlocked: this.minimaxH3LicenseAccepted,
-      ...(provider.kind === 'codex-plan' ? { availableModels: [...CODEX_PLAN_MODELS] } : {}),
+      ...(provider.kind === 'codex-plan' ? {
+        availableModels: codexCatalog.models,
+        codexModels: codexCatalog.codexModels,
+        codexCatalog: codexCatalog.codexCatalog,
+        model: provider.model ?? codexCatalog.defaultModel,
+        fastMode: provider.fastMode === true,
+      } : {}),
     }))
   }
 
@@ -489,7 +499,8 @@ export class ProviderRuntime {
     let catalog = { models: [], modelInputs: [] }
     let transport
     if (provider.kind === 'codex-plan') {
-      catalog = { models: [...CODEX_PLAN_MODELS], modelInputs: [] }
+      this.codexPlan.check()
+      catalog = await this.models(providerId, signal)
       transport = 'codex-sdk'
     } else if (provider.kind === 'ollama' || provider.kind === 'openai-compatible') {
       catalog = await this.models(providerId, signal)
@@ -531,7 +542,8 @@ export class ProviderRuntime {
     const provider = this.#provider(providerId)
     const timeoutMs = Math.min(provider.timeoutMs, 15_000)
     if (provider.kind === 'codex-plan') {
-      return { models: [...CODEX_PLAN_MODELS], modelInputs: [] }
+      const catalog = await this.codexModels.refresh({ force: true })
+      return { ...catalog, model: provider.model ?? catalog.defaultModel, modelInputs: [] }
     }
     if (provider.kind === 'ollama') {
       if (provider.baseUrl === undefined) throw new Error(`${provider.label} requires an Ollama endpoint`)

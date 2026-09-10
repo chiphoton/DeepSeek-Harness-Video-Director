@@ -1,3 +1,4 @@
+import { t, useLanguage } from './i18n'
 import {
   Background,
   BackgroundVariant,
@@ -44,6 +45,7 @@ import {
   parameterInputCandidates,
 } from './parameter-inputs'
 import { SettingsDrawer } from './SettingsDrawer'
+import { ProjectPicker } from './ProjectPicker'
 import { SketchModal } from './SketchModal'
 import { referencePreviewsByTarget } from './reference-previews'
 import {
@@ -122,12 +124,13 @@ function downloadAsset(asset: AssetRef): void {
 }
 
 export function DirectorLauncher({ director, wide }: DirectorLauncherProps) {
+  useLanguage()
   const snapshot = useSource(director)
   return (
     <button
       type="button"
-      title="打开 Video Director"
-      aria-label="打开 Video Director"
+      title={t("打开 Video Director")}
+      aria-label={t("打开 Video Director")}
       onClick={director.open}
       style={{
         width: wide ? '100%' : 38,
@@ -151,6 +154,7 @@ export function DirectorLauncher({ director, wide }: DirectorLauncherProps) {
 }
 
 function EmptyProject({ onCreate }: { onCreate(name: string): Promise<void> }) {
+  useLanguage()
   const [name, setName] = useState('Untitled Video')
   const [busy, setBusy] = useState(false)
   const submit = async (event: FormEvent) => {
@@ -162,11 +166,11 @@ function EmptyProject({ onCreate }: { onCreate(name: string): Promise<void> }) {
   return (
     <div className="vd-empty">
       <div className="vd-empty-mark" aria-hidden>◆</div>
-      <h1>开始一个 Video Project</h1>
-      <p>每个工程拥有独立画布、素材、任务历史和 DeepSeek 对话上下文。</p>
+      <h1>{t("开始一个 Video Project")}</h1>
+      <p>{t("每个工程拥有独立画布、素材、任务历史和 DeepSeek 对话上下文。")}</p>
       <form onSubmit={submit} className="vd-create-form">
-        <input value={name} maxLength={120} onChange={event => setName(event.target.value)} aria-label="工程名" />
-        <button type="submit" disabled={busy}>{busy ? '创建中…' : '创建工程'}</button>
+        <input value={name} maxLength={120} onChange={event => setName(event.target.value)} aria-label={t("工程名")} />
+        <button type="submit" disabled={busy}>{busy ? t("创建中…") : t("创建工程")}</button>
       </form>
     </div>
   )
@@ -185,6 +189,7 @@ function TopBar({
   selectedNodeIds: ReadonlySet<string>
   onJobs(): void
 }) {
+  useLanguage()
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('Untitled Video')
   const [menuOpen, setMenuOpen] = useState(false)
@@ -235,7 +240,7 @@ function TopBar({
     if (newName.trim() === '' || snapshot.saving || projectTransitioning) return
     try {
       if (snapshot.dirty) {
-        const discard = window.confirm('当前工程有未保存更改。放弃这些更改并创建新工程？')
+        const discard = window.confirm(t("当前工程有未保存更改。放弃这些更改并创建新工程？"))
         if (!discard) return
         await director.discardChanges()
       }
@@ -247,7 +252,7 @@ function TopBar({
   const selectProject = async (projectId: string): Promise<void> => {
     if (projectId === project?.id || snapshot.saving || projectTransitioning) return
     const discard = snapshot.dirty
-      ? window.confirm('当前工程有未保存更改。放弃这些更改并切换工程？')
+      ? window.confirm(t("当前工程有未保存更改。放弃这些更改并切换工程？"))
       : false
     if (snapshot.dirty && !discard) return
     try { await director.selectProject(projectId, { discard }) } catch (error) { swallow(error) }
@@ -266,13 +271,13 @@ function TopBar({
   const deleteProject = async (): Promise<void> => {
     if (project === null || snapshot.saving || projectTransitioning) return
     setMenuOpen(false)
-    const confirmed = window.confirm(`确定删除工程“${project.name}”？\n\n工程画布、任务历史与素材将被删除，此操作无法撤销。绑定的 DSH 对话会保留。`)
+    const confirmed = window.confirm(t("确定删除工程“{0}”？\n\n工程画布、任务历史与素材将被删除，此操作无法撤销。绑定的 DSH 对话会保留。", project.name))
     if (!confirmed) return
     try { await director.deleteProject(project.id) } catch (error) { swallow(error) }
   }
   const saveBeforeProjectCopy = async (action: '复制' | '导入'): Promise<boolean> => {
     if (!snapshot.dirty) return true
-    const confirmed = window.confirm(`当前工程有未保存更改。是否先保存，再${action}工程？`)
+    const confirmed = window.confirm(t("当前工程有未保存更改。是否先保存，再{0}工程？", t(action)))
     if (!confirmed) return false
     try {
       await director.saveProject()
@@ -310,7 +315,7 @@ function TopBar({
   const restoreOpenedProject = (): void => {
     if (project === null || snapshot.saving || projectTransitioning) return
     setMenuOpen(false)
-    if (!window.confirm(`确定放弃工程“${project.name}”的更改？\n\n工作流将恢复到本次打开时的状态，撤销和重做记录将清空。期间保存过的更改也会从画布中还原；如需将恢复结果写入工程，请点击“保存”。`)) return
+    if (!window.confirm(t("确定放弃工程“{0}”的更改？\n\n工作流将恢复到本次打开时的状态，撤销和重做记录将清空。期间保存过的更改也会从画布中还原；如需将恢复结果写入工程，请点击“保存”。", project.name))) return
     try { director.restoreOpenedProject() } catch (error) { window.alert(error instanceof Error ? error.message : String(error)) }
   }
   const importProject = async (file: File): Promise<void> => {
@@ -348,16 +353,14 @@ function TopBar({
             if (file !== undefined) void importProject(file)
           }}
         />
-        <select
-          value={project?.id ?? ''}
-          aria-label="切换 Video Project"
+        <ProjectPicker
+          snapshot={snapshot}
           disabled={snapshot.saving || projectTransitioning}
-          onChange={event => { void selectProject(event.target.value) }}
-        >
-          {snapshot.projects.length === 0 ? <option value="">暂无工程</option> : null}
-          {snapshot.projects.map(row => <option key={row.id} value={row.id}>{row.name}</option>)}
-        </select>
-        <button type="button" className="vd-icon-button" title={snapshot.saving || projectTransitioning ? '请等待当前操作完成' : '新建工程'} disabled={snapshot.saving || projectTransitioning} onClick={() => setCreating(value => !value)}>＋</button>
+          onRefresh={() => { setMenuOpen(false); setCreating(false); void director.refreshExamples() }}
+          onSelectProject={selectProject}
+          onSelectExample={async id => { try { await director.openExample(id) } catch (error) { swallow(error) } }}
+        />
+        <button type="button" className="vd-icon-button" title={snapshot.saving || projectTransitioning ? t("请等待当前操作完成") : t("新建工程")} disabled={snapshot.saving || projectTransitioning} onClick={() => setCreating(value => !value)}>＋</button>
         {creating ? (
           <div className="vd-create-popover">
             <input
@@ -370,11 +373,11 @@ function TopBar({
                 if (event.key === 'Escape') setCreating(false)
               }}
             />
-            <button type="button" onClick={() => { void create() }}>创建</button>
+            <button type="button" onClick={() => { void create() }}>{t("创建")}</button>
           </div>
         ) : null}
         <div className="vd-project-more-anchor">
-          <button type="button" className="vd-icon-button vd-more-button" title={snapshot.saving || projectTransitioning ? '请等待当前操作完成' : '工程菜单'} aria-label="工程菜单" aria-expanded={menuOpen} disabled={snapshot.saving || projectTransitioning} onClick={() => setMenuOpen(value => !value)}>
+          <button type="button" className="vd-icon-button vd-more-button" title={snapshot.saving || projectTransitioning ? t("请等待当前操作完成") : t("工程菜单")} aria-label={t("工程菜单")} aria-expanded={menuOpen} disabled={snapshot.saving || projectTransitioning} onClick={() => setMenuOpen(value => !value)}>
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
               <circle cx="5" cy="12" r="2" />
               <circle cx="12" cy="12" r="2" />
@@ -383,25 +386,25 @@ function TopBar({
           </button>
           {menuOpen ? (
             <div className="vd-project-menu" role="menu">
-              <button type="button" disabled={project === null} onClick={beginRename}>重命名工程</button>
-              <button type="button" disabled={project === null || snapshot.saving || projectTransitioning} onClick={() => { void duplicateProject() }}>复制工程</button>
-              <button type="button" disabled={snapshot.saving || projectTransitioning} onClick={() => { setMenuOpen(false); projectImportRef.current?.click() }}>导入工程</button>
-              <button type="button" disabled={project === null || projectTransitioning} onClick={() => { void exportProject() }}>导出工程</button>
-              <button type="button" disabled={project === null || snapshot.saving || projectTransitioning} onClick={clearPreviews}>清除预览</button>
+              <button type="button" disabled={project === null} onClick={beginRename}>{t("重命名工程")}</button>
+              <button type="button" disabled={project === null || snapshot.saving || projectTransitioning} onClick={() => { void duplicateProject() }}>{t("复制工程")}</button>
+              <button type="button" disabled={snapshot.saving || projectTransitioning} onClick={() => { setMenuOpen(false); projectImportRef.current?.click() }}>{t("导入工程")}</button>
+              <button type="button" disabled={project === null || projectTransitioning} onClick={() => { void exportProject() }}>{t("导出工程")}</button>
+              <button type="button" disabled={project === null || snapshot.saving || projectTransitioning} onClick={clearPreviews}>{t("清除预览")}</button>
               <button type="button" disabled={project === null || snapshot.saving || projectTransitioning || workflowBusy || activeJobCount > 0}
-                title={workflowBusy || activeJobCount > 0 ? '请等待任务结束或取消任务后再放弃更改' : '恢复到本次打开时的工作流'}
-                onClick={restoreOpenedProject}>放弃更改</button>
+                title={workflowBusy || activeJobCount > 0 ? t("请等待任务结束或取消任务后再放弃更改") : t("恢复到本次打开时的工作流")}
+                onClick={restoreOpenedProject}>{t("放弃更改")}</button>
               <button
                 type="button"
                 className="vd-project-delete"
                 disabled={project === null || snapshot.saving || projectTransitioning}
                 onClick={() => { void deleteProject() }}
-              >删除工程</button>
+              >{t("删除工程")}</button>
             </div>
           ) : null}
           {renaming ? (
             <div className="vd-rename-popover">
-              <label>重命名工程</label>
+              <label>{t("重命名工程")}</label>
               <div>
                 <input
                   autoFocus
@@ -413,25 +416,25 @@ function TopBar({
                     if (event.key === 'Escape') setRenaming(false)
                   }}
                 />
-                <button type="button" onClick={applyRename}>确定</button>
+                <button type="button" onClick={applyRename}>{t("确定")}</button>
               </div>
             </div>
           ) : null}
         </div>
-        <div className="vd-history-actions" role="group" aria-label="画布历史">
+        <div className="vd-history-actions" role="group" aria-label={t("画布历史")}>
           <button
             type="button"
             className="vd-icon-button"
-            aria-label="撤销"
-            title="撤销"
+            aria-label={t("撤销")}
+            title={t("撤销")}
             disabled={!snapshot.canUndo || projectTransitioning}
             onClick={() => director.undo()}
           ><UndoIcon /></button>
           <button
             type="button"
             className="vd-icon-button"
-            aria-label="重做"
-            title="重做"
+            aria-label={t("重做")}
+            title={t("重做")}
             disabled={!snapshot.canRedo || projectTransitioning}
             onClick={() => director.redo()}
           ><RedoIcon /></button>
@@ -446,17 +449,17 @@ function TopBar({
             disabled={!canRunWorkflow}
             aria-haspopup="menu"
             aria-expanded={runMenuOpen}
-            title={workflowBusy ? '将当前工作流加入队列' : '运行画布工作流'}
+            title={workflowBusy ? t("将当前工作流加入队列") : t("运行画布工作流")}
             onClick={() => setRunMenuOpen(open => !open)}
           >
             <PlayIcon />
-            <span className="vd-topbar-action-label">运行</span>
+            <span className="vd-topbar-action-label">{t("运行")}</span>
             <span className="vd-run-chevron" aria-hidden>⌄</span>
           </button>
           {runMenuOpen ? (
-            <div className="vd-run-menu" role="menu" aria-label="运行工作流">
+            <div className="vd-run-menu" role="menu" aria-label={t("运行工作流")}>
               <label className="vd-batch-control">
-                <span>批次数</span>
+                <span>{t("批次数")}</span>
                 <input
                   type="number"
                   min={1}
@@ -465,42 +468,42 @@ function TopBar({
                   value={batchSize}
                   onChange={event => setBatchSize(Math.max(1, Math.min(20, Number(event.target.value) || 1)))}
                 />
-                <small>固定 seed 每批递增</small>
+                <small>{t("固定 seed 每批递增")}</small>
               </label>
               <button type="button" role="menuitem" onClick={() => runVdWorkflow('all')}>
-                <span>运行全部</span><small>{String(runnableCount)} 个可执行节点</small>
+                <span>{t("运行全部")}</span><small>{String(runnableCount)} {t("个可执行节点")}</small>
               </button>
               <button type="button" role="menuitem" disabled={selectedNodeIds.size === 0} onClick={() => runVdWorkflow('selected')}>
-                <span>运行所选</span><small>{String(selectedNodeIds.size)} 个已选节点</small>
+                <span>{t("运行所选")}</span><small>{String(selectedNodeIds.size)} {t("个已选节点")}</small>
               </button>
               <button type="button" role="menuitem" disabled={selectedNodeIds.size === 0} onClick={() => runVdWorkflow('from-selection')}>
-                <span>从所选节点运行</span><small>包含所有下游节点</small>
+                <span>{t("从所选节点运行")}</span><small>{t("包含所有下游节点")}</small>
               </button>
             </div>
           ) : null}
         </div>
-        <button type="button" className="vd-topbar-button vd-jobs-button" aria-label="任务" title="任务" onClick={onJobs}>
+        <button type="button" className="vd-topbar-button vd-jobs-button" aria-label={t("任务")} title={t("任务")} onClick={onJobs}>
           <JobsIcon />
-          <span className="vd-topbar-action-label">任务</span>
+          <span className="vd-topbar-action-label">{t("任务")}</span>
           {activeJobCount > 0 ? <span className="vd-jobs-count">{activeJobCount}</span> : null}
         </button>
-        <button type="button" className="vd-topbar-button vd-settings-button" aria-label="设置" title="设置" onClick={onSettings}>
+        <button type="button" className="vd-topbar-button vd-settings-button" aria-label={t("设置")} title={t("设置")} onClick={onSettings}>
           <SettingsIcon />
-          <span className="vd-topbar-action-label">设置</span>
+          <span className="vd-topbar-action-label">{t("设置")}</span>
         </button>
         <button
           type="button"
           className={`vd-save-button ${snapshot.dirty ? 'is-dirty' : ''}`}
-          aria-label={snapshot.saving ? '保存中…' : '保存'}
+          aria-label={snapshot.saving ? t("保存中…") : t("保存")}
           disabled={!snapshot.dirty || snapshot.saving || projectTransitioning || project === null}
-          title={snapshot.dirty ? '保存当前工程' : '没有未保存更改'}
+          title={snapshot.dirty ? t("保存当前工程") : t("没有未保存更改")}
           onClick={() => { void director.saveProject().catch(swallow) }}
         >
           <SaveIcon />
-          <span className="vd-topbar-action-label">{snapshot.saving ? '保存中…' : '保存'}</span>
+          <span className="vd-topbar-action-label">{snapshot.saving ? t("保存中…") : t("保存")}</span>
         </button>
       </div>
-      <button type="button" className="vd-close vd-close-icon-button" aria-label="关闭 Video Director" onClick={() => { void director.close() }}><CloseIcon /></button>
+      <button type="button" className="vd-close vd-close-icon-button" aria-label={t("关闭 Video Director")} onClick={() => { void director.close() }}><CloseIcon /></button>
     </header>
   )
 }
@@ -531,6 +534,7 @@ function JobDrawer({
   director: DirectorController
   onClose(): void
 }) {
+  useLanguage()
   const project = snapshot.project
   const [openArtifact, setOpenArtifact] = useState<PreviewArtifact | null>(null)
   useEffect(() => { void director.refreshVdRuns().catch(swallow) }, [director, project?.id])
@@ -562,16 +566,16 @@ function JobDrawer({
     project?.graph.nodes.find(node => node.id === nodeId)?.data.title ?? nodeId
   )
   return (
-    <aside className="vd-job-drawer" aria-label="任务列表">
+    <aside className="vd-job-drawer" aria-label={t("任务列表")}>
       <header>
         <div>
-          <strong>任务</strong>
-          <small>工作流运行与单节点任务</small>
+          <strong>{t("任务")}</strong>
+          <small>{t("工作流运行与单节点任务")}</small>
         </div>
-        <button type="button" className="vd-close-icon-button" aria-label="关闭任务列表" onClick={onClose}><CloseIcon /></button>
+        <button type="button" className="vd-close-icon-button" aria-label={t("关闭任务列表")} onClick={onClose}><CloseIcon /></button>
       </header>
       <div className="vd-job-list">
-        {groups.length === 0 ? <p className="vd-job-empty">尚无运行记录。</p> : groups.map(group => {
+        {groups.length === 0 ? <p className="vd-job-empty">{t("尚无运行记录。")}</p> : groups.map(group => {
           const status = jobGroupStatus(group)
           const active = status === 'queued' || status === 'running'
           const groupedWorkflow = group.workflowRun !== undefined || group.jobs[0]?.workflowRunId !== undefined
@@ -582,22 +586,22 @@ function JobDrawer({
             <section key={group.id} className={`vd-job-group is-${status}`}>
               <header>
                 <div>
-                  <strong>{groupedWorkflow ? '工作流运行' : '单节点运行'}</strong>
+                  <strong>{groupedWorkflow ? t("工作流运行") : t("单节点运行")}</strong>
                   <small>{new Date(group.startedAt).toLocaleString()}</small>
                 </div>
-                <span className="vd-job-status">{status}</span>
+                <span className="vd-job-status">{t(status)}</span>
               </header>
               {groupedWorkflow ? (
                 <div className="vd-job-summary">
                   <span>{group.workflowRun?.mode ?? group.jobs[0]?.workflowRunMode ?? 'workflow'}</span>
-                  <span>{String(group.workflowRun?.batchSize ?? group.jobs[0]?.batchSize ?? 1)} 批</span>
+                  <span>{String(group.workflowRun?.batchSize ?? group.jobs[0]?.batchSize ?? 1)} {t("批")}</span>
                   <span>{String(completedJobs)} / {String(totalJobs)}</span>
                   {group.workflowRun !== undefined ? <>
-                    <button type="button" onClick={() => { void director.openVdWorkflow(group.id).catch(swallow) }}>打开工作流</button>
-                    <button type="button" onClick={() => { void exportWorkflow(group.id).catch(swallow) }}>导出工作流</button>
+                    <button type="button" onClick={() => { void director.openVdWorkflow(group.id).catch(swallow) }}>{t("打开工作流")}</button>
+                    <button type="button" onClick={() => { void exportWorkflow(group.id).catch(swallow) }}>{t("导出工作流")}</button>
                   </> : null}
                   {active ? (
-                    <button type="button" className="is-cancel" onClick={() => { void director.cancelVdRun(group.id).catch(swallow) }}>取消运行</button>
+                    <button type="button" className="is-cancel" onClick={() => { void director.cancelVdRun(group.id).catch(swallow) }}>{t("取消运行")}</button>
                   ) : null}
                 </div>
               ) : null}
@@ -616,13 +620,13 @@ function JobDrawer({
                       <div className="vd-job-row-meta">
                         <span>{job.status} · {job.phase}</span>
                         {job.promptId === undefined ? null : <span title={job.promptId}>ComfyUI: {job.promptId}</span>}
-                        {job.batchIndex === undefined ? null : <span>批次 {String(job.batchIndex + 1)}</span>}
+                        {job.batchIndex === undefined ? null : <span>{t("批次")} {String(job.batchIndex + 1)}</span>}
                         <span>{String(Math.round(job.progress * 100))}%</span>
                       </div>
                       <div className="vd-job-progress"><i style={{ width: `${String(Math.round(job.progress * 100))}%` }} /></div>
                       {job.error !== undefined ? <p>{job.error}</p> : null}
                       {artifacts.length === 0 ? null : (
-                        <div className="vd-job-artifacts" aria-label="任务产物">
+                        <div className="vd-job-artifacts" aria-label={t("任务产物")}>
                           {artifacts.map(artifact => (
                             <ArtifactThumbnail key={artifact.id} artifact={artifact} variant="job" onOpen={setOpenArtifact} />
                           ))}
@@ -630,9 +634,9 @@ function JobDrawer({
                       )}
                       <div className="vd-job-row-actions">
                         {jobActive && !groupedWorkflow ? (
-                          <button type="button" onClick={() => { void director.cancelJob(job.id).catch(swallow) }}>取消</button>
+                          <button type="button" onClick={() => { void director.cancelJob(job.id).catch(swallow) }}>{t("取消")}</button>
                         ) : retryable && project?.graph.nodes.some(node => node.id === job.nodeId) ? (
-                          <button type="button" onClick={() => { void director.runNode(job.nodeId).catch(swallow) }}>重试节点</button>
+                          <button type="button" onClick={() => { void director.runNode(job.nodeId).catch(swallow) }}>{t("重试节点")}</button>
                         ) : null}
                         {!jobActive ? (
                           <button
@@ -642,7 +646,7 @@ function JobDrawer({
                               if (!window.confirm('删除这条任务记录？项目素材不会被删除。')) return
                               void director.deleteJob(job.id).catch(swallow)
                             }}
-                          >删除</button>
+                          >{t("删除")}</button>
                         ) : null}
                       </div>
                     </article>
@@ -709,6 +713,7 @@ function ChatPanel({
   projectName: string
   collapsed: boolean
 }) {
+  useLanguage()
   const snapshot = useSource(chat)
   const [text, setText] = useState('')
   const [images, setImages] = useState<Array<{ id: string; file: File; previewUrl: string }>>([])
@@ -805,7 +810,7 @@ function ChatPanel({
     const accepted = incoming.filter(isChatImage)
     setAttachmentError(accepted.length === incoming.length
       ? null
-      : '仅支持 PNG、JPEG、WebP 和 GIF 图片。')
+      : t("仅支持 PNG、JPEG、WebP 和 GIF 图片。"))
     if (accepted.length === 0) return
     setImages(current => [
       ...current,
@@ -851,10 +856,10 @@ function ChatPanel({
       setInputMenuOpen(false)
       setSettingsOpen(true)
       setSettingsMessage(selectedSpeechProvider === undefined
-        ? '请先配置一个 OpenAI-compatible Provider。'
+        ? t("请先配置一个 OpenAI-compatible Provider。")
         : model === ''
-          ? '请输入语音转写模型。'
-          : '请先填写并保存这个 Provider 的 API Key。')
+          ? t("请输入语音转写模型。")
+          : t("请先填写并保存这个 Provider 的 API Key。"))
       return null
     }
     return { providerId: selectedSpeechProvider.id, model }
@@ -893,7 +898,7 @@ function ChatPanel({
     const audioFiles = incoming.filter(file => !isChatImage(file) && isChatAudio(file))
     const unsupported = incoming.length - imageFiles.length - audioFiles.length
     if (imageFiles.length > 0) addImages(imageFiles)
-    if (unsupported > 0) setAttachmentError('只支持 PNG、JPEG、WebP、GIF 图片，以及 FLAC、MP3、MP4、M4A、OGG、WAV、WebM 音频。')
+    if (unsupported > 0) setAttachmentError(t("只支持 PNG、JPEG、WebP、GIF 图片，以及 FLAC、MP3、MP4、M4A、OGG、WAV、WebM 音频。"))
     if (audioFiles.length > 0) void transcribeFiles(audioFiles)
   }
 
@@ -926,7 +931,7 @@ function ChatPanel({
     }
     if (speechReady() === null) return
     if (navigator.mediaDevices?.getUserMedia === undefined || typeof MediaRecorder === 'undefined') {
-      setAttachmentError('当前浏览器不支持麦克风录音。')
+      setAttachmentError(t("当前浏览器不支持麦克风录音。"))
       return
     }
     setAttachmentError(null)
@@ -941,7 +946,7 @@ function ChatPanel({
       recordingChunksRef.current = []
       mediaRecorderRef.current = recorder
       recorder.ondataavailable = event => { if (event.data.size > 0) recordingChunksRef.current.push(event.data) }
-      recorder.onerror = () => setAttachmentError('录音失败，请检查麦克风权限。')
+      recorder.onerror = () => setAttachmentError(t("录音失败，请检查麦克风权限。"))
       recorder.onstop = () => {
         if (recordingTimerRef.current !== null) clearTimeout(recordingTimerRef.current)
         recordingTimerRef.current = null
@@ -964,21 +969,21 @@ function ChatPanel({
       for (const track of recordingStreamRef.current?.getTracks() ?? []) track.stop()
       recordingStreamRef.current = null
       setRecording(false)
-      setAttachmentError(error instanceof Error ? error.message : '无法访问麦克风。')
+      setAttachmentError(error instanceof Error ? error.message : t("无法访问麦克风。"))
     }
   }
 
   const saveSpeechSettings = async (): Promise<void> => {
     if (selectedSpeechProvider === undefined) {
-      setSettingsMessage('没有可用于语音转写的 OpenAI-compatible Provider。')
+      setSettingsMessage(t("没有可用于语音转写的 OpenAI-compatible Provider。"))
       return
     }
     if (preferences.speechModel.trim() === '') {
-      setSettingsMessage('请输入语音转写模型。')
+      setSettingsMessage(t("请输入语音转写模型。"))
       return
     }
     if (selectedSpeechProvider.requiresApiKey && !selectedSpeechProvider.apiKeySet && apiKey.trim() === '') {
-      setSettingsMessage('请输入 API Key。')
+      setSettingsMessage(t("请输入 API Key。"))
       return
     }
     setSettingsBusy(true)
@@ -990,7 +995,7 @@ function ChatPanel({
       })
       setApiKey('')
       setApiKeyVisible(false)
-      setSettingsMessage('语音输入设置已保存。')
+      setSettingsMessage(t("语音输入设置已保存。"))
     } catch (error) {
       setSettingsMessage(error instanceof Error ? error.message : String(error))
     } finally {
@@ -1004,7 +1009,7 @@ function ChatPanel({
     setSettingsMessage(null)
     try {
       await director.startNewChatSession()
-      setSettingsMessage('已创建新会话，画布保持不变。')
+      setSettingsMessage(t("已创建新会话，画布保持不变。"))
     } catch (error) {
       setSettingsMessage(error instanceof Error ? error.message : String(error))
     } finally {
@@ -1014,18 +1019,18 @@ function ChatPanel({
   return (
     <aside className="vd-chat-panel" aria-hidden={collapsed}>
       <div className="vd-chat-context">
-        <span>上下文已绑定</span>
+        <span>{t("上下文已绑定")}</span>
         <strong>{projectName}</strong>
       </div>
       <div className="vd-messages" aria-live="polite">
         {snapshot.messages.length === 0 ? (
           <div className="vd-chat-placeholder">
             <span aria-hidden>⌁</span>
-            <p>和 DeepSeek 一起编排当前画布。连线、素材与任务状态会作为工程上下文发送。</p>
+            <p>{t("和 DeepSeek 一起编排当前画布。连线、素材与任务状态会作为工程上下文发送。")}</p>
           </div>
         ) : snapshot.messages.map(message => (
           <article key={message.id} className={`vd-message vd-message-${message.role}`}>
-            <header>{message.role === 'user' ? '你' : 'DeepSeek'}</header>
+            <header>{message.role === 'user' ? t("你") : 'DeepSeek'}</header>
             <div>{message.text}</div>
           </article>
         ))}
@@ -1041,11 +1046,11 @@ function ChatPanel({
         onDrop={dropFiles}
       >
         {images.length > 0 ? (
-          <div className="vd-chat-images" aria-label="待发送图片">
+          <div className="vd-chat-images" aria-label={t("待发送图片")}>
             {images.map(image => (
               <span key={image.id} className="vd-chat-image">
-                <img src={image.previewUrl} alt={image.file.name || '待发送图片'} />
-                <button type="button" className="vd-close-icon-button" aria-label={`移除 ${image.file.name || '图片'}`} onClick={() => removeImage(image.id)}><CloseIcon /></button>
+                <img src={image.previewUrl} alt={image.file.name || t("待发送图片")} />
+                <button type="button" className="vd-close-icon-button" aria-label={t("移除 {0}", image.file.name || t("图片"))} onClick={() => removeImage(image.id)}><CloseIcon /></button>
               </span>
             ))}
           </div>
@@ -1053,13 +1058,13 @@ function ChatPanel({
         <textarea
           value={text}
           rows={3}
-          placeholder="询问当前工程，支持粘贴或拖入图片、音频…"
+          placeholder={t("询问当前工程，支持粘贴或拖入图片、音频…")}
           onChange={event => setText(event.target.value)}
           onKeyDown={keyDown}
           onPaste={paste}
         />
-        <span className="vd-chat-context-note">画布上下文自动附带</span>
-        {transcribing ? <span className="vd-chat-transcribing"><i /> 正在转写音频…</span> : null}
+        <span className="vd-chat-context-note">{t("画布上下文自动附带")}</span>
+        {transcribing ? <span className="vd-chat-transcribing"><i /> {t("正在转写音频…")}</span> : null}
         {attachmentError === null ? null : <span className="vd-chat-attachment-error">{attachmentError}</span>}
         <div className="vd-chat-composer-footer">
           <div className="vd-chat-composer-tools">
@@ -1067,8 +1072,8 @@ function ChatPanel({
               <button
                 type="button"
                 className="vd-chat-icon-button"
-                aria-label="添加多模态输入"
-                title="添加多模态输入"
+                aria-label={t("添加多模态输入")}
+                title={t("添加多模态输入")}
                 aria-expanded={inputMenuOpen}
                 disabled={snapshot.sending || transcribing}
                 onClick={() => { setInputMenuOpen(open => !open); setSettingsOpen(false) }}
@@ -1079,11 +1084,11 @@ function ChatPanel({
                 <div className="vd-chat-add-menu" role="menu">
                   <button type="button" role="menuitem" onClick={() => { setInputMenuOpen(false); imageInputRef.current?.click() }}>
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM4 16l4-4 3 3 2-2 7 6M15.5 9.5h.01" /></svg>
-                    <span><strong>图片</strong><small>选择 PNG、JPEG、WebP 或 GIF</small></span>
+                    <span><strong>{t("图片")}</strong><small>{t("选择 PNG、JPEG、WebP 或 GIF")}</small></span>
                   </button>
                   <button type="button" role="menuitem" onClick={() => { setInputMenuOpen(false); audioInputRef.current?.click() }}>
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V5l10-2v13M9 9l10-2M6 21c1.7 0 3-1 3-2.3S7.7 16.5 6 16.5s-3 1-3 2.2S4.3 21 6 21Zm10-2c1.7 0 3-1 3-2.3s-1.3-2.2-3-2.2-3 1-3 2.2S14.3 19 16 19Z" /></svg>
-                    <span><strong>音频</strong><small>选择文件并转写到输入框</small></span>
+                    <span><strong>{t("音频")}</strong><small>{t("选择文件并转写到输入框")}</small></span>
                   </button>
                 </div>
               ) : null}
@@ -1092,8 +1097,8 @@ function ChatPanel({
               <button
                 type="button"
                 className="vd-chat-icon-button"
-                aria-label="聊天输入设置"
-                title="聊天输入设置"
+                aria-label={t("聊天输入设置")}
+                title={t("聊天输入设置")}
                 aria-expanded={settingsOpen}
                 onClick={() => {
                   setSettingsOpen(open => {
@@ -1113,8 +1118,8 @@ function ChatPanel({
                 </svg>
               </button>
               {settingsOpen ? (
-                <div className="vd-chat-settings-popover" role="dialog" aria-label="聊天输入设置">
-                  <header><strong>聊天输入设置</strong><button type="button" className="vd-close-icon-button" aria-label="关闭设置" onClick={() => setSettingsOpen(false)}><CloseIcon /></button></header>
+                <div className="vd-chat-settings-popover" role="dialog" aria-label={t("聊天输入设置")}>
+                  <header><strong>{t("聊天输入设置")}</strong><button type="button" className="vd-close-icon-button" aria-label={t("关闭设置")} onClick={() => setSettingsOpen(false)}><CloseIcon /></button></header>
                   <button
                     type="button"
                     className="vd-chat-new-session"
@@ -1122,7 +1127,7 @@ function ChatPanel({
                     onClick={() => { void startNewSession() }}
                   >
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14M4 4h16v16H4z" /></svg>
-                    <span><strong>{newSessionBusy ? '正在创建新会话…' : '新会话'}</strong><small>保留当前画布，清空聊天上下文</small></span>
+                    <span><strong>{newSessionBusy ? t("正在创建新会话…") : t("新会话")}</strong><small>{t("保留当前画布，清空聊天上下文")}</small></span>
                   </button>
                   <label className="vd-chat-setting-toggle">
                     <input
@@ -1130,11 +1135,11 @@ function ChatPanel({
                       checked={preferences.enterInsertsNewline}
                       onChange={event => updatePreferences({ enterInsertsNewline: event.target.checked })}
                     />
-                    <span><strong>Enter 换行</strong><small>开启后使用 Alt + Enter 发送</small></span>
+                    <span><strong>{t("Enter 换行")}</strong><small>{t("开启后使用 Alt + Enter 发送")}</small></span>
                   </label>
                   <div className="vd-chat-settings-section">
-                    <strong>语音转写</strong>
-                    <label><span>Provider</span>
+                    <strong>{t("语音转写")}</strong>
+                    <label><span>{t("Provider")}</span>
                       <select
                         value={effectiveSpeechProviderId}
                         disabled={speechProviders.length === 0}
@@ -1147,31 +1152,31 @@ function ChatPanel({
                           setSettingsMessage(null)
                         }}
                       >
-                        {speechProviders.length === 0 ? <option value="">没有 OpenAI-compatible Provider</option> : null}
+                        {speechProviders.length === 0 ? <option value="">{t("没有 OpenAI-compatible Provider")}</option> : null}
                         {speechProviders.map(provider => <option key={provider.id} value={provider.id}>{provider.label}</option>)}
                       </select>
                     </label>
                     <label><span>Base URL</span>
                       <input
                         value={speechBaseUrl}
-                        placeholder={`${OFFICIAL_OPENAI_BASE_URL}（留空使用官方 API）`}
+                        placeholder={t("{0}（留空使用官方 API）", OFFICIAL_OPENAI_BASE_URL)}
                         onChange={event => setSpeechBaseUrl(event.target.value)}
                       />
                     </label>
-                    <label><span>API Key {selectedSpeechProvider?.apiKeySet ? '· 已保存（不会回显）' : ''}</span>
+                    <label><span>API Key {selectedSpeechProvider?.apiKeySet ? t("· 已保存（不会回显）") : ''}</span>
                       <div className="vd-chat-secret-input">
                         <input
                           type={apiKeyVisible ? 'text' : 'password'}
                           autoComplete="new-password"
                           value={apiKey}
-                          placeholder={selectedSpeechProvider?.apiKeySet ? '留空以保留当前密钥' : '输入 API Key'}
+                          placeholder={selectedSpeechProvider?.apiKeySet ? t("留空以保留当前密钥") : t("输入 API Key")}
                           onChange={event => setApiKey(event.target.value)}
                         />
                         <button
                           type="button"
-                          aria-label={apiKeyVisible ? '隐藏 API Key' : '显示 API Key'}
+                          aria-label={apiKeyVisible ? t("隐藏 API Key") : t("显示 API Key")}
                           aria-pressed={apiKeyVisible}
-                          title={apiKeyVisible ? '隐藏 API Key' : '显示 API Key'}
+                          title={apiKeyVisible ? t("隐藏 API Key") : t("显示 API Key")}
                           onClick={() => setApiKeyVisible(visible => !visible)}
                         >
                           {apiKeyVisible ? (
@@ -1182,7 +1187,7 @@ function ChatPanel({
                         </button>
                       </div>
                     </label>
-                    <label><span>语音模型</span>
+                    <label><span>{t("语音模型")}</span>
                       <input
                         value={preferences.speechModel}
                         placeholder={DEFAULT_SPEECH_MODEL}
@@ -1190,7 +1195,7 @@ function ChatPanel({
                       />
                     </label>
                     <button type="button" className="vd-chat-settings-save" disabled={settingsBusy || speechProviders.length === 0} onClick={() => { void saveSpeechSettings() }}>
-                      {settingsBusy ? '保存中…' : '保存语音设置'}
+                      {settingsBusy ? t("保存中…") : t("保存语音设置")}
                     </button>
                     {settingsMessage !== null ? <span className="vd-chat-settings-message">{settingsMessage}</span> : null}
                   </div>
@@ -1198,8 +1203,8 @@ function ChatPanel({
               ) : null}
             </div>
             <select
-              aria-label="聊天模型"
-              title={snapshot.models.error ?? '切换当前工程会话模型'}
+              aria-label={t("聊天模型")}
+              title={snapshot.models.error ?? t("切换当前工程会话模型")}
               value={currentModelValue}
               disabled={snapshot.models.status === 'loading' || snapshot.models.status === 'selecting' || modelChoices.length === 0}
               onChange={event => {
@@ -1214,12 +1219,12 @@ function ChatPanel({
                 }).catch(swallow)
               }}
             >
-              {snapshot.models.status === 'loading' ? <option value="">加载模型中…</option> : null}
-              {snapshot.models.status !== 'loading' && snapshot.models.current === null ? <option value="">选择模型</option> : null}
+              {snapshot.models.status === 'loading' ? <option value="">{t("加载模型中…")}</option> : null}
+              {snapshot.models.status !== 'loading' && snapshot.models.current === null ? <option value="">{t("选择模型")}</option> : null}
               {!currentModelKnown && snapshot.models.current !== null ? (
                 <option value={currentModelValue}>{snapshot.models.current.provider}/{snapshot.models.current.model}</option>
               ) : null}
-              {modelChoices.length === 0 && snapshot.models.status !== 'loading' ? <option value="">没有可用模型</option> : null}
+              {modelChoices.length === 0 && snapshot.models.status !== 'loading' ? <option value="">{t("没有可用模型")}</option> : null}
               {snapshot.models.groups.map(group => (
                 <optgroup key={group.id} label={group.name}>
                   {group.models.map(model => (
@@ -1233,8 +1238,8 @@ function ChatPanel({
             <button
               type="button"
               className={`vd-chat-microphone ${recording ? 'is-recording' : ''}`}
-              aria-label={recording ? '停止录音' : '开始语音输入'}
-              title={recording ? '停止录音并转写' : '语音输入'}
+              aria-label={recording ? t("停止录音") : t("开始语音输入")}
+              title={recording ? t("停止录音并转写") : t("语音输入")}
               disabled={!recording && (snapshot.sending || transcribing)}
               onClick={() => { void toggleRecording() }}
             >
@@ -1243,8 +1248,8 @@ function ChatPanel({
             <button
               type="button"
               className="vd-chat-send"
-              aria-label={snapshot.sending ? '发送中' : '发送'}
-              title={preferences.enterInsertsNewline ? '发送（Alt + Enter）' : '发送（Enter）'}
+              aria-label={snapshot.sending ? t("发送中") : t("发送")}
+              title={preferences.enterInsertsNewline ? t("发送（Alt + Enter）") : t("发送（Enter）")}
               disabled={snapshot.sending || transcribing || (text.trim() === '' && images.length === 0)}
               onClick={() => { void send() }}
             >
@@ -1290,28 +1295,29 @@ function EdgeInspector({
   onClose(): void
   onDelete(): void
 }) {
+  useLanguage()
   const role = edge.data?.role ?? 'visual'
   const includeAudio = edge.data?.includeAudio === true
   return (
     <div className="vd-edge-inspector">
-      <div><strong>参考连线</strong><button type="button" className="vd-close-icon-button" aria-label="关闭参考连线" onClick={onClose}><CloseIcon /></button></div>
+      <div><strong>{t("参考连线")}</strong><button type="button" className="vd-close-icon-button" aria-label={t("关闭参考连线")} onClick={onClose}><CloseIcon /></button></div>
       <label>
-        语义角色
+        {t("语义角色")}
         <select value={role} onChange={event => onChange({ role: event.target.value })}>
-          <option value="visual">画面</option>
-          <option value="motion">运动</option>
-          <option value="camera">镜头</option>
-          <option value="voice">人声</option>
-          <option value="music">音乐</option>
-          <option value="sound">音效</option>
+          <option value="visual">{t("画面")}</option>
+          <option value="motion">{t("运动")}</option>
+          <option value="camera">{t("镜头")}</option>
+          <option value="voice">{t("人声")}</option>
+          <option value="music">{t("音乐")}</option>
+          <option value="sound">{t("音效")}</option>
         </select>
       </label>
       <label className="vd-check">
         <input type="checkbox" checked={includeAudio} onChange={event => onChange({ includeAudio: event.target.checked })} />
-        将视频原音传给模型
+        {t("将视频原音传给模型")}
       </label>
-      <small>运动/镜头参考默认不携带音轨；仅在确实需要声音时开启。</small>
-      <button type="button" className="vd-edge-delete-button" aria-label="删除参考连线" onClick={onDelete}>删除连线</button>
+      <small>{t("运动/镜头参考默认不携带音轨；仅在确实需要声音时开启。")}</small>
+      <button type="button" className="vd-edge-delete-button" aria-label={t("删除参考连线")} onClick={onDelete}>{t("删除连线")}</button>
     </div>
   )
 }
@@ -1376,6 +1382,7 @@ function NodeContextMenu({
   onDelete(): void
   onClose(): void
 }) {
+  useLanguage()
   const menuRef = useRef<HTMLDivElement | null>(null)
   const busy = node.data.status === 'queued' || node.data.status === 'running'
   const dependencyRunnable = node.data.kind === 'preview'
@@ -1435,7 +1442,7 @@ function NodeContextMenu({
       className="vd-node-context-menu"
       role="menu"
       aria-orientation="vertical"
-      aria-label={`${node.data.title} 节点菜单`}
+      aria-label={t("{0} 节点菜单", node.data.title)}
       tabIndex={-1}
       style={{ left: position.screen.x, top: position.screen.y }}
       onPointerDown={event => event.stopPropagation()}
@@ -1450,11 +1457,11 @@ function NodeContextMenu({
         <div className="vd-node-context-group">
           {busy ? (
             <button type="button" role="menuitem" disabled={node.data.jobId === undefined} onClick={onCancel}>
-              <span aria-hidden>■</span><span>Cancel run<small>{node.data.phase ?? 'running'}</small></span>
+              <span aria-hidden>■</span><span>{t("Cancel run")}<small>{node.data.phase ?? 'running'}</small></span>
             </button>
           ) : (
             <button type="button" role="menuitem" disabled={!canRun} onClick={onRun}>
-              <span aria-hidden>▶</span><span>Run node<small>{dependencyRunnable ? '运行全部未冻结上游依赖' : '按当前未保存画布快照运行'}</small></span>
+              <span aria-hidden>▶</span><span>{t("Run node")}<small>{dependencyRunnable ? t("运行全部未冻结上游依赖") : t("按当前未保存画布快照运行")}</small></span>
             </button>
           )}
         </div>
@@ -1462,53 +1469,53 @@ function NodeContextMenu({
       {videoPreview ? (
         <div className="vd-node-context-group">
           <button type="button" role="menuitem" onClick={onSaveVideo}>
-            <span aria-hidden>⇩</span><span>保存视频…<small>下载原始输出文件</small></span>
+            <span aria-hidden>⇩</span><span>{t("保存视频…")}<small>{t("下载原始输出文件")}</small></span>
           </button>
           <button type="button" role="menuitem" onClick={onVideoProperties}>
-            <span aria-hidden>ⓘ</span><span>视频属性…<small>尺寸、时长、格式与文件信息</small></span>
+            <span aria-hidden>ⓘ</span><span>{t("视频属性…")}<small>{t("尺寸、时长、格式与文件信息")}</small></span>
           </button>
         </div>
       ) : null}
       <div className="vd-node-context-group">
         <button type="button" role="menuitem" disabled={busy} onClick={onFreeze}>
           <span aria-hidden>{node.data.frozen === true ? '◇' : '◆'}</span>
-          <span>{node.data.frozen === true ? 'Unfreeze' : 'Freeze'}<small>{node.data.frozen === true ? '允许节点再次运行和更新' : '复用当前结果并跳过运行'}</small></span>
+          <span>{node.data.frozen === true ? t("Unfreeze") : t("Freeze")}<small>{node.data.frozen === true ? t("允许节点再次运行和更新") : t("复用当前结果并跳过运行")}</small></span>
         </button>
         <button type="button" role="menuitem" disabled={inputCandidateCount === 0} onClick={onParameterInputs}>
           <span aria-hidden>◉</span>
           <span>
-            参数输入…
-            <small>{inputCandidateCount === 0 ? '没有可转换的文本参数' : `${String(inputCandidateCount)} 个文本参数`}</small>
+            {t("参数输入…")}
+            <small>{inputCandidateCount === 0 ? t("没有可转换的文本参数") : t("{0} 个文本参数", String(inputCandidateCount))}</small>
           </span>
         </button>
         {maskable ? (
           <button type="button" role="menuitem" onClick={onMask}>
-            <span aria-hidden>◩</span><span>创建 Mask 副本<small>保留原素材与节点</small></span>
+            <span aria-hidden>◩</span><span>{t("创建 Mask 副本")}<small>{t("保留原素材与节点")}</small></span>
           </button>
         ) : null}
         <button type="button" role="menuitem" onClick={onCopy}>
-          <span aria-hidden>▣</span><span>Copy<small>Ctrl+C · 复制到画布剪贴板</small></span>
+          <span aria-hidden>▣</span><span>{t("Copy")}<small>{t("Ctrl+C · 复制到画布剪贴板")}</small></span>
         </button>
         <button type="button" role="menuitem" onClick={onDuplicate}>
-          <span aria-hidden>⧉</span><span>{clip ? '复制当前裁剪' : 'Duplicate'}<small>创建独立节点副本</small></span>
+          <span aria-hidden>⧉</span><span>{clip ? t("复制当前裁剪") : t("Duplicate")}<small>{t("创建独立节点副本")}</small></span>
         </button>
         <button type="button" role="menuitem" onClick={onRename}>
-          <span aria-hidden>✎</span><span>重命名<small>编辑节点标题</small></span>
+          <span aria-hidden>✎</span><span>{t("重命名")}<small>{t("编辑节点标题")}</small></span>
         </button>
         <button type="button" role="menuitem" onClick={onDetails}>
-          <span aria-hidden>ⓘ</span><span>查看节点属性<small>类型、端口与运行引用</small></span>
+          <span aria-hidden>ⓘ</span><span>{t("查看节点属性")}<small>{t("类型、端口与运行引用")}</small></span>
         </button>
       </div>
       <div className="vd-node-context-group">
         <button type="button" role="menuitem" className="is-danger" disabled={busy} onClick={onDelete}>
-          <span aria-hidden>⌫</span><span>删除节点<small>{busy ? '请先取消当前运行' : '同时删除相关连线'}</small></span>
+          <span aria-hidden>⌫</span><span>{t("删除节点")}<small>{busy ? t("请先取消当前运行") : t("同时删除相关连线")}</small></span>
         </button>
       </div>
     </div>
   )
 }
 
-function ParameterInputPicker({
+export function ParameterInputPicker({
   position,
   node,
   definition,
@@ -1523,6 +1530,7 @@ function ParameterInputPicker({
   onToggle(fieldId: string, enabled: boolean): void
   onClose(restoreFocus?: boolean): void
 }) {
+  useLanguage()
   const [query, setQuery] = useState('')
   const pickerRef = useRef<HTMLDivElement | null>(null)
   const searchRef = useRef<HTMLInputElement | null>(null)
@@ -1552,6 +1560,11 @@ function ParameterInputPicker({
   }, [onClose])
 
   const navigate = (event: KeyboardEvent<HTMLDivElement>): void => {
+    // Keep native button activation inside the dialog instead of triggering canvas panning.
+    if ((event.key === ' ' || event.key === 'Enter') && event.target instanceof HTMLButtonElement) {
+      event.stopPropagation()
+      return
+    }
     if (event.key === 'Escape') {
       event.preventDefault()
       event.stopPropagation()
@@ -1585,6 +1598,9 @@ function ParameterInputPicker({
       ref={pickerRef}
       className="vd-parameter-input-picker"
       role="dialog"
+      // Safari focuses a button's focusable ancestor on mouse down. Keep that
+      // focus inside the picker so focusin dismissal cannot swallow the click.
+      tabIndex={-1}
       aria-modal="false"
       aria-labelledby="vd-parameter-input-title"
       style={{ left: position.screen.x, top: position.screen.y }}
@@ -1594,10 +1610,10 @@ function ParameterInputPicker({
     >
       <header>
         <div>
-          <span>PARAMETER INPUTS</span>
+          <span>{t("PARAMETER INPUTS")}</span>
           <strong id="vd-parameter-input-title">{node.data.title}</strong>
         </div>
-        <button type="button" className="vd-close-icon-button" aria-label="关闭参数输入" onClick={() => onClose(true)}><CloseIcon /></button>
+        <button type="button" className="vd-close-icon-button" aria-label={t("关闭参数输入")} onClick={() => onClose(true)}><CloseIcon /></button>
       </header>
       <label className="vd-parameter-input-search">
         <span aria-hidden>⌕</span>
@@ -1605,13 +1621,13 @@ function ParameterInputPicker({
           ref={searchRef}
           type="search"
           value={query}
-          aria-label="搜索文本参数"
-          placeholder="搜索参数名称或 ID…"
+          aria-label={t("搜索文本参数")}
+          placeholder={t("搜索参数名称或 ID…")}
           onChange={event => setQuery(event.target.value)}
         />
         <kbd>Esc</kbd>
       </label>
-      <div className="vd-parameter-input-list" role="group" aria-label="可转换的文本参数">
+      <div className="vd-parameter-input-list" role="group" aria-label={t("可转换的文本参数")}>
         {filtered.map(candidate => {
           const enabled = fieldInputModeEnabled(node.data, candidate.id)
           const portId = fieldInputPortId(candidate.id)
@@ -1623,7 +1639,7 @@ function ParameterInputPicker({
               key={candidate.id}
               type="button"
               aria-pressed={enabled}
-              aria-label={`${candidate.label}，${enabled ? '输入端口' : '控件'}，${String(edgeCount)} 条连线`}
+              aria-label={t("{0}，{1}，{2} 条连线", candidate.label, enabled ? t("输入端口") : t("控件"), String(edgeCount))}
               onClick={() => onToggle(candidate.id, !enabled)}
             >
               <span className={`vd-parameter-input-state ${enabled ? 'is-input' : ''}`} aria-hidden>
@@ -1635,9 +1651,9 @@ function ParameterInputPicker({
                 <small>
                   {enabled
                     ? edgeCount === 0
-                      ? '输入端口 · 尚未连接'
-                      : `输入端口 · ${String(edgeCount)} 条连线`
-                    : '控件 · 点击转为输入端口'}
+                      ? t("输入端口 · 尚未连接")
+                      : t("输入端口 · {0} 条连线", String(edgeCount))
+                    : t("控件 · 点击转为输入端口")}
                 </small>
               </span>
               <span className={`vd-parameter-input-switch ${enabled ? 'is-on' : ''}`} aria-hidden>
@@ -1646,9 +1662,9 @@ function ParameterInputPicker({
             </button>
           )
         })}
-        {filtered.length === 0 ? <p>没有匹配的文本参数</p> : null}
+        {filtered.length === 0 ? <p>{t("没有匹配的文本参数")}</p> : null}
       </div>
-      <footer>转为输入端口后，未连接时仍使用当前值；连接后由上游文本覆盖。</footer>
+      <footer>{t("转为输入端口后，未连接时仍使用当前值；连接后由上游文本覆盖。")}</footer>
     </div>
   )
 }
@@ -1662,27 +1678,28 @@ function NodeDetails({
   snapshot: DirectorSnapshot
   onClose(): void
 }) {
+  useLanguage()
   const definition = nodeDefinition(node.data, snapshot.nodeDefinitions)
   const provider = snapshot.providers.find(candidate => candidate.id === node.data.providerId)
   const workflow = snapshot.workflows.find(candidate => candidate.id === (definition?.workflowId ?? node.data.workflowId))
   const inputs = inputPortsFor(node.data, definition)
   const outputs = portsFor(definition, 'output')
   const rows: Array<[string, string]> = [
-    ['标题', node.data.title],
+    [t("标题"), node.data.title],
     ['vd-node ID', node.id],
     ['Kind', node.data.kind],
-    ['vd-node definition', node.data.nodeType === undefined ? '内置兼容节点' : `${node.data.nodeType}@${node.data.nodeVersion ?? '1.0.0'}`],
+    ['vd-node definition', node.data.nodeType === undefined ? t("内置兼容节点") : `${node.data.nodeType}@${node.data.nodeVersion ?? '1.0.0'}`],
     ['Provider', provider === undefined ? (node.data.providerId ?? '—') : `${provider.label} · ${provider.id}`],
     ['comfyui-workflow', workflow === undefined ? (node.data.workflowId ?? '—') : `${workflow.name} · ${workflow.id}`],
-    ['状态', `${node.data.status ?? 'idle'}${node.data.phase === undefined ? '' : ` · ${node.data.phase}`}`],
+    [t("状态"), `${node.data.status ?? 'idle'}${node.data.phase === undefined ? '' : ` · ${node.data.phase}`}`],
     ['vd-job', node.data.jobId ?? '—'],
-    ['素材', node.data.asset === undefined ? '—' : `${node.data.asset.name} · ${node.data.asset.kind}`],
-    ['输入端口', inputs.length === 0 ? '—' : inputs.map(port => `${port.label} (${port.types.join(' / ')})`).join(', ')],
-    ['输出端口', outputs.length === 0 ? '—' : outputs.map(port => `${port.label} (${port.types.join(' / ')})`).join(', ')],
+    [t("素材"), node.data.asset === undefined ? '—' : `${node.data.asset.name} · ${node.data.asset.kind}`],
+    [t("输入端口"), inputs.length === 0 ? '—' : inputs.map(port => `${port.label} (${port.types.join(' / ')})`).join(', ')],
+    [t("输出端口"), outputs.length === 0 ? '—' : outputs.map(port => `${port.label} (${port.types.join(' / ')})`).join(', ')],
   ]
   return (
-    <aside className="vd-node-details" aria-label="节点属性">
-      <header><div><span>NODE DETAILS</span><strong>{node.data.title}</strong></div><button type="button" className="vd-close-icon-button" aria-label="关闭节点属性" onClick={onClose}><CloseIcon /></button></header>
+    <aside className="vd-node-details" aria-label={t("节点属性")}>
+      <header><div><span>{t("NODE DETAILS")}</span><strong>{node.data.title}</strong></div><button type="button" className="vd-close-icon-button" aria-label={t("关闭节点属性")} onClick={onClose}><CloseIcon /></button></header>
       <dl>
         {rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
       </dl>
@@ -1745,6 +1762,7 @@ function NodeAddMenu({
   onChoose(action: NodeMenuAction, targetPort?: VdPortDescriptor): void
   onClose(): void
 }) {
+  const language = useLanguage()
   const [query, setQuery] = useState('')
   const menuRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
@@ -1768,15 +1786,15 @@ function NodeAddMenu({
       return [...(input === undefined ? [] : [input]), { id: 'flow', label: 'Flow', types: ['flow'], multiple: true }]
     }
     const regular: NodeMenuItem[] = [
-      { key: 'input:text', label: 'Text', description: '添加可编辑文字输入', category: 'Inputs', icon: 'T', search: 'text 文字 input', action: { kind: 'text' }, inputs: [] },
-      { key: 'input:image', label: 'Image', description: '从本地选择图像', category: 'Inputs', icon: '▧', search: 'image 图像 图片 input', action: { kind: 'file', mediaKind: 'image' }, inputs: [] },
-      { key: 'input:audio', label: 'Audio', description: '从本地选择音频', category: 'Inputs', icon: '♫', search: 'audio 音频 input', action: { kind: 'file', mediaKind: 'audio' }, inputs: [] },
-      { key: 'input:video', label: 'Video', description: '从本地选择视频', category: 'Inputs', icon: '▶', search: 'video 视频 input', action: { kind: 'file', mediaKind: 'video' }, inputs: [] },
-      { key: 'input:sketch', label: 'Sketch', description: '绘制并添加草稿', category: 'Inputs', icon: '✎', search: 'sketch 草稿 手绘 input', action: { kind: 'sketch' }, inputs: [] },
-      { key: 'workflow:prompt', label: 'Prompt Enhancer', description: '扩写与优化提示词', category: 'Workflows', icon: '✨', search: 'prompt enhancer 提示词 增强 workflow', action: { kind: 'workflow', workflowKind: 'prompt-enhancer' }, inputs: workflowInputs('prompt-enhancer') },
-      { key: 'workflow:image', label: 'Image Processing', description: '通过已配置 workflow 处理图像', category: 'Workflows', icon: '◈', search: 'image processing generate edit 处理生成编辑图像 workflow', action: { kind: 'workflow', workflowKind: 'image-generation' }, inputs: workflowInputs('image-generation') },
-      { key: 'workflow:video', label: 'H3 Video', description: '通过 MiniMax H3 生成视频', category: 'Workflows', icon: '◉', search: 'h3 minimax video 视频 workflow', action: { kind: 'workflow', workflowKind: 'video-generation' }, inputs: workflowInputs('video-generation') },
-      { key: 'workflow:audio', label: 'H3 Audio', description: '通过 MiniMax H3 生成音频', category: 'Workflows', icon: '∿', search: 'h3 minimax audio 音频 workflow', action: { kind: 'workflow', workflowKind: 'audio-generation' }, inputs: workflowInputs('audio-generation') },
+      { key: 'input:text', label: 'Text', description: t("添加可编辑文字输入"), category: 'Inputs', icon: 'T', search: 'text 文字 input', action: { kind: 'text' }, inputs: [] },
+      { key: 'input:image', label: 'Image', description: t("从本地选择图像"), category: 'Inputs', icon: '▧', search: 'image 图像 图片 input', action: { kind: 'file', mediaKind: 'image' }, inputs: [] },
+      { key: 'input:audio', label: 'Audio', description: t("从本地选择音频"), category: 'Inputs', icon: '♫', search: 'audio 音频 input', action: { kind: 'file', mediaKind: 'audio' }, inputs: [] },
+      { key: 'input:video', label: 'Video', description: t("从本地选择视频"), category: 'Inputs', icon: '▶', search: 'video 视频 input', action: { kind: 'file', mediaKind: 'video' }, inputs: [] },
+      { key: 'input:sketch', label: 'Sketch', description: t("绘制并添加草稿"), category: 'Inputs', icon: '✎', search: 'sketch 草稿 手绘 input', action: { kind: 'sketch' }, inputs: [] },
+      { key: 'workflow:prompt', label: 'Prompt Enhancer', description: t("扩写与优化提示词"), category: 'Workflows', icon: '✨', search: 'prompt enhancer 提示词 增强 workflow', action: { kind: 'workflow', workflowKind: 'prompt-enhancer' }, inputs: workflowInputs('prompt-enhancer') },
+      { key: 'workflow:image', label: 'Image Processing', description: t("通过已配置 workflow 处理图像"), category: 'Workflows', icon: '◈', search: 'image processing generate edit 处理生成编辑图像 workflow', action: { kind: 'workflow', workflowKind: 'image-generation' }, inputs: workflowInputs('image-generation') },
+      { key: 'workflow:video', label: 'H3 Video', description: t("通过 MiniMax H3 生成视频"), category: 'Workflows', icon: '◉', search: 'h3 minimax video 视频 workflow', action: { kind: 'workflow', workflowKind: 'video-generation' }, inputs: workflowInputs('video-generation') },
+      { key: 'workflow:audio', label: 'H3 Audio', description: t("通过 MiniMax H3 生成音频"), category: 'Workflows', icon: '∿', search: 'h3 minimax audio 音频 workflow', action: { kind: 'workflow', workflowKind: 'audio-generation' }, inputs: workflowInputs('audio-generation') },
     ]
     const outputDefinitions = definitions.filter(definition => definition.type === 'core.preview' || definition.type === 'core.save')
       .map<NodeMenuItem>(definition => ({
@@ -1816,7 +1834,7 @@ function NodeAddMenu({
         inputs: definition.inputs,
       }))
     return [...regular, ...utilityDefinitions, ...outputDefinitions, ...customDefinitions]
-  }, [definitions])
+  }, [definitions, language])
   const candidates: NodeMenuCandidate[] = position.connection === undefined
     ? items.map(item => ({ item }))
     : items.flatMap(item => {
@@ -1834,7 +1852,7 @@ function NodeAddMenu({
       ref={menuRef}
       className="vd-node-menu"
       role="dialog"
-      aria-label={position.connection === undefined ? '添加节点' : '添加并连接节点'}
+      aria-label={position.connection === undefined ? t("添加节点") : t("添加并连接节点")}
       style={{ left: position.screen.x, top: position.screen.y }}
       onDoubleClick={event => event.stopPropagation()}
       onPointerDown={event => event.stopPropagation()}
@@ -1849,19 +1867,19 @@ function NodeAddMenu({
           autoFocus
           value={query}
           type="search"
-          aria-label="搜索节点"
-          placeholder={position.connection === undefined ? '搜索节点名称或类型…' : '搜索兼容节点…'}
+          aria-label={t("搜索节点")}
+          placeholder={position.connection === undefined ? t("搜索节点名称或类型…") : t("搜索兼容节点…")}
           onChange={event => setQuery(event.target.value)}
         />
         <kbd>Esc</kbd>
       </div>
-      <div className="vd-node-menu-list" role="listbox" aria-label="可添加的节点">
+      <div className="vd-node-menu-list" role="listbox" aria-label={t("可添加的节点")}>
         {categories.map(category => {
           const categoryItems = filtered.filter(({ item }) => item.category === category)
           if (categoryItems.length === 0) return null
           return (
             <section key={category} className="vd-node-menu-group">
-              <h3>{NODE_MENU_CATEGORY_LABELS[category]}</h3>
+              <h3>{t(NODE_MENU_CATEGORY_LABELS[category])}</h3>
               {categoryItems.map(({ item, targetPort }) => (
                 <button
                   key={item.key}
@@ -1872,15 +1890,15 @@ function NodeAddMenu({
                 >
                   <span className="vd-node-menu-icon" aria-hidden>{item.icon}</span>
                   <span>
-                    <strong>{item.label}</strong>
-                    <small>{targetPort === undefined ? item.description : `连接到 ${targetPort.label} · ${item.description}`}</small>
+                    <strong>{item.action.kind === 'definition' ? item.label : t(item.label)}</strong>
+                    <small>{targetPort === undefined ? item.description : t("连接到 {0} · {1}", targetPort.label, item.description)}</small>
                   </span>
                 </button>
               ))}
             </section>
           )
         })}
-        {filtered.length === 0 ? <p className="vd-node-menu-empty">没有匹配的节点</p> : null}
+        {filtered.length === 0 ? <p className="vd-node-menu-empty">{t("没有匹配的节点")}</p> : null}
       </div>
     </div>
   )
@@ -1901,6 +1919,7 @@ function CanvasStage({
   selectedNodeIds: ReadonlySet<string>
   onSelectedNodeIdsChange(ids: Set<string>): void
 }) {
+  useLanguage()
   const project = snapshot.project
   const [instance, setInstance] = useState<ReactFlowInstance<DirectorNode, DirectorEdge> | null>(null)
   const [sketchOpen, setSketchOpen] = useState(false)
@@ -2322,7 +2341,7 @@ function CanvasStage({
       ref={stageRef}
       className={`vd-canvas-stage${handMode ? ' is-hand-mode' : ''}${selectionModifierPressed ? ' is-group-selecting' : ''}`}
       tabIndex={0}
-      aria-label="Workflow canvas"
+      aria-label={t("Workflow canvas")}
       onPointerDownCapture={event => {
         if (!(event.target instanceof Element) || event.target.closest('.react-flow') === null) return
         if ((event.ctrlKey || event.metaKey) && event.button === 0 && !event.target.closest('.react-flow__panel') && stageRef.current) {
@@ -2549,13 +2568,13 @@ function CanvasStage({
               showInteractive={false}
               position="bottom-right"
               orientation="horizontal"
-              aria-label="画布控制"
+              aria-label={t("画布控制")}
             >
               <CanvasModeControl mode={interactionMode} onChange={onInteractionModeChange} />
               <span className="vd-control-half-gap" aria-hidden="true" />
               <ControlButton
-                aria-label="Zoom In"
-                title="放大"
+                aria-label={t("Zoom In")}
+                title={t("放大")}
                 disabled={instance === null}
                 onClick={() => { void instance?.zoomIn({ duration: 180 }) }}
               >
@@ -2564,8 +2583,8 @@ function CanvasStage({
                 </svg>
               </ControlButton>
               <ControlButton
-                aria-label="Zoom Out"
-                title="缩小"
+                aria-label={t("Zoom Out")}
+                title={t("缩小")}
                 disabled={instance === null}
                 onClick={() => { void instance?.zoomOut({ duration: 180 }) }}
               >
@@ -2574,8 +2593,8 @@ function CanvasStage({
                 </svg>
               </ControlButton>
               <ControlButton
-                aria-label="Fit View"
-                title="适配视图"
+                aria-label={t("Fit View")}
+                title={t("适配视图")}
                 disabled={instance === null}
                 onClick={() => { void instance?.fitView({ padding: 0.25, maxZoom: 1, duration: 220 }) }}
               >
@@ -2585,9 +2604,9 @@ function CanvasStage({
               </ControlButton>
               <ControlButton
                 className={`vd-interaction-control ${miniMapVisible ? 'is-active' : ''}`}
-                aria-label={miniMapVisible ? '隐藏 Mini Map' : '显示 Mini Map'}
+                aria-label={miniMapVisible ? t("隐藏 Mini Map") : t("显示 Mini Map")}
                 aria-pressed={miniMapVisible}
-                title={miniMapVisible ? '隐藏 Mini Map' : '显示 Mini Map'}
+                title={miniMapVisible ? t("隐藏 Mini Map") : t("显示 Mini Map")}
                 onClick={() => setMiniMapVisible(visible => !visible)}
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -2614,10 +2633,10 @@ function CanvasStage({
       </DirectorRuntimeProvider>
       <div ref={setControlsLayer} className="vd-canvas-controls-layer react-flow dark" />
       <div className="vd-canvas-label">
-        <span>INFINITE CANVAS</span>
-        <small>拖放媒体 · 连线构建工作流 · Delete 删除</small>
+        <span>{t("INFINITE CANVAS")}</span>
+        <small>{t("拖放媒体 · 连线构建工作流 · Delete 删除")}</small>
       </div>
-      {uploading ? <div className="vd-uploading">正在写入不可变素材…</div> : null}
+      {uploading ? <div className="vd-uploading">{t("正在写入不可变素材…")}</div> : null}
       {selectionBox ? <div className="vd-canvas-selection" style={{ left: selectionBox.x, top: selectionBox.y, width: selectionBox.width, height: selectionBox.height }} /> : null}
       {canvasNotice ? <div className="vd-canvas-notice" role="status">{canvasNotice}</div> : null}
       {canvasContextMenu ? <CanvasContextMenu position={canvasContextMenu.screen}
@@ -2842,6 +2861,7 @@ function storeChatPanelLayout(layout: ChatPanelLayout): void {
 }
 
 export function DirectorOverlay({ director, chat }: DirectorInjectedProps) {
+  const language = useLanguage()
   const snapshot = useSource(director)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [jobsOpen, setJobsOpen] = useState(false)
@@ -2889,7 +2909,7 @@ export function DirectorOverlay({ director, chat }: DirectorInjectedProps) {
   return (
     <>
       <style>{`${xyflowStyles}\n${styles}`}</style>
-      <div className="vd-shell" role="dialog" aria-modal="true" aria-label="Video Director">
+      <div className="vd-shell" lang={language === 'zh' ? 'zh-CN' : 'en'} role="dialog" aria-modal="true" aria-label="Video Director">
         <TopBar
           snapshot={snapshot}
           director={director}
@@ -2900,11 +2920,11 @@ export function DirectorOverlay({ director, chat }: DirectorInjectedProps) {
         {jobsOpen ? <JobDrawer snapshot={snapshot} director={director} onClose={() => setJobsOpen(false)} /> : null}
         {snapshot.error !== null ? (
           <div className={`vd-global-error ${snapshot.conflict ? 'is-conflict' : ''}`}>
-            <strong>{snapshot.conflict ? '工程发生保存冲突' : 'Video Director 错误'}</strong>
+            <strong>{snapshot.conflict ? t("工程发生保存冲突") : t("Video Director 错误")}</strong>
             <span>{snapshot.error}</span>
           </div>
         ) : null}
-        {snapshot.phase === 'loading' && snapshot.project === null ? <div className="vd-loading">载入 Video Projects…</div> : null}
+        {snapshot.phase === 'loading' && snapshot.project === null ? <div className="vd-loading">{t("载入 Video Projects…")}</div> : null}
         {snapshot.phase !== 'loading' && snapshot.project === null ? (
           <EmptyProject onCreate={name => director.createProject(name)} />
         ) : snapshot.project !== null ? (
@@ -2924,7 +2944,7 @@ export function DirectorOverlay({ director, chat }: DirectorInjectedProps) {
             <div
               className="vd-chat-resizer"
               role="separator"
-              aria-label="调整左侧聊天栏宽度"
+              aria-label={t("调整左侧聊天栏宽度")}
               aria-orientation="vertical"
               aria-valuemin={CHAT_PANEL_MIN_WIDTH}
               aria-valuemax={chatPanelMaxWidth}
@@ -2969,8 +2989,8 @@ export function DirectorOverlay({ director, chat }: DirectorInjectedProps) {
             <button
               type="button"
               className="vd-chat-collapse-toggle"
-              aria-label={chatPanelCollapsed ? '展开左侧聊天栏' : '折叠左侧聊天栏'}
-              title={chatPanelCollapsed ? '展开左侧聊天栏' : '折叠左侧聊天栏'}
+              aria-label={chatPanelCollapsed ? t("展开左侧聊天栏") : t("折叠左侧聊天栏")}
+              title={chatPanelCollapsed ? t("展开左侧聊天栏") : t("折叠左侧聊天栏")}
               onClick={() => {
                 if (chatPanelCollapsed) {
                   setChatPanelOpen(true)
@@ -2985,7 +3005,7 @@ export function DirectorOverlay({ director, chat }: DirectorInjectedProps) {
                 <path d={chatPanelCollapsed ? 'm9 5 7 7-7 7' : 'm15 5-7 7 7 7'} />
               </svg>
             </button>
-            {snapshot.phase === 'loading' ? <div className="vd-project-loading">正在切换工程…</div> : null}
+            {snapshot.phase === 'loading' ? <div className="vd-project-loading">{t("正在切换工程…")}</div> : null}
           </main>
         ) : null}
         {settingsOpen ? <SettingsDrawer snapshot={snapshot} director={director} onClose={() => setSettingsOpen(false)} /> : null}

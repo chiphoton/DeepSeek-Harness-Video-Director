@@ -369,6 +369,22 @@ test('project export and Duplicate preserve canvas assets while resetting active
   }
 })
 
+test('new nodes retain Harness provider defaults and explicit project providers', async () => {
+  const Controller = await DirectorController()
+  for (const settings of [{}, { defaultTextProvider: 'codex-plan', defaultImageProvider: 'codex-plan' }]) {
+    const project = projectFixture('00000000-0000-4000-8000-000000000043')
+    project.settings = settings
+    const controller = new Controller(existingSessionContext(project, async () => ({ ok: true, value: { nodeDefinitions: [] } })))
+    await controller.start()
+    const textId = controller.addWorkflowNode('prompt-enhancer')
+    const imageId = controller.addWorkflowNode('image-generation')
+    const nodes = controller.getSnapshot().project.graph.nodes
+    assert.equal(nodes.find(node => node.id === textId).data.providerId, settings.defaultTextProvider ?? 'ollama')
+    assert.equal(nodes.find(node => node.id === imageId).data.providerId, settings.defaultImageProvider ?? 'openai')
+    controller.dispose()
+  }
+})
+
 function existingSessionContext(project, handler, projectGet = async () => ({ ok: true, value: { project } })) {
   const submittedRuns = new Map()
   const list = {
@@ -408,6 +424,41 @@ function existingSessionContext(project, handler, projectGet = async () => ({ ok
     },
   }
 }
+
+test('Codex discovery refreshes metadata while an existing node keeps its unavailable model', async t => {
+  const Controller = await DirectorController()
+  const project = projectFixture('00000000-0000-4000-8000-000000000096')
+  project.graph.nodes = [{ id: 'text', type: 'director', position: { x: 0, y: 0 }, data: {
+    kind: 'prompt-enhancer', title: 'Saved model', providerId: 'codex-plan', modelId: 'retired-model', prompt: 'Test', status: 'idle',
+  } }]
+  let requestedModel
+  let refreshes = 0
+  const catalog = { model: 'future-model', models: ['future-model'], workflowModels: [],
+    codexModels: [{ id: 'future-model', displayName: 'Future Model', defaultReasoningEffort: 'ultra', inputModalities: ['text', 'image'], isDefault: true }],
+    codexCatalog: { source: 'live', fetchedAt: 1234, error: null },
+  }
+  const ctx = existingSessionContext(project, async (endpoint, payload) => {
+    if (endpoint === 'nodes/list') return { ok: true, value: { nodeDefinitions: [] } }
+    if (endpoint === 'providers/models' || endpoint === 'providers/check') { refreshes++; return { ok: true, value: { ok: true, latencyMs: 1, ...catalog } } }
+    if (endpoint === 'jobs/start') { requestedModel = payload.snapshot.request.model; return { ok: true, value: { job: { id: 'job-model', status: 'queued', phase: 'queued' } } } }
+    throw new Error(`unexpected endpoint ${endpoint}`)
+  })
+  const call = ctx.connection.rpc.call
+  ctx.connection.rpc.call = (channel, endpoint, payload) => endpoint === 'providers/list'
+    ? Promise.resolve({ ok: true, value: { providers: [{ id: 'codex-plan', kind: 'codex-plan', configured: true, availableModels: [] }] } })
+    : call(channel, endpoint, payload)
+  const controller = new Controller(ctx)
+  t.after(() => controller.dispose())
+  await controller.start()
+  assert.equal(refreshes, 1, 'Codex models refresh at startup')
+  assert.equal(controller.getSnapshot().providers[0].model, 'future-model')
+  assert.equal(controller.getSnapshot().providers[0].codexModels[0].defaultReasoningEffort, 'ultra')
+  await controller.checkProvider('codex-plan')
+  assert.equal(refreshes, 2)
+  await controller.runNode('text')
+  assert.equal(requestedModel, 'retired-model', 'Backend must validate the saved model, never silently select the default')
+  assert.equal(controller.getSnapshot().project.graph.nodes[0].data.modelId, 'retired-model')
+})
 
 test('project export omits generated Preview artifacts while preserving source assets', async () => {
   const Controller = await DirectorController()

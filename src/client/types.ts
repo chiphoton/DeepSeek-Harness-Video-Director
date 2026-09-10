@@ -244,6 +244,16 @@ export interface ProviderDescriptor {
   kind: 'ollama' | 'openai-compatible' | 'codex-plan' | 'comfyui' | 'comfyui-mcp'
   baseUrl?: string
   model?: string
+  fastMode?: boolean
+  codexModels?: Array<{
+    id: string
+    displayName: string
+    defaultReasoningEffort: string
+    inputModalities: string[]
+    fastServiceTier: string | null
+    isDefault: boolean
+  }>
+  codexCatalog?: { source: 'live' | 'cache' | 'unavailable'; fetchedAt: number | null; error: string | null }
   imageModel?: string
   mcpTool?: string
   requiresApiKey: boolean
@@ -374,6 +384,9 @@ export interface DirectorSnapshot {
   open: boolean
   phase: 'idle' | 'loading' | 'ready' | 'error'
   projects: ProjectSummary[]
+  examples: Array<{ id: string; name: string }>
+  examplesLoading: boolean
+  examplesError: string | null
   project: VideoProject | null
   providers: ProviderDescriptor[]
   /** ComfyUI registry entries; the canvas vd-workflow is project.graph. */

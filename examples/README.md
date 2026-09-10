@@ -1,4 +1,6 @@
 <p align="center">
+
+The project picker now discovers every `*.video-director.json` archive in this folder under **examples/**. Choose **all-in-one** or the synced **canvas-demo** (sketch → Codex image → text → H3 video) to open an editable copy with new project, asset, and Harness session IDs. Current edits are saved first; no generation starts on import.
   <a href="../README.md">Project Home</a> ·
   <a href="README_zh.md">简体中文</a> ·
   <a href="../docs/INSTALL.md">Agent Installation Guide</a>

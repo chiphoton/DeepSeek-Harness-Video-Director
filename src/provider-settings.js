@@ -8,6 +8,7 @@ const EDITABLE_FIELDS = new Set([
   'model',
   'imageModel',
   'apiKey',
+  'fastMode',
 ])
 
 function clone(value) {
@@ -31,6 +32,11 @@ function cleanPatch(inputValue) {
     if (!EDITABLE_FIELDS.has(key)) throw new DirectorInputError(`provider field ${key} is not editable`)
     if (value === null) {
       patch[key] = null
+      continue
+    }
+    if (key === 'fastMode') {
+      if (typeof value !== 'boolean') throw new DirectorInputError('provider.fastMode must be a boolean')
+      patch[key] = value
       continue
     }
     const parsed = string(value, `provider.${key}`, {
@@ -57,7 +63,7 @@ function mergedProviders(baseProviders, overrides) {
 }
 
 /**
- * One small interface over DSH settings. It hides layered provider config,
+ * A small interface over persistent provider settings. It hides layered provider config,
  * path-addressed secret-safe writes, and live runtime refresh from RPC callers.
  */
 export class ProviderSettings {
@@ -105,6 +111,9 @@ export class ProviderSettings {
       throw new DirectorInputError(`unknown provider: ${providerId}`)
     }
     const { patch, clearApiKey } = cleanPatch(patchValue)
+    if ('fastMode' in patch && this.base.providers.find(provider => provider.id === providerId).kind !== 'codex-plan') {
+      throw new DirectorInputError('Fast mode is only available for Codex Plan')
+    }
     const ops = []
     for (const [key, value] of Object.entries(patch)) {
       if (value === null || (value === '' && key !== 'apiKey')) {

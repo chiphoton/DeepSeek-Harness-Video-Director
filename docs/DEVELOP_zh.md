@@ -76,7 +76,7 @@ pnpm dsh web
 
 凭据应放在 Harness 托管配置或环境变量中。示例 Patch 从 `OPENAI_API_KEY` 读取密钥，当前选择 `gpt-5.6-terra` 与 `gpt-image-2`；请按兼容接口实际提供的能力调整模型 id。也可以在右侧**设置 → 连接**中覆盖 Provider 配置；密钥通过 DSH 原生 Settings 保存且不会回显到浏览器。ComfyUI 只需输入 `127.0.0.1:8188`，Host 会自动补成 HTTP URL，REST/MCP 细节不会写进工程或画布节点。Video Project 只保存 Provider id、Workflow/Node 引用与参数，不保存 Token。
 
-Codex Plan Provider 使用官方 [`@openai/codex-sdk`](https://developers.openai.com/codex/sdk/) 和本机现有的 Codex 登录。TEXT WORKFLOW 会在隔离的只读临时目录中运行 Codex Agent 来增强 Prompt；IMAGE WORKFLOW 则调用原生图像生成 Skill，再把单张结果导入 Video Project。它不会把 ChatGPT 订阅转换成 API Key，也不会代理任意 Responses API 请求。两个 Workflow 都提供 medium 推理的 `gpt-5.6-sol`、`gpt-5.6-terra` 与 `gpt-5.6-luna`。
+Codex Plan Provider 使用官方 [`@openai/codex-sdk`](https://developers.openai.com/codex/sdk/) 和本机现有的 Codex 登录。TEXT WORKFLOW 会在隔离的只读临时目录中运行 Codex Agent 来增强 Prompt；IMAGE WORKFLOW 则调用原生图像生成 Skill，再把单张结果导入 Video Project。它不会把 ChatGPT 订阅转换成 API Key，也不会代理任意 Responses API 请求。两个 Workflow 通过已安装 Codex CLI 的 `app-server` / `model/list` 发现可用模型及其默认推理强度，需要图像输入时会过滤纯文本模型；已失效的保存模型需手动重新选择。成功的目录缓存到 `codex-models.json`，供离线使用。“快速模式（优先处理）”默认关闭，并通过 DSH 原生 Provider 设置持久化。可用 `DSH_VIDEO_DIRECTOR_CODEX_PATH` 指定 CLI 路径；默认优先使用已安装的 CLI。若事件流没有图像数据，图像 Workflow 会从当前 SDK 线程的 `generated_images/<thread-id>/` 复制原生生成结果，原文件保留。
 
 Host 会从 Ollama `/api/tags` 自动刷新模型，并且在设置和文字 Workflow 节点中只列出清单里真实可用的模型。Ollama 文字节点会在 **Advanced** 中提供 System Prompt、Context Length 与 Thinking；所选模型未声明 Thinking 能力时该选项会禁用，发现到的模型上下文长度会限制可选覆盖值。ComfyUI 模型枚举来自 `/object_info`，但只有注册 comfyui-workflow 或 vd-node 定义明确开放的精确 Graph 输入才会成为下拉参数；ComfyUI-backed vd-node 仍然先选择命名 comfyui-workflow，Checkpoint、UNET、CLIP、VAE、LoRA 等文件只在该 comfyui-workflow 的参数中选择。原始 `object_info` 与凭据都不会发送到浏览器。
 
@@ -246,3 +246,6 @@ pnpm run check
 测试覆盖插件/Patch 发现、Project 身份与 Revision 冲突、不可变 Asset 和 HTTP Range、不可变 vd-node definition 与字段校验、Preview/Save Catalog、不会重复提交的 REST/MCP 路由、H3 许可门与约束、保守 Job Recovery 与 RPC 输入验证。
 
 主要参考：[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)、[DirectorX](https://github.com/LaplaceYoung/dsh-directorx)、[Tongflow](https://github.com/tong-io/tongflow)、[MiniMax-H3-Codex-Drama](https://github.com/chiphoton/MiniMax-H3-Codex-Drama)、[comfyui-mcp 0.49.3](https://github.com/artokun/comfyui-mcp/tree/v0.49.3) 与 [ComfyUI](https://github.com/Comfy-Org/ComfyUI)。
+
+
+画布同步来源与 Harness 适配见 [同步记录](canvas-sync.md)。新增工程示例选择器、中英文界面和存储切换。`src/director-host.js` 通过现有 `/video-director` 认证通道提供 `examples/list`、`examples/get` 和 `storage/{info,open,choose,change,reset}`；迁移前等待已接受写入完成，生成和工作流运行时拒绝迁移。原始 `dataDir` 中的 `.video-director-storage.json` 记录重启位置，素材路由跟随当前目录。对话和连接密钥由 Harness 管理。

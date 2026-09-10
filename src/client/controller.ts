@@ -43,7 +43,7 @@ import {
   parameterInputCandidates,
   resolveParameterInputs,
 } from './parameter-inputs'
-import { effectiveOllamaModel, ollamaModelSupports } from './model-choices'
+import { codexModelForNode, effectiveOllamaModel, ollamaModelSupports } from './model-choices'
 import { DEFAULT_TEXT_WORKFLOW_SYSTEM_PROMPT } from './default-system-prompt'
 import { planVdRun, validateTriggerNodeConnections } from './workflow-runner'
 
@@ -151,6 +151,9 @@ function emptySnapshot(): DirectorSnapshot {
     open: false,
     phase: 'idle',
     projects: [],
+    examples: [],
+    examplesLoading: false,
+    examplesError: null,
     project: null,
     providers: [],
     workflows: [],
@@ -226,6 +229,9 @@ function withDiscoveredModels(
     workflowModels: NonNullable<ProviderDescriptor['workflowModels']>
     modelDetails?: NonNullable<ProviderDescriptor['modelDetails']>
     loadedModels?: string[]
+    model?: string
+    codexModels?: ProviderDescriptor['codexModels']
+    codexCatalog?: ProviderDescriptor['codexCatalog']
   },
 ): ProviderDescriptor {
   return {
@@ -234,7 +240,8 @@ function withDiscoveredModels(
     loadedModels: result.loadedModels ?? [],
     modelDetails: result.modelDetails ?? [],
     workflowModels: result.workflowModels,
-    modelDiscovery: { state: 'ready' },
+    ...(provider.kind === 'codex-plan' ? { model: result.model, codexModels: result.codexModels, codexCatalog: result.codexCatalog } : {}),
+    modelDiscovery: result.codexCatalog?.error ? { state: 'error', message: result.codexCatalog.error } : { state: 'ready' },
   }
 }
 
@@ -929,7 +936,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
         phase: 'ready',
       })
       for (const provider of providers.providers) {
-        if (provider.configured && (provider.kind === 'ollama' || provider.kind === 'comfyui' || provider.kind === 'comfyui-mcp')) {
+        if (provider.configured && (provider.kind === 'codex-plan' || provider.kind === 'ollama' || provider.kind === 'comfyui' || provider.kind === 'comfyui-mcp')) {
           void this.refreshProviderModels(provider.id)
         }
       }
@@ -1075,6 +1082,41 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
       throw error
     }
     await this.installProjectArchive(archive.project.name, async () => archive)
+  }
+
+  async refreshExamples(): Promise<void> {
+    if (this.snapshot.examplesLoading) return
+    this.patch({ examplesLoading: true, examplesError: null })
+    try {
+      const result = await this.rpc<{ examples: DirectorSnapshot['examples'] }>('examples/list', {})
+      if (!this.disposed) this.patch({ examples: result.examples })
+    } catch (error) {
+      if (!this.disposed) this.patch({ examplesError: errorMessage(error) })
+    } finally {
+      if (!this.disposed) this.patch({ examplesLoading: false })
+    }
+  }
+
+  async openExample(id: string): Promise<void> {
+    try {
+      if (this.snapshot.saving || this.snapshot.phase === 'loading') throw new Error('Wait for the current project operation before opening an example.')
+      if (this.snapshot.dirty) await this.saveProject()
+      await this.installProjectArchive(archive => {
+        const usedNames = new Set(this.snapshot.projects.map(project => project.name.toLocaleLowerCase()))
+        let name = archive.project.name
+        for (let count = 2; usedNames.has(name.toLocaleLowerCase()); count++) {
+          const suffix = ` (${count})`
+          name = archive.project.name.slice(0, 120 - suffix.length).trimEnd() + suffix
+        }
+        return name
+      }, async () => {
+        const result = await this.rpc<{ archive: string }>('examples/get', { id })
+        return parseProjectArchive(result.archive)
+      })
+    } catch (error) {
+      this.patch({ error: errorMessage(error) })
+      throw error
+    }
   }
 
   async startNewChatSession(): Promise<void> {
@@ -1748,6 +1790,8 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
       this.snapshot.providers,
       this.snapshot.workflows,
     )
+    const provider = this.snapshot.providers.find(candidate => candidate.id === data.providerId)
+    if (provider?.kind === 'codex-plan') data.modelId = codexModelForNode(data, provider)
     const node: DirectorNode = {
       id: crypto.randomUUID(),
       type: 'director',
@@ -1966,9 +2010,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
       const selectedModel = selectedProvider?.kind === 'ollama'
         ? effectiveOllamaModel(selectedProvider.availableModels ?? [], selectedProvider.model, node.data.modelId)
         : selectedProvider?.kind === 'codex-plan'
-          ? ((selectedProvider.availableModels ?? []).includes(node.data.modelId ?? '')
-              ? node.data.modelId
-              : selectedProvider.model ?? selectedProvider.availableModels?.[0] ?? 'gpt-5.6-sol')
+          ? codexModelForNode(node.data, selectedProvider)
           : node.data.modelId ?? (node.data.modelFamily === 'minimax-h3' ? undefined : node.data.modelFamily)
       const selectedModelDetails = selectedProvider?.modelDetails?.find(details => details.id === selectedModel)
       if (node.data.contextLength !== undefined && selectedModelDetails?.contextLength !== undefined
@@ -2345,14 +2387,14 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
 
   async checkProvider(providerId: string): Promise<void> {
     const expected = this.snapshot.providers.find(provider => provider.id === providerId)
-    const checkDiscoversOllamaModels = expected?.kind === 'ollama'
-    const refreshVersion = checkDiscoversOllamaModels
+    const checkDiscoversModels = expected?.kind === 'ollama' || expected?.kind === 'codex-plan'
+    const refreshVersion = checkDiscoversModels
       ? (this.modelRefreshVersions.get(providerId) ?? 0) + 1
       : undefined
     if (refreshVersion !== undefined) this.modelRefreshVersions.set(providerId, refreshVersion)
     this.patch({
       providerChecks: { ...this.snapshot.providerChecks, [providerId]: { state: 'checking' } },
-      ...(checkDiscoversOllamaModels
+      ...(checkDiscoversModels
         ? {
             providers: this.snapshot.providers.map(provider => provider.id === providerId
               ? { ...provider, modelDiscovery: { state: 'loading' } }
@@ -2374,7 +2416,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
         providerChecks: { ...this.snapshot.providerChecks, [providerId]: { state: 'ok', latencyMs: result.latencyMs, transport: result.transport } },
       })
       const provider = this.snapshot.providers.find(candidate => candidate.id === providerId)
-      if (checkDiscoversOllamaModels && provider !== undefined
+      if (checkDiscoversModels && provider !== undefined
         && provider.baseUrl === expected?.baseUrl
         && this.modelRefreshVersions.get(providerId) === refreshVersion) {
         this.patch({
@@ -2390,7 +2432,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
     } catch (error) {
       this.patch({
         providerChecks: { ...this.snapshot.providerChecks, [providerId]: { state: 'error', message: errorMessage(error) } },
-        ...(checkDiscoversOllamaModels
+        ...(checkDiscoversModels
           && this.snapshot.providers.some(provider => provider.id === providerId && provider.baseUrl === expected?.baseUrl)
           && this.modelRefreshVersions.get(providerId) === refreshVersion
           ? {
@@ -2580,7 +2622,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
   }
 
   private async installProjectArchive(
-    name: string,
+    nameOrResolver: string | ((archive: ProjectArchive) => string),
     archiveLoader: () => Promise<ProjectArchive>,
   ): Promise<void> {
     if (this.snapshot.phase === 'loading') {
@@ -2598,6 +2640,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
     try {
       const archive = await archiveLoader()
       if (transition !== this.transitionVersion) return
+      const name = typeof nameOrResolver === 'string' ? nameOrResolver : nameOrResolver(archive)
       const sessionId = await this.ctx.sessions.create()
       const binding = this.requireSessionBinding(sessionId)
       await this.renameSession(binding, name)
@@ -3159,5 +3202,9 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
     const result = await this.ctx.connection.rpc.call(CHANNEL, endpoint, payload, signal) as RemoteResult<T>
     if (result.ok) return result.value
     throw remoteError(result.error)
+  }
+
+  storage<T>(endpoint: 'info' | 'open' | 'choose' | 'change' | 'reset', payload: unknown = {}, signal?: AbortSignal): Promise<T> {
+    return this.rpc<T>(`storage/${endpoint}`, payload, signal)
   }
 }

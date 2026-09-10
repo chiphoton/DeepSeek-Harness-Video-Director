@@ -1,4 +1,6 @@
 <p align="center">
+
+工程选择器现会在 **examples/** 中列出此目录下的所有 `*.video-director.json`。可选择 **all-in-one**，或同步引入的 **canvas-demo**（草图 → Codex 图像 → 文本 → H3 视频），打开带独立工程、素材和 Harness 会话 ID 的可编辑副本。当前编辑会先保存，导入不会启动生成。
   <a href="../README_zh.md">项目主页</a> ·
   <a href="README.md">English</a> ·
   <a href="../docs/INSTALL_zh.md">Agent 安装手册</a>

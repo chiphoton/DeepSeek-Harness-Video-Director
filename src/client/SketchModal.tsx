@@ -1,3 +1,4 @@
+import { t, useLanguage } from './i18n'
 import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -226,6 +227,7 @@ async function canvasPng(canvas: HTMLCanvasElement): Promise<Blob> {
 }
 
 function ToolIcon({ tool }: { tool: SketchTool }): ReactNode {
+  useLanguage()
   const common = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
   if (tool === 'brush') return <svg viewBox="0 0 24 24" aria-hidden><path {...common} d="M4 20c3.8.2 5.8-1.1 6-4 0-1.7 1.2-3 2.8-3.1L19 5.7 16.3 3l-7.1 6.3c-.2 1.7-1.4 2.8-3.1 2.8C3.2 12.3 2 14.4 4 20Z" /></svg>
   if (tool === 'rectangle') return <svg viewBox="0 0 24 24" aria-hidden><rect {...common} x="4" y="5" width="16" height="14" rx="1" /></svg>
@@ -261,6 +263,7 @@ function newElement(tool: SketchTool, point: SketchPoint, color: string, width: 
 }
 
 export function SketchModal(props: SketchModalProps): ReactNode {
+  useLanguage()
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const canvasShellRef = useRef<HTMLDivElement | null>(null)
   const activeRef = useRef<SketchElement | null>(null)
@@ -643,30 +646,30 @@ export function SketchModal(props: SketchModalProps): ReactNode {
       <section className="vd-sketch-dialog">
         <header className="vd-sketch-dialog-header">
           <strong>{props.title ?? 'New sketch'}</strong>
-          <span className="vd-sketch-canvas-size" aria-label="Canvas size">
+          <span className="vd-sketch-canvas-size" aria-label={t("Canvas size")}>
             <label>
               <span>W</span>
-              <input type="number" min={SKETCH_MIN_SIZE} max={SKETCH_MAX_SIZE} value={widthDraft} aria-label="Canvas width" onChange={event => setWidthDraft(event.target.value)} onKeyDown={onSizeKeyDown} />
+              <input type="number" min={SKETCH_MIN_SIZE} max={SKETCH_MAX_SIZE} value={widthDraft} aria-label={t("Canvas width")} onChange={event => setWidthDraft(event.target.value)} onKeyDown={onSizeKeyDown} />
             </label>
             <span aria-hidden>×</span>
             <label>
               <span>H</span>
-              <input type="number" min={SKETCH_MIN_SIZE} max={SKETCH_MAX_SIZE} value={heightDraft} aria-label="Canvas height" onChange={event => setHeightDraft(event.target.value)} onKeyDown={onSizeKeyDown} />
+              <input type="number" min={SKETCH_MIN_SIZE} max={SKETCH_MAX_SIZE} value={heightDraft} aria-label={t("Canvas height")} onChange={event => setHeightDraft(event.target.value)} onKeyDown={onSizeKeyDown} />
             </label>
-            <button type="button" disabled={busy} onClick={applyCanvasSize}>Resize</button>
+            <button type="button" disabled={busy} onClick={applyCanvasSize}>{t("Resize")}</button>
             <small>PNG</small>
           </span>
           <span style={{ flex: 1 }} />
-          <button type="button" disabled={busy} onClick={props.onCancel} style={buttonStyle}>Close</button>
+          <button type="button" disabled={busy} onClick={props.onCancel} style={buttonStyle}>{t("Close")}</button>
         </header>
 
         <div className="vd-sketch-toolbar">
           <div className="vd-sketch-toolbar-primary">
-            <span className="vd-sketch-history" role="group" aria-label="Sketch history">
-              <button type="button" disabled={history.past.length === 0 || busy} onClick={undo} style={buttonStyle}>Undo</button>
-              <button type="button" disabled={history.future.length === 0 || busy} onClick={redo} style={buttonStyle}>Redo</button>
+            <span className="vd-sketch-history" role="group" aria-label={t("Sketch history")}>
+              <button type="button" disabled={history.past.length === 0 || busy} onClick={undo} style={buttonStyle}>{t("Undo")}</button>
+              <button type="button" disabled={history.future.length === 0 || busy} onClick={redo} style={buttonStyle}>{t("Redo")}</button>
             </span>
-            <span aria-label="Brush colors" className="vd-sketch-colors">
+            <span aria-label={t("Brush colors")} className="vd-sketch-colors">
               {colors.map(value => (
                 <button
                   key={value}
@@ -679,13 +682,13 @@ export function SketchModal(props: SketchModalProps): ReactNode {
               ))}
             </span>
             <label className="vd-sketch-brush-size">
-              <span>Size</span>
+              <span>{t("Size")}</span>
               <input
                 type="number"
                 min={1}
                 max={200}
                 value={brushDraft}
-                aria-label="Brush size value"
+                aria-label={t("Brush size value")}
                 onChange={event => {
                   setBrushDraft(event.target.value)
                   const value = Number(event.target.value)
@@ -694,26 +697,26 @@ export function SketchModal(props: SketchModalProps): ReactNode {
                 onBlur={() => showBrushPreview(Number(brushDraft) || brush)}
               />
               <span>px</span>
-              <input type="range" min={1} max={200} value={brush} aria-label="Brush size" onChange={event => showBrushPreview(Number(event.target.value))} />
+              <input type="range" min={1} max={200} value={brush} aria-label={t("Brush size")} onChange={event => showBrushPreview(Number(event.target.value))} />
             </label>
             <span className="vd-sketch-view-actions">
-              <button type="button" disabled={busy} onClick={fitCanvasView} style={buttonStyle}>Fit</button>
-              <button type="button" disabled={!sketchHasContent(sketch) || busy} onClick={() => commit(clearSketchDocument(sketch))} style={buttonStyle}>Clear</button>
+              <button type="button" disabled={busy} onClick={fitCanvasView} style={buttonStyle}>{t("Fit")}</button>
+              <button type="button" disabled={!sketchHasContent(sketch) || busy} onClick={() => commit(clearSketchDocument(sketch))} style={buttonStyle}>{t("Clear")}</button>
             </span>
           </div>
-          <div className="vd-sketch-tools" role="toolbar" aria-label="Drawing tools">
+          <div className="vd-sketch-tools" role="toolbar" aria-label={t("Drawing tools")}>
             {tools.map(value => (
               <button
                 key={value}
                 type="button"
                 className={tool === value ? 'is-active' : undefined}
                 aria-pressed={tool === value}
-                aria-label={toolLabels[value]}
-                title={toolLabels[value]}
+                aria-label={t(toolLabels[value])}
+                title={t(toolLabels[value])}
                 onClick={() => setTool(value)}
               >
                 <ToolIcon tool={value} />
-                <span>{toolLabels[value]}</span>
+                <span>{t(toolLabels[value])}</span>
               </button>
             ))}
           </div>
@@ -729,7 +732,7 @@ export function SketchModal(props: SketchModalProps): ReactNode {
               ref={canvasRef}
               width={sketch.width}
               height={sketch.height}
-              aria-label="Sketch drawing canvas"
+              aria-label={t("Sketch drawing canvas")}
               onPointerDown={startElement}
               onPointerEnter={updateCanvasCursor}
               onPointerMove={continueElement}
@@ -771,10 +774,10 @@ export function SketchModal(props: SketchModalProps): ReactNode {
               <textarea
                 ref={textInputRef}
                 className="vd-sketch-text-editor"
-                aria-label="Sketch text"
+                aria-label={t("Sketch text")}
                 value={textDraft.value}
                 rows={2}
-                placeholder="Type text…"
+                placeholder={t("Type text…")}
                 onChange={event => setTextDraft({ ...textDraft, value: event.target.value })}
                 onBlur={() => { commitText() }}
                 onKeyDown={event => {
@@ -799,11 +802,11 @@ export function SketchModal(props: SketchModalProps): ReactNode {
         </div>
 
         <footer className="vd-sketch-dialog-footer">
-          {error !== null ? <span role="alert">{error}</span> : <span>{baseLoading ? 'Loading editable canvas…' : '⌘/Ctrl+Z to undo · Shift+⌘/Ctrl+Z to redo'}</span>}
+          {error !== null ? <span role="alert">{error}</span> : <span>{t(baseLoading ? 'Loading editable canvas…' : '⌘/Ctrl+Z to undo · Shift+⌘/Ctrl+Z to redo')}</span>}
           <span style={{ flex: 1 }} />
-          <button type="button" disabled={busy} onClick={props.onCancel} style={buttonStyle}>Cancel</button>
+          <button type="button" disabled={busy} onClick={props.onCancel} style={buttonStyle}>{t("Cancel")}</button>
           <button type="button" disabled={busy || baseLoading} onClick={() => { void submit() }} className="vd-sketch-submit">
-            {busy ? 'Saving…' : (props.submitLabel ?? 'Add to canvas')}
+            {busy ? t("Saving…") : t(props.submitLabel ?? 'Add to canvas')}
           </button>
         </footer>
       </section>

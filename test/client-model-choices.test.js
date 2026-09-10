@@ -22,6 +22,18 @@ async function modelChoiceHelpers() {
   return helpers
 }
 
+test('Codex preserves explicit and previously used models when the catalog default changes', async () => {
+  const { codexModelForNode } = await modelChoiceHelpers()
+  const provider = { id: 'codex-plan', model: 'new-default', availableModels: ['new-default'] }
+  assert.equal(codexModelForNode({}, provider), 'new-default')
+  assert.equal(codexModelForNode({ modelId: 'saved-model' }, provider), 'saved-model')
+  assert.equal(codexModelForNode({ modelFamily: 'legacy-model' }, provider), 'legacy-model')
+  assert.equal(codexModelForNode({ result: { providerId: 'codex-plan', model: 'previous-default' } }, provider), 'previous-default')
+  assert.equal(codexModelForNode({ modelId: 'chosen-model', result: { providerId: 'codex-plan', model: 'previous-default' } }, provider), 'chosen-model')
+  assert.equal(codexModelForNode({ result: { providerId: 'another-provider', model: 'unrelated' } }, provider), 'new-default')
+  assert.equal(codexModelForNode({}, { id: 'codex-plan', availableModels: [] }), undefined)
+})
+
 test('an exact dynamic empty model catalog disables the select and overrides stale declared choices', async () => {
   const { modelChoicePresentation: present } = await modelChoiceHelpers()
 

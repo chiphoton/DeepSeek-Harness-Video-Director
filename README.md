@@ -37,6 +37,7 @@ We call canvas elements **vd-nodes** and the overall canvas graph a **vd-workflo
 | 🏠 **Local-first generation** | Use Ollama and ComfyUI on your own machine, including Qwen3.8-27B and MiniMax-H3 pipelines. |
 | 🔌 **Multiple providers** | Mix Ollama, OpenAI-compatible endpoints, Codex Plan, and one logical ComfyUI backend in the same project. |
 | 🎞️ **Project-aware direction** | Every Video Project keeps its own canvas, chat session, jobs, immutable assets, and provider choices. |
+| 🌐 **Language and storage** | Switch between English and Chinese, and relocate canvas data from Settings. |
 | 🛠️ **Extensible by design** | Import reviewed API-format comfyui-workflows or package them as declarative vd-node packs. |
 
 <p align="center">
@@ -85,7 +86,7 @@ Open **Settings → Connections** in Video-Director:
 - **Ollama:** defaults to `127.0.0.1:11434`; install a model such as Qwen3.8-27B on the Ollama host, then select it in Video-Director.
 - **ComfyUI:** defaults to `127.0.0.1:8188`; install each comfyui-workflow's required models and ComfyUI custom-node packages on the ComfyUI server.
 - **OpenAI-compatible:** set the Base URL, model ids, and API key for your provider.
-- **Codex Plan:** uses the machine's existing Codex sign-in for prompt and image workflows.
+- **Codex Plan:** uses the machine's existing Codex sign-in for prompt and image workflows. Models and default reasoning effort come from the installed CLI. **Refresh models** reloads the catalog; **Fast (priority)** is optional and off by default. Set `DSH_VIDEO_DIRECTOR_CODEX_PATH` if Codex is not on PATH.
 
 You only need one working provider to begin. Video-Director does not silently install models, ComfyUI custom-node packages, or external services.
 
@@ -151,6 +152,8 @@ API-format workflows can be analyzed offline. Editor/UI workflows require exact 
 
 The Skill is already prepared for plugin distribution: its project source lives under `skills/comfyui-workflow-to-node/`, `package.json` includes `skills/` in the published package, and the Host strips the Skill's YAML front matter before registering its body with the DSH Skills service while retaining its local references and script.
 
+The project picker includes an **examples/** folder. Select **canvas-demo** or **all-in-one** to open an independent editable copy; current edits are saved first, and importing never starts generation. **Settings → Language** switches English/Chinese immediately and remembers the choice in this browser.
+
 ## 💾 Where files are saved
 
 The default Host data directory is `./.dsh-video-director`, resolved from the directory where `dsh web` starts:
@@ -164,7 +167,7 @@ The default Host data directory is `./.dsh-video-director`, resolved from the di
 └── workflows.json                       # imported workflow registry
 ```
 
-Change `dataDir` in the plugin's DSH configuration if you need a stable absolute location. **Save Output** downloads a copy through the browser to the browser's configured download directory; the project-owned asset remains under `dataDir/assets`.
+**Settings → Storage** opens the current folder, changes to a new or empty folder, or resets to the original `dataDir`. A change saves current edits, copies canvas data, and takes effect immediately; previous folders remain as backups. The original data directory keeps `.video-director-storage.json` so the choice survives restart. Generations and workflows must finish or be cancelled first. Native folder controls act on the Harness host machine. Harness continues to manage conversation history and provider credentials. You can also set the initial `dataDir` in the plugin's DSH configuration. **Save Output** downloads a copy through the browser to the browser's configured download directory; the project-owned asset remains under `dataDir/assets`.
 
 ## 📝 Notes
 

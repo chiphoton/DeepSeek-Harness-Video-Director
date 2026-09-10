@@ -12,6 +12,22 @@ function applyPath(root, op) {
   else cursor[key] = op.value
 }
 
+test('Fast is a Codex-only boolean setting and an explicit off value is preserved', async () => {
+  const document = { providerOverrides: {} }
+  const settings = new ProviderSettings({ providers: [
+    { id: 'codex-plan', kind: 'codex-plan', fastMode: false },
+    { id: 'ollama', kind: 'ollama' },
+  ] }, () => {})
+  settings.attach({ mutate: async (_namespace, ops) => { for (const op of ops) applyPath(document, op) } }, () => document)
+  assert.equal(settings.resolved().providers[0].fastMode, false)
+  await settings.updateProvider('codex-plan', { fastMode: true })
+  assert.equal(settings.resolved().providers[0].fastMode, true)
+  await settings.updateProvider('codex-plan', { fastMode: false })
+  assert.equal(document.providerOverrides['codex-plan'].fastMode, false)
+  await assert.rejects(settings.updateProvider('codex-plan', { fastMode: 'true' }), /boolean/u)
+  await assert.rejects(settings.updateProvider('ollama', { fastMode: true }), /only available for Codex/u)
+})
+
 test('ProviderSettings accepts the MiniMax H3 license by default while preserving explicit opt-out', () => {
   let document = { providerOverrides: {} }
   const settings = new ProviderSettings({ providers: [] }, () => {})

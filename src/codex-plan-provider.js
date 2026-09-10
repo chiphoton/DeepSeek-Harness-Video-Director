@@ -1,17 +1,14 @@
-import { Codex } from '@openai/codex-sdk'
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { createLocalCodex } from './codex-client.js'
+import { actionableCodexError } from './codex-environment.js'
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
 import { extname, join } from 'node:path'
 
 import { DirectorInputError, string } from './validation.js'
 
-export const CODEX_PLAN_MODELS = Object.freeze([
-  'gpt-5.6-sol',
-  'gpt-5.6-terra',
-  'gpt-5.6-luna',
-])
+import { CodexModelCatalog } from './codex-model-catalog.js'
 
-const MODEL_SET = new Set(CODEX_PLAN_MODELS)
+const CODEX_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu
 const IMAGE_MIME_BY_EXTENSION = new Map([
   ['.png', 'image/png'],
   ['.jpg', 'image/jpeg'],
@@ -25,21 +22,6 @@ const EXTENSION_BY_IMAGE_MIME = new Map([
   ['image/webp', 'webp'],
   ['image/gif', 'gif'],
 ])
-
-export function codexPlanReasoningEffort(model) {
-  if (!MODEL_SET.has(model)) {
-    throw new DirectorInputError(`Codex Plan model must be one of: ${CODEX_PLAN_MODELS.join(', ')}`)
-  }
-  return 'medium'
-}
-
-function selectedModel(input, provider) {
-  const model = string(input.model ?? provider.model ?? CODEX_PLAN_MODELS[0], 'Codex Plan model', { min: 1, max: 128 })
-  if (!MODEL_SET.has(model)) {
-    throw new DirectorInputError(`Codex Plan model must be one of: ${CODEX_PLAN_MODELS.join(', ')}`)
-  }
-  return model
-}
 
 function canonicalImageData(data, mimeType) {
   if (typeof data !== 'string' || typeof mimeType !== 'string' || !mimeType.startsWith('image/')) return undefined
@@ -132,12 +114,15 @@ function textPrompt(input, referenceCount) {
   return `${systemPrompt}\n\nUser prompt:\n${prompt}${context}${references}\n\nReturn only the finished text, without commentary or Markdown fences.`
 }
 
-async function generatedFileImage(directory, excludedNames) {
-  const entries = await readdir(directory, { withFileTypes: true })
-  const candidates = entries
+async function generatedFileImage(directory, excludedNames = new Set()) {
+  let entries
+  try { entries = await readdir(directory, { withFileTypes: true }) }
+  catch (error) { if (error.code === 'ENOENT') return undefined; throw error }
+  const candidates = await Promise.all(entries
     .filter(entry => entry.isFile() && !excludedNames.has(entry.name) && IMAGE_MIME_BY_EXTENSION.has(extname(entry.name).toLowerCase()))
-    .sort((left, right) => left.name.localeCompare(right.name))
-  const selected = candidates.at(-1)
+    .map(async entry => ({ name: entry.name, ...await stat(join(directory, entry.name)) })))
+  const selected = candidates.filter(file => file.size > 0)
+    .sort((left, right) => left.mtimeMs - right.mtimeMs || left.name.localeCompare(right.name)).at(-1)
   if (selected === undefined) return undefined
   return {
     bytes: await readFile(join(directory, selected.name)),
@@ -145,30 +130,26 @@ async function generatedFileImage(directory, excludedNames) {
   }
 }
 
-function actionableCodexError(error) {
-  if (error?.name === 'AbortError') return error
-  const message = error instanceof Error ? error.message : String(error)
-  if (/auth|login|sign[ -]?in|unauthorized|credential/iu.test(message)) {
-    return new Error('Codex Plan could not authenticate. Sign in to Codex on this machine, then retry the vd-node.')
-  }
-  return error instanceof Error ? error : new Error(message)
-}
-
 export class CodexPlanImageRuntime {
   constructor(options) {
     this.store = options.store
     this.registerAsset = options.registerAsset ?? (async () => {})
-    this.createCodex = options.createCodex ?? (() => new Codex())
+    this.createCodex = options.createCodex ?? createLocalCodex
+    this.models = options.codexModels ?? new CodexModelCatalog()
     this.temporaryRoot = options.temporaryRoot ?? tmpdir()
+    this.generatedImagesRoot = options.generatedImagesRoot ?? join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'generated_images')
+  }
+
+  check() {
+    // The default factory checks host access without starting a model turn.
+    try { this.createCodex() } catch (error) { throw actionableCodexError(error) }
   }
 
   async run(provider, input, signal, progress = () => {}) {
     if (input.operation !== 'image-generation') {
       throw new DirectorInputError(`${provider.label} only supports image generation`)
     }
-    const model = selectedModel(input, provider)
-    const reasoningEffort = codexPlanReasoningEffort(model)
-    const directory = await mkdtemp(join(this.temporaryRoot, 'dsh-video-director-codex-plan-'))
+    const directory = await mkdtemp(join(this.temporaryRoot, 'dsh-video-director-codex-'))
     const attached = []
     const temporaryNames = new Set()
     try {
@@ -184,7 +165,9 @@ export class CodexPlanImageRuntime {
         attached.push({ type: 'local_image', path })
       }
 
-      const codex = this.createCodex()
+      const { model, reasoningEffort, serviceTier } = await this.models.resolve(input.model ?? provider.model, { fastMode: provider.fastMode, imageInput: true })
+      signal?.throwIfAborted()
+      const codex = this.createCodex({ serviceTier })
       const thread = codex.startThread({
         model,
         modelReasoningEffort: reasoningEffort,
@@ -200,16 +183,24 @@ export class CodexPlanImageRuntime {
         ...attached,
       ], { signal })
       const outputs = []
+      let codexThreadId
       for await (const event of events) {
+        if (event?.type === 'thread.started' && typeof event.thread_id === 'string' && CODEX_THREAD_ID.test(event.thread_id)) {
+          codexThreadId = event.thread_id
+        }
         if (event?.type === 'item.completed') {
           outputs.push(...resultImages(event.item?.result))
           if (event.item?.type === 'mcp_tool_call') {
             await progress({ phase: 'importing-codex-image', progress: 0.88 })
           }
         }
-        if (event?.type === 'turn.failed') throw new Error(event.error?.message ?? 'Codex image generation failed')
+        if (event?.type === 'turn.failed' || event?.type === 'error') throw new Error(event.error?.message ?? event.message ?? 'Codex image generation failed')
       }
-      const output = outputs.at(-1) ?? await generatedFileImage(directory, temporaryNames)
+      signal?.throwIfAborted()
+      // Native imagegen can save a PNG without exposing image bytes in exec's JSON
+      // stream. Read only this SDK thread's output folder, never another task's.
+      const nativeOutput = codexThreadId === undefined ? undefined : await generatedFileImage(join(this.generatedImagesRoot, codexThreadId))
+      const output = nativeOutput ?? outputs.at(-1) ?? await generatedFileImage(directory, temporaryNames)
       if (output === undefined || output.bytes.length === 0 || !output.mimeType.startsWith('image/')) {
         throw new Error(`${provider.label} completed without returning an image`)
       }
@@ -242,9 +233,7 @@ export class CodexPlanImageRuntime {
     if (input.operation !== 'prompt-enhancer' && input.operation !== 'text-generation') {
       throw new DirectorInputError(`${provider.label} cannot run ${String(input.operation)}`)
     }
-    const model = selectedModel(input, provider)
-    const reasoningEffort = codexPlanReasoningEffort(model)
-    const directory = await mkdtemp(join(this.temporaryRoot, 'dsh-video-director-codex-plan-text-'))
+    const directory = await mkdtemp(join(this.temporaryRoot, 'dsh-video-director-codex-text-'))
     const attached = []
     try {
       await progress({ phase: 'preparing-codex-text', progress: 0.05 })
@@ -257,7 +246,9 @@ export class CodexPlanImageRuntime {
         attached.push({ type: 'local_image', path })
       }
 
-      const codex = this.createCodex()
+      const { model, reasoningEffort, serviceTier } = await this.models.resolve(input.model ?? provider.model, { fastMode: provider.fastMode, imageInput: attached.length > 0 })
+      signal?.throwIfAborted()
+      const codex = this.createCodex({ serviceTier })
       const thread = codex.startThread({
         model,
         modelReasoningEffort: reasoningEffort,

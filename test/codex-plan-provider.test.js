@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 import { ProviderRuntime } from '../src/providers.js'
+import { modelFixture, TEST_MODELS } from './fixtures/codex-models.js'
 
 const GENERATED_IMAGE = Buffer.from('a generated image returned by the Codex image tool')
 
@@ -20,6 +21,7 @@ function codexRuntime(options = {}) {
     url: '/assets/generated-asset',
   }
   const runtime = new ProviderRuntime({
+    codexModels: options.codexModels ?? modelFixture(),
     store: {
       async assetBytes(assetId) {
         assert.equal(assetId, 'reference-asset')
@@ -34,7 +36,7 @@ function codexRuntime(options = {}) {
       },
     },
     async registerAsset(asset) { calls.registered.push(asset) },
-    createCodex: () => ({
+    createCodex: clientOptions => { calls.clientOptions = clientOptions; return ({
       startThread(threadOptions) {
         calls.threadOptions = threadOptions
         return {
@@ -71,27 +73,26 @@ function codexRuntime(options = {}) {
           },
         }
       },
-    }),
+    }) },
     providers: [{
-      id: 'codex-plan', label: 'Codex Plan', kind: 'codex-plan', model: 'gpt-5.6-sol', timeoutMs: 600_000,
+      id: 'codex-plan', label: 'Codex Plan', kind: 'codex-plan', model: 'gpt-5.6-sol', timeoutMs: 600_000, fastMode: options.fastMode ?? false,
     }],
   })
   return { runtime, calls, storedAsset }
 }
 
-test('Codex Plan catalog exposes text and image with the three working model choices', async () => {
+test('Codex Plan catalog exposes live models and account metadata without built-in choices', async () => {
   const { runtime } = codexRuntime()
+  assert.deepEqual(runtime.publicCatalog()[0].availableModels, [])
+  const catalog = await runtime.models('codex-plan')
   const [provider] = runtime.publicCatalog()
-
   assert.deepEqual(provider.capabilities, ['text', 'image'])
-  assert.deepEqual(provider.availableModels, [
-    'gpt-5.6-sol',
-    'gpt-5.6-terra',
-    'gpt-5.6-luna',
-  ])
+  assert.deepEqual(provider.availableModels, TEST_MODELS.filter(row => !row.hidden).map(row => row.model))
+  assert.equal(provider.fastMode, false)
   assert.equal(provider.configured, true)
   assert.equal('apiKey' in provider, false)
-  assert.deepEqual(await runtime.models('codex-plan'), { models: provider.availableModels, modelInputs: [] })
+  assert.deepEqual(catalog.models, provider.availableModels)
+  assert.equal(catalog.codexCatalog.source, 'live')
   const check = await runtime.check('codex-plan')
   assert.equal(check.ok, true)
   assert.equal(check.transport, 'codex-sdk')
@@ -132,7 +133,7 @@ test('Codex Plan enhances text through an isolated medium-reasoning SDK thread',
   })
 })
 
-test('Codex Plan passes references to an isolated medium-reasoning SDK thread and imports its image', async () => {
+test('Codex Plan passes references to an SDK thread using the model default effort and imports its image', async () => {
   const signal = new AbortController().signal
   const { runtime, calls, storedAsset } = codexRuntime({ signal })
   const result = await runtime.run({
@@ -147,7 +148,7 @@ test('Codex Plan passes references to an isolated medium-reasoning SDK thread an
   }, signal, update => calls.progress.push(update))
 
   assert.equal(calls.threadOptions.model, 'gpt-5.6-sol')
-  assert.equal(calls.threadOptions.modelReasoningEffort, 'medium')
+  assert.equal(calls.threadOptions.modelReasoningEffort, 'low')
   assert.equal(calls.threadOptions.sandboxMode, 'workspace-write')
   assert.equal(calls.threadOptions.approvalPolicy, 'never')
   assert.equal(calls.threadOptions.networkAccessEnabled, true)
@@ -172,27 +173,40 @@ test('Codex Plan passes references to an isolated medium-reasoning SDK thread an
     assets: [storedAsset],
     providerId: 'codex-plan',
     model: 'gpt-5.6-sol',
-    reasoningEffort: 'medium',
+    reasoningEffort: 'low',
     transport: 'codex-sdk',
   })
   assert.equal(calls.progress.at(-1).phase, 'saving-codex-image')
 })
 
-test('Codex Plan uses medium reasoning for the named sol, terra, and luna variants', async () => {
-  for (const model of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']) {
+test('Codex Plan uses catalog defaults for newly discovered models and their variants', async () => {
+  for (const row of TEST_MODELS.filter(row => !row.hidden && row.inputModalities.includes('image'))) {
     const { runtime, calls } = codexRuntime()
     const result = await runtime.run({
-      projectId: 'project-1',
-      operation: 'image-generation',
-      providerId: 'codex-plan',
-      model,
-      prompt: 'A clean model routing test image.',
-      assetIds: ['reference-asset'],
+      projectId: 'project-1', operation: 'image-generation', providerId: 'codex-plan',
+      model: row.model, prompt: 'A model routing test image.', assetIds: ['reference-asset'],
     })
-    assert.equal(calls.threadOptions.model, model)
-    assert.equal(calls.threadOptions.modelReasoningEffort, 'medium')
-    assert.equal(result.reasoningEffort, 'medium')
+    assert.equal(calls.threadOptions.model, row.model)
+    assert.equal(calls.threadOptions.modelReasoningEffort, row.defaultReasoningEffort)
+    assert.equal(result.reasoningEffort, row.defaultReasoningEffort)
+    assert.deepEqual(calls.clientOptions, { serviceTier: 'default' })
   }
+})
+
+test('Fast applies only to supporting models and comes from provider settings', async () => {
+  for (const fastMode of [false, true]) {
+    const { runtime, calls } = codexRuntime({ fastMode })
+    for (const model of ['future-model', 'text-only-model']) {
+      await runtime.run({ projectId: 'project-1', operation: 'prompt-enhancer', providerId: 'codex-plan', model, prompt: 'Test' })
+      assert.equal(calls.clientOptions.serviceTier, fastMode && model === 'future-model' ? 'priority' : 'default')
+    }
+  }
+})
+
+test('Codex Plan rejects a text-only model when given image references', async () => {
+  const { runtime, calls } = codexRuntime()
+  await assert.rejects(runtime.run({ projectId: 'project-1', operation: 'prompt-enhancer', providerId: 'codex-plan', model: 'text-only-model', prompt: 'Test', assetIds: ['reference-asset'] }), /does not support image references/u)
+  assert.equal(calls.threadOptions, undefined)
 })
 
 test('Codex Plan rejects arbitrary models before starting an SDK thread', async () => {
@@ -203,6 +217,6 @@ test('Codex Plan rejects arbitrary models before starting an SDK thread', async 
     providerId: 'codex-plan',
     model: 'unapproved-model',
     prompt: 'This must not run.',
-  }), /must be one of/u)
+  }), /no longer available/u)
   assert.equal(calls.threadOptions, undefined)
 })

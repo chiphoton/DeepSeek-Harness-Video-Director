@@ -1,3 +1,14 @@
+import type { DirectorNodeData, ProviderDescriptor } from './types'
+
+/** Older canvases stored their default model only in the completed result. */
+export function codexModelForNode(data: DirectorNodeData, provider: ProviderDescriptor): string | undefined {
+  const legacyModel = data.modelFamily === 'minimax-h3' ? undefined : data.modelFamily
+  if (data.modelId || legacyModel) return data.modelId || legacyModel
+  const result = data.result as { model?: unknown; providerId?: unknown } | null | undefined
+  if (result?.providerId === provider.id && typeof result.model === 'string' && result.model !== '') return result.model
+  return provider.model ?? provider.availableModels?.[0]
+}
+
 export interface ModelChoicePresentation {
   choices: string[]
   disabled: boolean

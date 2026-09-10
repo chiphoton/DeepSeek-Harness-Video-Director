@@ -37,6 +37,7 @@ DeepSeek-Harness Video-Director 是一个为 [DeepSeek Harness](https://github.c
 | 🏠 **本地生成优先** | 在自己的机器上运行 Ollama 与 ComfyUI，包括 Qwen3.8-27B 和 MiniMax-H3 流程。 |
 | 🔌 **多 Provider 混合** | 在同一工程中组合 Ollama、OpenAI-compatible、Codex Plan 与统一 ComfyUI Backend。 |
 | 🎞️ **面向工程管理** | 每个 Video Project 都有独立画布、对话 Session、任务、不可变素材与 Provider 选择。 |
+| 🌐 **语言与存储** | 在设置中切换中英文界面，并更改画布数据的保存位置。 |
 | 🛠️ **可扩展** | 导入经过检查的 API 格式 comfyui-workflow，或将其打包为声明式 vd-node pack。 |
 
 <p align="center">
@@ -85,7 +86,7 @@ pnpm dsh web
 - **Ollama：**默认地址为 `127.0.0.1:11434`；在 Ollama Host 安装 Qwen3.8-27B 等模型，再到 Video-Director 中选择。
 - **ComfyUI：**默认地址为 `127.0.0.1:8188`；在 ComfyUI 服务端安装目标 comfyui-workflow 所需的模型与 ComfyUI custom-node package。
 - **OpenAI-compatible：**填写服务的 Base URL、模型 id 与 API Key。
-- **Codex Plan：**使用当前机器已有的 Codex 登录来运行 Prompt 与图像 Workflow。
+- **Codex Plan：**使用当前机器已有的 Codex 登录来运行 Prompt 与图像 Workflow。模型列表和默认推理强度从已安装的 CLI 获取，可通过“刷新模型”更新。“快速模式（优先处理）”默认关闭；若 Codex 不在 PATH 中，可设置 `DSH_VIDEO_DIRECTOR_CODEX_PATH`。
 
 只要有一个 Provider 可用就能开始。Video-Director 不会在后台擅自安装模型、ComfyUI custom-node package 或外部服务。
 
@@ -147,6 +148,8 @@ API Format Workflow 可以离线分析。Editor/UI Workflow 必须结合对应 C
 
 该 Skill 已按 DSH 插件方式完成打包：Project-local 源码位于 `skills/comfyui-workflow-to-node/`，`package.json` 会把整个 `skills/` 收进发布包；Host 注册到 DSH Skills Service 前会去掉 YAML Front Matter，同时保留本地 References 与 Script。用户无需再手动复制或清洗一份。
 
+工程选择器中的 **examples/** 文件夹提供 **canvas-demo** 和 **all-in-one** 示例。打开示例前会保存当前修改，每次导入都创建独立可编辑副本，不会自动启动生成。**设置 → 语言**可即时切换中英文，选择保存在当前浏览器。
+
 ## 💾 文件保存在哪里
 
 Host 默认数据目录是 `./.dsh-video-director`，它相对于启动 `dsh web` 时所在的目录解析：
@@ -159,6 +162,8 @@ Host 默认数据目录是 `./.dsh-video-director`，它相对于启动 `dsh web
 ├── assets/index.json                    # 不可变素材元数据与哈希
 └── workflows.json                       # 导入的 Workflow Registry
 ```
+
+**设置 → 存储**支持打开当前文件夹、更改为新建或空文件夹，以及重置到原始 `dataDir`。更改会先保存当前编辑、复制数据并即时切换，原文件夹保留为备份。原始目录中的 `.video-director-storage.json` 用于重启后定位新目录。生成任务和工作流需先完成或取消。原生文件夹操作发生在 Harness 所在机器；对话历史和 Provider 密钥仍由 Harness 管理。
 
 如果需要固定位置，请在插件的 DSH 配置中把 `dataDir` 改为绝对路径。**Save Output** 会通过浏览器把副本下载到浏览器配置的下载目录；工程拥有的原始 Asset 仍保留在 `dataDir/assets`。
 
