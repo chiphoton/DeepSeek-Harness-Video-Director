@@ -27,7 +27,7 @@
         "id": "checkpointModel",
         "label": "Checkpoint model",
         "schema": { "type": "string" },
-        "default": "Qwen-Rapid-AIO-NSFW-v19.safetensors",
+        "default": "Qwen-Rapid-AIO-SFW-v19.safetensors",
         "placement": "advanced",
         "control": "input",
         "description": "CheckpointLoaderSimple model. Available choices are discovered from ComfyUI.",
@@ -86,7 +86,7 @@
       "17": {
         "class_type": "CheckpointLoaderSimple",
         "inputs": {
-          "ckpt_name": "Qwen-Rapid-AIO-NSFW-v19.safetensors"
+          "ckpt_name": "Qwen-Rapid-AIO-SFW-v19.safetensors"
         }
       },
       "13": {
@@ -194,7 +194,7 @@
         "label": "Checkpoint model",
         "group": "Models",
         "type": "text",
-        "default": "Qwen-Rapid-AIO-NSFW-v19.safetensors",
+        "default": "Qwen-Rapid-AIO-SFW-v19.safetensors",
         "placement": "advanced",
         "control": "input",
         "description": "CheckpointLoaderSimple model. Available choices are discovered from ComfyUI.",

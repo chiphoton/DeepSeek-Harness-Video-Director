@@ -6,7 +6,7 @@
 
 本手册用于安装 **DeepSeek-Harness Video-Director** 实际使用的运行时依赖。它面向自动化 agent 编写，但每条命令仍须服从操作者的授权与本机安全策略。内容已于 **2026-09-05** 根据仓库内置 Graph 和上游来源完成核验。
 
-Agent 在更改机器前必须完整阅读本文。只能安装操作者所选的 Capability Set。不得把本文、插件默认的 License Gate 或“uncensored”一词理解为接受第三方许可证，也不得据此自行下载具备敏感内容能力的权重。
+Agent 在更改机器前必须完整阅读本文。只能安装操作者所选的 Capability Set。不得把本文或插件默认的 License Gate 理解为接受第三方许可证，也不得据此自行下载操作者未选择的模型权重。
 
 仓库证据：[`cordis.patch.yml`](../cordis.patch.yml)、[`package.json`](../package.json)、[`src/providers.js`](../src/providers.js)、[`src/workflow-store.js`](../src/workflow-store.js)，以及 [`custom_nodes/`](../custom_nodes/README.md) 下的声明式 Graph。DeepSeek Harness 的 Plugin 命令会在 Profile 范围内转交给 `pnpm`；本地路径从命令调用目录解析（[官方 CLI Reference](https://github.com/deepseek-ai/deepseek-harness/blob/main/apps/cli/reference/README.md)）。
 
@@ -17,7 +17,7 @@ Agent 在更改机器前必须完整阅读本文。只能安装操作者所选�
 1. 先盘点现有系统，不做任何修改；
 2. 询问操作者要使用哪种 Deployment Mode、哪些 Capability Set；
 3. 下载前展示下载大小、许可证、目标位置与命令；
-4. MiniMax-H3 必须取得操作者明确的许可接受，敏感能力 Qwen Checkpoint 必须由操作者明确选择；
+4. MiniMax-H3 必须取得操作者明确的许可接受，Qwen SFW Checkpoint 必须由操作者明确选择；
 5. 尽可能复用健康的 Ollama 或 ComfyUI 部署；
 6. 固定本文列出的每个仓库与模型 Revision；
 7. 放置模型文件前核验 Hash；
@@ -310,7 +310,7 @@ ComfyUI 在 [Server Route Reference](https://docs.comfy.org/development/comfyui-
 | Z-Image | [`Comfy-Org/z_image_turbo@08d0445…`](https://huggingface.co/Comfy-Org/z_image_turbo/tree/08d04455279082882deaabc8d0d09fc914c071e1) | `split_files/diffusion_models/z_image_turbo_bf16.safetensors` | `models/diffusion_models/z_image_turbo_bf16.safetensors` | 12,309,866,400 | `2407613050b809ffdff18a4ac99af83ea6b95443ecebdf80e064a79c825574a6` |
 | Z-Image | 同上 | `split_files/text_encoders/qwen_3_4b.safetensors` | `models/text_encoders/qwen_3_4b.safetensors` | 8,044,982,048 | `6c671498573ac2f7a5501502ccce8d2b08ea6ca2f661c458e708f36b36edfc5a` |
 | Z-Image | 同上 | `split_files/vae/ae.safetensors` | `models/vae/ae.safetensors` | 335,304,388 | `afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38` |
-| Qwen edit | [`Phr00t/Qwen-Image-Edit-Rapid-AIO@691024f…`](https://huggingface.co/Phr00t/Qwen-Image-Edit-Rapid-AIO/tree/691024f438640508f8aa86414863fc15edfb8a84/v19) | `v19/Qwen-Rapid-AIO-NSFW-v19.safetensors` | `models/checkpoints/Qwen-Rapid-AIO-NSFW-v19.safetensors` | 28,431,843,583 | `ba71575515709c9912560d1176b2386eaa49294fedc6ce57b9734aa57e91e5ac` |
+| Qwen edit | [`Phr00t/Qwen-Image-Edit-Rapid-AIO@691024f…`](https://huggingface.co/Phr00t/Qwen-Image-Edit-Rapid-AIO/tree/691024f438640508f8aa86414863fc15edfb8a84/v19) | `v19/Qwen-Rapid-AIO-SFW-v19.safetensors` | `models/checkpoints/Qwen-Rapid-AIO-SFW-v19.safetensors` | 28,431,843,591 | `7113d4b1c0210539d3bc1582a1d48eb0450a851abe7444666ccd97e04e6a4f12` |
 | Qwen edit | [`lrzjason/Consistance_Edit_Lora@825b73f…`](https://huggingface.co/lrzjason/Consistance_Edit_Lora/tree/825b73f9952186f807acb44f05dec4ec5044f394) | `consistence_edit_v2.safetensors` | `models/loras/consistence_edit_v2.safetensors` | 613,580,160 | `49bc9cd21577ab8e359f8fdaa310e5cd9c4ab0ec989d1f1a7a207245e6190310` |
 | H3 FL2VA | [`Comfy-Org/MiniMax-H3@4cc1d81…`](https://huggingface.co/Comfy-Org/MiniMax-H3/tree/4cc1d817b6184899b41293954329f576cb5ae86b) | `diffusion_models/minimax_h3_fl2va_int8_convrot.safetensors` | `models/diffusion_models/minimax_h3_fl2va_int8_convrot.safetensors` | 34,038,892,334 | `7ad4c73e6e378b822ffd1629f27f632d3787d95f5e468e3af958f98c58df96a5` |
 | H3 R2V | 同上 | `diffusion_models/minimax_h3_ref2va_int8_convrot.safetensors` | `models/diffusion_models/minimax_h3_ref2va_int8_convrot.safetensors` | 34,038,894,550 | `9eef934046a0671bc8a5daf87100705e1478419c574cfde70c50fbe6885f76a9` |
@@ -349,7 +349,7 @@ hf download Comfy-Org/z_image_turbo \
   --local-dir "$VD_MODEL_STAGE/z-image"
 
 hf download Phr00t/Qwen-Image-Edit-Rapid-AIO \
-  v19/Qwen-Rapid-AIO-NSFW-v19.safetensors \
+  v19/Qwen-Rapid-AIO-SFW-v19.safetensors \
   --revision 691024f438640508f8aa86414863fc15edfb8a84 \
   --local-dir "$VD_MODEL_STAGE/qwen-edit"
 
@@ -519,7 +519,7 @@ Plugin/Profile Membership 在 Process Startup 时固定；添加、移除或更�
 ## 13. 安全与许可证
 
 - **MiniMax-H3：**Base Weight 适用 [MiniMax-H3 Community License](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE)，不适用本插件的 MIT License，Turbo Project 的 Apache-2.0 也不能覆盖它。License 包含 Territory、Commercial/Authorization、Attribution、Redistribution、Hosted-service、Acceptable-use 与 Model-improvement 条件。下载或使用前向操作者展示当前 License，取得明确的资格确认/接受。记录 License Revision/URL 与 Acceptance Decision；不得代替操作者记录“已接受”。
-- **Qwen Rapid AIO：**所选 Checkpoint 名称明确包含 `NSFW`，官方 Repository 标记了敏感/成人内容能力。下载前必须让操作者明确选择并确认合法使用。不得纳入无人值守的“Install All”。
+- **Qwen Rapid AIO：**此安装预设使用上述固定版本中的 `Qwen-Rapid-AIO-SFW-v19.safetensors`。应阅读适用的模型许可证，并且仅在操作者选择 `qwen-edit-consistent` 时下载此 Checkpoint。
 - **Custom Node：**ComfyUI Python Node 以 ComfyUI Process 权限执行本地代码。必须审查并 Pin。Embedded API Workflow 可以调用任何已安装 Class，因此即使 Video-Director Node Pack 本身是声明式的，Workflow JSON 仍是可执行配置。
 - **Network：**Ollama 与 ComfyUI 保持 Loopback。使用上述 SSH Topology，或由操作者管理且带鉴权的 TLS Reverse Proxy。即使 Tunnel 已加密，把 Project Media 发送给远端 ComfyUI 仍意味着它离开 DSH Host。
 - **Secret：**不得回显 Ollama/Cloud Credential、Hugging Face Token、SSH Private Key 或 OpenAI-compatible API Key。使用平台 Credential Store 或 DSH-managed Settings。
@@ -535,7 +535,7 @@ Plugin/Profile Membership 在 Process Startup 时固定；添加、移除或更�
 - 操作者已安装的 GPU Driver/PyTorch Build 是否支持其 Accelerator；
 - Moving Ollama Tag 未来是否仍解析到相同 Digest；
 - 通过 ComfyUI Extra Model Path 重命名的 Custom Model Alias 或文件；
-- 操作者对 MiniMax-H3 License 的接受/资格，或对敏感 Qwen Workflow 的选择；
+- 操作者对 MiniMax-H3 License 的接受/资格，或对 Qwen SFW Workflow 的选择；
 - Firewall、SSH Account、Host Key、Service Supervision、Backup 与 Retention Policy；
 - 本文 Immutable Pin 之后出现的未来 Upstream Revision。
 
@@ -597,7 +597,7 @@ licenses:
     status: not_selected | passed | blocked
     license_url: "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE"
     operator_decision_reference: ""
-  qwen_rapid_aio_sensitive_capability:
+  qwen_rapid_aio_sfw:
     status: not_selected | passed | blocked
     operator_decision_reference: ""
 ollama:

@@ -19,12 +19,12 @@
 </p>
 
 <p align="center">
-  <code>DSH Plugin</code> · <code>ComfyUI</code> · <code>Ollama</code> · <code>MiniMax-H3</code> · <code>Uncensored</code>
+  <code>DSH Plugin</code> · <code>ComfyUI</code> · <code>Ollama</code> · <code>MiniMax-H3</code>
 </p>
 
 DeepSeek-Harness Video-Director is a video-production plugin built for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). It turns script, image, audio, and video generation into a connectable canvas, with ready-to-use paths for ComfyUI, Ollama, OpenAI-compatible APIs, and Codex Plan.
 
-Beginners can start with the built-in workflows instead of assembling every provider call by hand. Native Qwen3.8-27B and MiniMax-H3 paths make a **fully local, uncensored, deployment-controlled** multimedia pipeline possible when the selected models and runtime support it.
+Beginners can start with the built-in workflows instead of assembling every provider call by hand. Native Qwen3.8-27B and MiniMax-H3 paths make a **fully local, deployment-controlled** multimedia pipeline possible when the selected models and runtime support it.
 
 We call canvas elements **vd-nodes** and the overall canvas graph a **vd-workflow**. A ComfyUI-backed vd-node executes a **comfyui-workflow** containing **comfyui-nodes**. See the [terminology guide](docs/TERMINOLOGY.md) for definitions, packages, bindings, and execution IDs.
 
@@ -51,7 +51,7 @@ We call canvas elements **vd-nodes** and the overall canvas graph a **vd-workflo
 Requirements: Git, Node.js `^22.19.0` or `>=24`, pnpm `11.7.0`, and an installed `dsh` CLI. For a single-machine, fully local deployment, **NVIDIA DGX Spark is the recommended environment**, but it is not required; the exact hardware requirement depends on the installation preset and model precision you select. Run the following from the directory where you want to keep the plugin:
 
 ```bash
-git clone --branch uncensored --single-branch https://github.com/chiphoton/DeepSeek-Harness-Video-Director.git
+git clone --single-branch https://github.com/chiphoton/DeepSeek-Harness-Video-Director.git
 cd DeepSeek-Harness-Video-Director
 pnpm install --frozen-lockfile
 pnpm run build
@@ -139,7 +139,7 @@ Useful canvas gestures:
 - Select a node and use **Run** for one node, a selection, downstream nodes, or the whole graph.
 - Connect generated media to **Preview** and **Save Output**; unconnected results receive an automatic Preview.
 
-Bundled vd-node definitions include Qwen image editing, Z-Image Turbo, MiniMax-H3 text/image-to-video, reference-to-video, and Turbo/Standard H3 audio. See [`custom_nodes/`](custom_nodes/README.md) for dependencies and safety notes.
+Bundled vd-node definitions include Qwen image editing with `Qwen-Rapid-AIO-SFW-v19.safetensors`, Z-Image Turbo, MiniMax-H3 text/image-to-video, reference-to-video, and Turbo/Standard H3 audio. See [`custom_nodes/`](custom_nodes/README.md) for dependencies and safety notes.
 
 ## 🪄 ComfyUI workflow-to-node Skill
 
@@ -181,7 +181,7 @@ The default Host data directory is `./.dsh-video-director`, resolved from the di
 ## 📝 Notes
 
 - This plugin orchestrates providers; it is not a hosted generation service. Ollama, ComfyUI, models, and remote API accounts are operated separately.
-- “Fully local” means the selected Ollama/ComfyUI path stays on infrastructure you control. “Uncensored” behavior depends on the selected model, runtime configuration, applicable law, and model licenses.
+- “Fully local” means the selected Ollama/ComfyUI path stays on infrastructure you control.
 - MiniMax-H3 weights have a separate license. Review it before enabling production or commercial use.
 - ComfyUI workflow JSON is executable configuration because it can invoke installed ComfyUI custom-node packages. Import only trusted graphs.
 - Uploaded assets are limited to 200 MiB each by default. Projects retain the latest 100 job records.

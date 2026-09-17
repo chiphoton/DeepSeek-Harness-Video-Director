@@ -19,12 +19,12 @@
 </p>
 
 <p align="center">
-  <code>DSH Plugin</code> · <code>ComfyUI</code> · <code>Ollama</code> · <code>MiniMax-H3</code> · <code>Uncensored</code>
+  <code>DSH Plugin</code> · <code>ComfyUI</code> · <code>Ollama</code> · <code>MiniMax-H3</code>
 </p>
 
 DeepSeek-Harness Video-Director 是一个为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 开发的视频制作插件。它把脚本、图像、音频和视频生成组织成可连接的节点画布，并内置 ComfyUI、Ollama、OpenAI-compatible API 与 Codex Plan 流程。
 
-新手无需从零拼装每一次 Provider 调用，可以直接使用内置 Workflow 开始创作。原生 Qwen3.8-27B 与 MiniMax-H3 路径，让你在模型和运行环境支持时搭建 **Fully-Local、Uncensored、由自己掌控部署** 的多媒体生成流程。
+新手无需从零拼装每一次 Provider 调用，可以直接使用内置 Workflow 开始创作。原生 Qwen3.8-27B 与 MiniMax-H3 路径，让你在模型和运行环境支持时搭建 **Fully-Local、由自己掌控部署** 的多媒体生成流程。
 
 画布元素统一称为 **vd-node**，整体画布编排图称为 **vd-workflow**。调用 ComfyUI 的 vd-node 执行一个包含 **comfyui-node** 的 **comfyui-workflow**。定义、包、绑定与执行 ID 的区别见[术语约定](docs/TERMINOLOGY_zh.md)。
 
@@ -51,7 +51,7 @@ DeepSeek-Harness Video-Director 是一个为 [DeepSeek Harness](https://github.c
 需要 Git、Node.js `^22.19.0` 或 `>=24`、pnpm `11.7.0`，以及已经安装的 `dsh` CLI。对于单机 Fully-Local 部署，**推荐使用 NVIDIA DGX Spark**，但它不是硬性要求；实际硬件门槛取决于所选 Workflow Profile 与模型精度。在准备存放插件的目录中执行：
 
 ```bash
-git clone --branch uncensored --single-branch https://github.com/chiphoton/DeepSeek-Harness-Video-Director.git
+git clone --single-branch https://github.com/chiphoton/DeepSeek-Harness-Video-Director.git
 cd DeepSeek-Harness-Video-Director
 pnpm install --frozen-lockfile
 pnpm run build
@@ -135,7 +135,7 @@ Text → Prompt Enhancer → H3 Video → Preview → Save Output
 - 选中节点后，可运行单个节点、选择范围、全部下游或整张 Graph。
 - 把生成结果连接到 **Preview** 与 **Save Output**；没有连接 Preview 时会自动创建预览。
 
-内置 vd-node 定义包括 Qwen 图像编辑、Z-Image Turbo、MiniMax-H3 文/图生视频、Reference-to-Video，以及 Turbo/Standard H3 音频。依赖与安全说明见 [`custom_nodes/`](custom_nodes/README.md)。
+内置 vd-node 定义包括使用 `Qwen-Rapid-AIO-SFW-v19.safetensors` 的 Qwen 图像编辑、Z-Image Turbo、MiniMax-H3 文/图生视频、Reference-to-Video，以及 Turbo/Standard H3 音频。依赖与安全说明见 [`custom_nodes/`](custom_nodes/README.md)。
 
 ## 🪄 ComfyUI Workflow-to-Node Skill
 
@@ -179,7 +179,7 @@ Host 默认数据目录是 `./.dsh-video-director`，它相对于启动 `dsh web
 ## 📝 Notes
 
 - 本插件负责编排 Provider，不是托管式生成服务。Ollama、ComfyUI、模型与远端 API 账户需要独立部署和维护。
-- “Fully-Local”指所选 Ollama/ComfyUI 路径运行在你控制的基础设施上；“Uncensored”的实际表现取决于模型、运行配置、适用法律与模型许可证。
+- “Fully-Local”指所选 Ollama/ComfyUI 路径运行在你控制的基础设施上。
 - MiniMax-H3 权重采用独立许可证；投入生产或商业使用前请自行审阅。
 - ComfyUI Workflow JSON 属于可执行配置，因为它能调用本机安装的 ComfyUI custom-node package；只导入可信 Graph。
 - 单个上传素材默认最大 200 MiB；每个 Project 保留最近 100 条 Job 记录。

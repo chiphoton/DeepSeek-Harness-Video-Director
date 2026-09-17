@@ -6,7 +6,7 @@ Terminology: **vd-nodes** belong to the Video Director canvas; **comfyui-nodes**
 
 This runbook installs the runtime dependencies used by **DeepSeek-Harness Video-Director**. It is written for an automation agent, but every command remains subject to the operator's approval and local security policy. It was verified against the repository's built-in graphs and upstream sources on **2026-09-05**.
 
-The agent must read this document completely before changing the machine. It must install only the capability set the operator selects. It must not interpret this document, the plugin's default license gate, or the word “uncensored” as acceptance of a third-party license or as permission to download sensitive-capability weights.
+The agent must read this document completely before changing the machine. It must install only the capability set the operator selects. It must not interpret this document or the plugin's default license gate as acceptance of a third-party license or as permission to download unselected model weights.
 
 Repository evidence: [`cordis.patch.yml`](../cordis.patch.yml), [`package.json`](../package.json), [`src/providers.js`](../src/providers.js), [`src/workflow-store.js`](../src/workflow-store.js), and the declarative graphs in [`custom_nodes/`](../custom_nodes/README.md). DeepSeek Harness' plugin command is a profile-scoped `pnpm` pass-through; local path specs are resolved from the directory in which the command is invoked ([official CLI reference](https://github.com/deepseek-ai/deepseek-harness/blob/main/apps/cli/reference/README.md)).
 
@@ -17,7 +17,7 @@ The installing agent must:
 1. inventory the existing system without changing it;
 2. ask which deployment mode and capability sets are wanted;
 3. show download sizes, licenses, destinations, and commands before downloading;
-4. obtain explicit operator acceptance for MiniMax-H3 and explicit selection of the sensitive-capability Qwen checkpoint;
+4. obtain explicit operator acceptance for MiniMax-H3 and explicit selection of the Qwen SFW checkpoint;
 5. reuse a healthy existing Ollama or ComfyUI deployment where possible;
 6. pin every repository and model revision listed here;
 7. verify hashes before placing model files;
@@ -310,7 +310,7 @@ All revisions below are immutable commit hashes observed through the official Hu
 | Z-Image | [`Comfy-Org/z_image_turbo@08d0445…`](https://huggingface.co/Comfy-Org/z_image_turbo/tree/08d04455279082882deaabc8d0d09fc914c071e1) | `split_files/diffusion_models/z_image_turbo_bf16.safetensors` | `models/diffusion_models/z_image_turbo_bf16.safetensors` | 12,309,866,400 | `2407613050b809ffdff18a4ac99af83ea6b95443ecebdf80e064a79c825574a6` |
 | Z-Image | same | `split_files/text_encoders/qwen_3_4b.safetensors` | `models/text_encoders/qwen_3_4b.safetensors` | 8,044,982,048 | `6c671498573ac2f7a5501502ccce8d2b08ea6ca2f661c458e708f36b36edfc5a` |
 | Z-Image | same | `split_files/vae/ae.safetensors` | `models/vae/ae.safetensors` | 335,304,388 | `afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38` |
-| Qwen edit | [`Phr00t/Qwen-Image-Edit-Rapid-AIO@691024f…`](https://huggingface.co/Phr00t/Qwen-Image-Edit-Rapid-AIO/tree/691024f438640508f8aa86414863fc15edfb8a84/v19) | `v19/Qwen-Rapid-AIO-NSFW-v19.safetensors` | `models/checkpoints/Qwen-Rapid-AIO-NSFW-v19.safetensors` | 28,431,843,583 | `ba71575515709c9912560d1176b2386eaa49294fedc6ce57b9734aa57e91e5ac` |
+| Qwen edit | [`Phr00t/Qwen-Image-Edit-Rapid-AIO@691024f…`](https://huggingface.co/Phr00t/Qwen-Image-Edit-Rapid-AIO/tree/691024f438640508f8aa86414863fc15edfb8a84/v19) | `v19/Qwen-Rapid-AIO-SFW-v19.safetensors` | `models/checkpoints/Qwen-Rapid-AIO-SFW-v19.safetensors` | 28,431,843,591 | `7113d4b1c0210539d3bc1582a1d48eb0450a851abe7444666ccd97e04e6a4f12` |
 | Qwen edit | [`lrzjason/Consistance_Edit_Lora@825b73f…`](https://huggingface.co/lrzjason/Consistance_Edit_Lora/tree/825b73f9952186f807acb44f05dec4ec5044f394) | `consistence_edit_v2.safetensors` | `models/loras/consistence_edit_v2.safetensors` | 613,580,160 | `49bc9cd21577ab8e359f8fdaa310e5cd9c4ab0ec989d1f1a7a207245e6190310` |
 | H3 FL2VA | [`Comfy-Org/MiniMax-H3@4cc1d81…`](https://huggingface.co/Comfy-Org/MiniMax-H3/tree/4cc1d817b6184899b41293954329f576cb5ae86b) | `diffusion_models/minimax_h3_fl2va_int8_convrot.safetensors` | `models/diffusion_models/minimax_h3_fl2va_int8_convrot.safetensors` | 34,038,892,334 | `7ad4c73e6e378b822ffd1629f27f632d3787d95f5e468e3af958f98c58df96a5` |
 | H3 R2V | same | `diffusion_models/minimax_h3_ref2va_int8_convrot.safetensors` | `models/diffusion_models/minimax_h3_ref2va_int8_convrot.safetensors` | 34,038,894,550 | `9eef934046a0671bc8a5daf87100705e1478419c574cfde70c50fbe6885f76a9` |
@@ -349,7 +349,7 @@ hf download Comfy-Org/z_image_turbo \
   --local-dir "$VD_MODEL_STAGE/z-image"
 
 hf download Phr00t/Qwen-Image-Edit-Rapid-AIO \
-  v19/Qwen-Rapid-AIO-NSFW-v19.safetensors \
+  v19/Qwen-Rapid-AIO-SFW-v19.safetensors \
   --revision 691024f438640508f8aa86414863fc15edfb8a84 \
   --local-dir "$VD_MODEL_STAGE/qwen-edit"
 
@@ -519,7 +519,7 @@ The plugin's default `dataDir` is relative to the directory from which DSH is la
 ## 13. Security and licenses
 
 - **MiniMax-H3:** the base weights are governed by the [MiniMax-H3 Community License](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE), not by this plugin's MIT license and not by the Turbo project's Apache-2.0 license. It contains territory, commercial/authorization, attribution, redistribution, hosted-service, acceptable-use, and model-improvement conditions. Present the current license to the operator and obtain explicit eligibility/acceptance before download or use. Record the license revision/URL and acceptance decision; do not record acceptance on the operator's behalf.
-- **Qwen Rapid AIO:** the selected checkpoint is explicitly named `NSFW` and its official repository is marked for sensitive/adult capability. Require an explicit operator selection and lawful-use confirmation before download. Do not make it part of an unattended “install all.”
+- **Qwen Rapid AIO:** this installation preset uses `Qwen-Rapid-AIO-SFW-v19.safetensors` at the pinned revision above. Review the applicable model license and download this checkpoint only when the operator selects `qwen-edit-consistent`.
 - **Custom Nodes:** a ComfyUI Python node runs local code with the ComfyUI process's permissions. Review and pin it. An embedded API workflow can invoke any installed class, so workflow JSON is executable configuration even though Video-Director node packs are declarative.
 - **Network:** keep Ollama and ComfyUI on loopback. Use the SSH topology above or an operator-managed authenticated TLS reverse proxy. Project media sent to remote ComfyUI leaves the DSH host even when the tunnel is encrypted.
 - **Secrets:** never echo Ollama/cloud credentials, Hugging Face tokens, SSH private keys, or OpenAI-compatible API keys. Use the platform's credential store or DSH-managed settings.
@@ -535,7 +535,7 @@ The following are deliberately unresolved rather than guessed:
 - whether the operator's installed GPU driver/PyTorch build supports their accelerator;
 - whether a moving Ollama tag still resolves to the same digest later;
 - custom model aliases or files renamed through ComfyUI extra model paths;
-- operator acceptance/eligibility for the MiniMax-H3 license or sensitive Qwen workflow;
+- operator acceptance/eligibility for the MiniMax-H3 license or selection of the Qwen SFW workflow;
 - firewall, SSH account, host-key, service-supervision, backup, and retention policy; and
 - future upstream revisions after the immutable pins in this document.
 
@@ -597,7 +597,7 @@ licenses:
     status: not_selected | passed | blocked
     license_url: "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE"
     operator_decision_reference: ""
-  qwen_rapid_aio_sensitive_capability:
+  qwen_rapid_aio_sfw:
     status: not_selected | passed | blocked
     operator_decision_reference: ""
 ollama:
