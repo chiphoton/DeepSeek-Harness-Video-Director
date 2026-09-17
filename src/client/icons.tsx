@@ -22,6 +22,16 @@ export function JobsIcon() {
   )
 }
 
+export function GalleryIcon() {
+  return (
+    <svg className="vd-topbar-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <circle cx="8" cy="9" r="1.5" />
+      <path d="m3 17 5-5 4 4 4-6 5 7" />
+    </svg>
+  )
+}
+
 export function SettingsIcon() {
   return (
     <svg className="vd-topbar-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">

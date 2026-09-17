@@ -3,6 +3,7 @@ import { createReadStream } from 'node:fs'
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { join, resolve } from 'node:path'
+import { readVideoProperties } from './video-properties.js'
 import {
   DirectorInputError,
   jsonValue,
@@ -51,11 +52,13 @@ function emptyGraph() {
 function projectSummary(project) {
   return {
     id: project.id,
-    name: project.name,
+    name: project.draft?.name ?? project.name,
+    unsaved: project.hasSavedVersion === false || project.draft !== undefined,
+    hasSavedVersion: project.hasSavedVersion !== false,
     sessionId: project.sessionId,
     status: project.status,
     revision: project.revision,
-    nodeCount: project.graph.nodes.length,
+    nodeCount: (project.draft?.graph ?? project.graph).nodes.length,
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
   }
@@ -98,6 +101,12 @@ function normalizedProject(value, expectedId) {
     createdAt: string(input.createdAt, 'project.createdAt', { min: 20, max: 40 }),
     updatedAt: string(input.updatedAt, 'project.updatedAt', { min: 20, max: 40 }),
   }
+  if (input.hasSavedVersion === false) normalized.hasSavedVersion = false
+  if (input.draft !== undefined) {
+    const draft = record(input.draft, 'project.draft')
+    const validated = normalizedProject({ ...normalized, ...draft, id, draft: undefined }, id)
+    normalized.draft = { name: validated.name, graph: validated.graph, settings: validated.settings }
+  }
   return jsonValue(normalized, 'project')
 }
 
@@ -120,6 +129,7 @@ export class ProjectStore {
     this.assets = new Map()
     this.projectWriteTails = new Map()
     this.assetWriteTail = Promise.resolve()
+    this.orderWriteTail = Promise.resolve()
   }
 
   async init() {
@@ -148,10 +158,58 @@ export class ProjectStore {
         throw error
       }
     }
-    return summaries.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    return this.#withOrderWrite(async () => {
+      const path = join(this.root, 'project-order.json')
+      const order = await readJson(path, [])
+      const ranks = new Map(order.map((id, index) => [id, index]))
+      summaries.sort((left, right) => (ranks.get(left.id) ?? -1) - (ranks.get(right.id) ?? -1)
+        || right.updatedAt.localeCompare(left.updatedAt))
+      const ids = summaries.map(project => project.id)
+      if (JSON.stringify(ids) !== JSON.stringify(order)) await this.#atomicJson(path, ids)
+      return summaries
+    })
   }
 
-  async createProject({ name, sessionId }) {
+  async reorderProjects(projectIds) {
+    if (!Array.isArray(projectIds) || new Set(projectIds).size !== projectIds.length) throw new DirectorInputError('projectIds must contain unique project IDs')
+    const ids = projectIds.map(id => uuid(id, 'projectId'))
+    const projects = await this.listProjects()
+    if (ids.some(id => !projects.some(project => project.id === id))) throw new DirectorInputError('Cannot reorder an unknown project')
+    const order = [...ids, ...projects.map(project => project.id).filter(id => !ids.includes(id))]
+    await this.#withOrderWrite(() => this.#atomicJson(join(this.root, 'project-order.json'), order))
+    return this.listProjects()
+  }
+
+  async galleryProjects(signal) {
+    const projects = []
+    for (const summary of await this.listProjects()) {
+      signal?.throwIfAborted()
+      let saved
+      try { saved = await this.getProject(summary.id) }
+      catch (error) {
+        // A workflow can be deleted between listing it and reading its resources.
+        if (error.code === 'video-director/project-not-found') continue
+        throw error
+      }
+      const project = { ...saved, ...saved.draft }
+      projects.push({
+        id: project.id,
+        name: project.name,
+        graph: { nodes: project.graph.nodes.map(node => {
+          const data = node.data ?? {}
+          const fields = ['kind', 'title', 'asset', 'assets', 'text', 'maskAsset', 'runCompletedAt']
+          return { id: node.id, data: {
+            ...Object.fromEntries(fields.filter(field => data[field] !== undefined).map(field => [field, data[field]])),
+            ...(data.sketchDocument?.base ? { sketchDocument: { base: data.sketchDocument.base } } : {}),
+          } }
+        }) },
+        jobs: project.jobs.map(job => ({ nodeId: job.nodeId, operation: job.operation, createdAt: job.createdAt, completedAt: job.completedAt, result: job.result })),
+      })
+    }
+    return projects
+  }
+
+  async createProject({ name, sessionId, unsaved = false }) {
     const now = new Date().toISOString()
     const project = {
       schemaVersion: PROJECT_SCHEMA_VERSION,
@@ -169,8 +227,10 @@ export class ProjectStore {
       jobs: [],
       createdAt: now,
       updatedAt: now,
+      ...(unsaved ? { hasSavedVersion: false } : {}),
     }
     await this.#writeProject(project)
+    await this.listProjects()
     return project
   }
 
@@ -186,12 +246,41 @@ export class ProjectStore {
     return normalizedProject(raw, id)
   }
 
-  async saveProject(projectId, value, expectedRevision) {
+  async saveProject(projectId, value, expectedRevision, { commit = false } = {}) {
     const id = uuid(projectId, 'projectId')
     return this.#withProjectWrite(id, async () => {
       const current = await this.getProject(id)
-      return this.#saveProjectFromCurrent(id, value, expectedRevision, current)
+      return this.#saveProjectFromCurrent(id, commit ? { ...value, jobs: current.jobs } : value, expectedRevision, current, { commit })
     })
+  }
+
+  /** A draft is durable without changing the explicitly saved workflow or its revision. */
+  async cacheDraft(projectId, draft) {
+    const id = uuid(projectId, 'projectId')
+    return this.#withProjectWrite(id, async () => {
+      const current = await this.getProject(id)
+      const project = normalizedProject({ ...current, draft: draft === null ? undefined : record(draft, 'draft') }, id)
+      await this.#writeProject(project)
+      return projectSummary(project)
+    })
+  }
+
+  async discardDraft(projectId) {
+    const id = uuid(projectId, 'projectId')
+    const project = await this.#withProjectWrite(id, async () => {
+      const current = await this.getProject(id)
+      const activeRuns = await this.listVdRuns(id)
+      if (current.jobs.some(job => job.status === 'queued' || job.status === 'running')
+        || activeRuns.some(run => run.status === 'queued' || run.status === 'running')) {
+        throw Object.assign(new Error('Wait for tasks to finish or cancel them before discarding changes.'), { code: 'video-director/project-busy' })
+      }
+      if (current.hasSavedVersion === false) return null
+      const { draft: _draft, ...saved } = current
+      await this.#writeProject(saved)
+      return saved
+    })
+    if (project === null) await this.deleteProject(id, { onlyUnsaved: true })
+    return { project, projects: await this.listProjects() }
   }
 
   // Keep submitted graphs outside project.json: polling job summaries should
@@ -266,7 +355,9 @@ export class ProjectStore {
         name: value?.name,
         graph: value?.graph,
         settings: value?.settings,
-      }, current.revision, current)
+        draft: undefined,
+        hasSavedVersion: true,
+      }, current.revision, current, { commit: true })
     })
   }
 
@@ -293,10 +384,13 @@ export class ProjectStore {
     })
   }
 
-  async deleteProject(projectId) {
+  async deleteProject(projectId, { onlyUnsaved = false } = {}) {
     const id = uuid(projectId, 'projectId')
     return this.#withProjectWrite(id, async () => {
       const project = await this.getProject(id)
+      if (onlyUnsaved && project.hasSavedVersion !== false) {
+        throw Object.assign(new Error('This workflow was saved while discarding. Retry to restore its saved version.'), { code: 'video-director/revision-conflict' })
+      }
       const activeJobs = project.jobs.filter(job => job?.status === 'queued' || job?.status === 'running')
       const activeRuns = (await this.listVdRuns(id)).filter(run => run.status === 'queued' || run.status === 'running')
       if (activeJobs.length > 0 || activeRuns.length > 0) {
@@ -370,7 +464,7 @@ export class ProjectStore {
     })
   }
 
-  async #saveProjectFromCurrent(id, value, expectedRevision, current, { preserveSession = true } = {}) {
+  async #saveProjectFromCurrent(id, value, expectedRevision, current, { preserveSession = true, commit = false } = {}) {
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision !== current.revision) {
       const error = new Error(`project ${id} changed from revision ${String(expectedRevision)} to ${String(current.revision)}`)
       error.code = 'video-director/revision-conflict'
@@ -382,6 +476,8 @@ export class ProjectStore {
       id,
       revision: current.revision + 1,
       sessionId: preserveSession ? current.sessionId : value.sessionId,
+      draft: commit ? undefined : current.draft,
+      hasSavedVersion: commit ? true : current.hasSavedVersion,
       createdAt: current.createdAt,
       updatedAt: new Date().toISOString(),
     }, id)
@@ -451,6 +547,12 @@ export class ProjectStore {
 
   listAssets() {
     return [...this.assets.values()]
+  }
+
+  async videoProperties(assetId, signal) {
+    const asset = this.asset(assetId)
+    if (asset.kind !== 'video') throw new DirectorInputError('Video properties require a video asset')
+    return readVideoProperties(join(this.assetsDir, asset.filename), asset.mimeType, { signal })
   }
 
   async assetBytes(assetId) {
@@ -533,6 +635,12 @@ export class ProjectStore {
   #withAssetWrite(operation) {
     const result = this.assetWriteTail.then(operation)
     this.assetWriteTail = result.then(() => undefined, () => undefined)
+    return result
+  }
+
+  #withOrderWrite(operation) {
+    const result = this.orderWriteTail.then(operation)
+    this.orderWriteTail = result.then(() => undefined, () => undefined)
     return result
   }
 

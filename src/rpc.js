@@ -506,8 +506,22 @@ export function createDirectorRpc(options) {
           return success({ version: 3, providers: providers.publicCatalog().length, workflows: workflows.list().length, nodes: nodes.list().length })
         case 'projects/list':
           return success({ projects: await store.listProjects() })
+        case 'gallery/list':
+          return success({ projects: await store.galleryProjects(signal) })
         case 'projects/get':
           return success({ project: await store.getProject(uuid(input.projectId, 'projectId')) })
+        case 'projects/reorder':
+          return success({ projects: await store.reorderProjects(input.projectIds) })
+        case 'projects/draft':
+          return success({ summary: await withWorkflowReferenceLock(async () => {
+            if (input.draft !== null) {
+              for (const workflowId of comfyWorkflowReferences(input.draft)) workflows.get(workflowId)
+              for (const reference of vdNodeDefinitionReferences(input.draft)) nodes.get(reference.type, reference.version)
+            }
+            return store.cacheDraft(uuid(input.projectId, 'projectId'), input.draft)
+          }) })
+        case 'projects/discard':
+          return success(await withWorkflowReferenceLock(() => store.discardDraft(uuid(input.projectId, 'projectId'))))
         case 'vd-runs/save':
           return success({ run: await withWorkflowReferenceLock(() => store.saveVdRun(
             uuid(input.projectId, 'projectId'), input.run, input.snapshot,
@@ -517,9 +531,11 @@ export function createDirectorRpc(options) {
         case 'vd-runs/get':
           return success({ run: await store.getVdRun(uuid(input.projectId, 'projectId'), uuid(input.runId, 'runId')) })
         case 'projects/create': {
+          if (input.unsaved !== undefined && typeof input.unsaved !== 'boolean') throw new DirectorInputError('unsaved must be a boolean')
           const project = await store.createProject({
             name: string(input.name, 'name', { min: 1, max: 120 }),
             sessionId: string(input.sessionId, 'sessionId', { min: 1, max: 256 }),
+            unsaved: input.unsaved === true,
           })
           return success({ project })
         }
@@ -539,7 +555,7 @@ export function createDirectorRpc(options) {
             for (const reference of vdNodeDefinitionReferences(input.project)) nodes.get(reference.type, reference.version)
             return input.force === true
               ? store.forceSaveProject(projectId, input.project)
-              : store.saveProject(projectId, input.project, expectedRevision)
+              : store.saveProject(projectId, input.project, expectedRevision, { commit: true })
           })
           return success({ project })
         }
@@ -550,6 +566,8 @@ export function createDirectorRpc(options) {
           )
           return success({ project })
         }
+        case 'assets/properties':
+          return success(await store.videoProperties(uuid(input.assetId, 'assetId'), signal))
         case 'assets/put': {
           const asset = await store.putAsset(input)
           await registerAsset(asset)
@@ -608,7 +626,7 @@ export function createDirectorRpc(options) {
             await withWorkflowReferenceLock(async () => {
               for (const summary of await store.listProjects()) {
                 const project = await store.getProject(summary.id)
-                if (project.graph.nodes.some(node => node?.data?.workflowId === workflowId)) {
+                if ([...project.graph.nodes, ...(project.draft?.graph.nodes ?? [])].some(node => node?.data?.workflowId === workflowId)) {
                   const error = new Error(`workflow ${workflowId} is used by project ${project.name}`)
                   error.code = 'video-director/workflow-in-use'
                   throw error
@@ -631,7 +649,7 @@ export function createDirectorRpc(options) {
             const definition = nodes.get(type, version)
             for (const summary of await store.listProjects()) {
               const project = await store.getProject(summary.id)
-              if (project.graph.nodes.some(node => (
+              if ([...project.graph.nodes, ...(project.draft?.graph.nodes ?? [])].some(node => (
                 node?.data?.nodeType === definition.type && (node?.data?.nodeVersion ?? '1.0.0') === definition.version
               ) || (definition.workflowId !== undefined && node?.data?.workflowId === definition.workflowId))) {
                 const error = new Error(`node ${definition.type}@${definition.version} is used by project ${project.name}`)

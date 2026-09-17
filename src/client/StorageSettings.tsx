@@ -60,9 +60,9 @@ export function StorageSettings({ snapshot, director }: { snapshot: DirectorSnap
         newPath = selected.dataDir
         setBusy('changing')
       }
-      if (director.getSnapshot().dirty) await director.saveProject()
+      await director.flushDrafts()
       const current = director.getSnapshot()
-      if (current.dirty || current.conflict || current.saving) throw new Error('Save the current canvas successfully before changing its data folder.')
+      if (current.conflict || current.saving) throw new Error('Wait for the current save before changing its data folder.')
       const result = await director.storage<StorageInfo & { previousDataDir: string; backupDataDir: string | null }>(reset ? 'reset' : 'change', {
         dataDir: newPath, expectedDataDir: storage.dataDir,
       })
@@ -93,7 +93,7 @@ export function StorageSettings({ snapshot, director }: { snapshot: DirectorSnap
             {t(busy === 'resetting' ? 'Resetting…' : 'Reset')}
           </button>
         </div>
-        <p className="vd-settings-note">{t('Choose a new or empty folder. Canvas saves your edits, copies your data, and remembers the new location. Reset returns your latest data to the default folder. Previous folders are kept as backups.')}</p>
+        <p className="vd-settings-note">{t('Choose a new or empty folder. Canvas caches your drafts, copies your data, and remembers the new location. Reset returns your latest data to the default folder. Previous folders are kept as backups.')}</p>
         {storage && !storage.isDefault ? <p className="vd-storage-default">{t('Default folder: {0}', storage.defaultDataDir)}</p> : null}
         {storage?.blockedReason || running ? <p className="vd-settings-note">{t(storage?.blockedReason ?? 'Wait for generation and workflows to finish before changing storage.')}</p> : null}
         {snapshot.conflict ? <p className="vd-settings-note">{t('Resolve the canvas save conflict before changing storage.')}</p> : null}

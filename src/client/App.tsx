@@ -38,7 +38,8 @@ import {
 } from './DirectorNode'
 import { MaskModal } from './MaskModal'
 import { CanvasContextMenu, CanvasModeControl, isCanvasTextInput, scrollableCanvasField, type CanvasInteractionMode } from './canvas-controls'
-import { CloseIcon, JobsIcon, PlayIcon, RedoIcon, SaveIcon, SettingsIcon, UndoIcon } from './icons'
+import { CloseIcon, GalleryIcon, JobsIcon, PlayIcon, RedoIcon, SaveIcon, SettingsIcon, UndoIcon } from './icons'
+import { ArtifactGallery } from './ArtifactGallery'
 import {
   fieldInputModeEnabled,
   fieldInputPortId,
@@ -46,6 +47,7 @@ import {
 } from './parameter-inputs'
 import { SettingsDrawer } from './SettingsDrawer'
 import { ProjectPicker } from './ProjectPicker'
+import { ProjectActionsMenu, type ProjectAction } from './ProjectActionsMenu'
 import { SketchModal } from './SketchModal'
 import { referencePreviewsByTarget } from './reference-previews'
 import {
@@ -182,12 +184,14 @@ function TopBar({
   onSettings,
   selectedNodeIds,
   onJobs,
+  onGallery,
 }: {
   snapshot: DirectorSnapshot
   director: DirectorController
   onSettings(): void
   selectedNodeIds: ReadonlySet<string>
   onJobs(): void
+  onGallery(): void
 }) {
   useLanguage()
   const [creating, setCreating] = useState(false)
@@ -195,6 +199,7 @@ function TopBar({
   const [menuOpen, setMenuOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [renameDraft, setRenameDraft] = useState('')
+  const [renameProjectId, setRenameProjectId] = useState<string | null>(null)
   const [runMenuOpen, setRunMenuOpen] = useState(false)
   const [batchSize, setBatchSize] = useState(1)
   const projectSwitcherRef = useRef<HTMLDivElement | null>(null)
@@ -239,11 +244,6 @@ function TopBar({
   const create = async () => {
     if (newName.trim() === '' || snapshot.saving || projectTransitioning) return
     try {
-      if (snapshot.dirty) {
-        const discard = window.confirm(t("当前工程有未保存更改。放弃这些更改并创建新工程？"))
-        if (!discard) return
-        await director.discardChanges()
-      }
       await director.createProject(newName.trim())
       setCreating(false)
       setNewName('Untitled Video')
@@ -251,75 +251,51 @@ function TopBar({
   }
   const selectProject = async (projectId: string): Promise<void> => {
     if (projectId === project?.id || snapshot.saving || projectTransitioning) return
-    const discard = snapshot.dirty
-      ? window.confirm(t("当前工程有未保存更改。放弃这些更改并切换工程？"))
-      : false
-    if (snapshot.dirty && !discard) return
-    try { await director.selectProject(projectId, { discard }) } catch (error) { swallow(error) }
+    try { await director.selectProject(projectId) } catch (error) { swallow(error) }
   }
-  const beginRename = (): void => {
-    if (project === null) return
-    setRenameDraft(project.name)
-    setMenuOpen(false)
-    setRenaming(true)
-  }
-  const applyRename = (): void => {
-    if (renameDraft.trim() === '') return
-    director.renameProject(renameDraft.trim())
-    setRenaming(false)
-  }
-  const deleteProject = async (): Promise<void> => {
-    if (project === null || snapshot.saving || projectTransitioning) return
-    setMenuOpen(false)
-    const confirmed = window.confirm(t("确定删除工程“{0}”？\n\n工程画布、任务历史与素材将被删除，此操作无法撤销。绑定的 DSH 对话会保留。", project.name))
-    if (!confirmed) return
-    try { await director.deleteProject(project.id) } catch (error) { swallow(error) }
-  }
-  const saveBeforeProjectCopy = async (action: '复制' | '导入'): Promise<boolean> => {
-    if (!snapshot.dirty) return true
-    const confirmed = window.confirm(t("当前工程有未保存更改。是否先保存，再{0}工程？", t(action)))
-    if (!confirmed) return false
+  const applyRename = async (): Promise<void> => {
+    if (renameDraft.trim() === '' || renameProjectId === null) return
     try {
-      await director.saveProject()
-      return true
-    } catch (error) {
-      swallow(error)
-      return false
-    }
-  }
-  const duplicateProject = async (): Promise<void> => {
-    setMenuOpen(false)
-    if (project === null || !await saveBeforeProjectCopy('复制')) return
-    try { await director.duplicateProject() } catch (error) { swallow(error) }
-  }
-  const exportProject = async (): Promise<void> => {
-    setMenuOpen(false)
-    if (project === null) return
-    try {
-      const exported = await director.exportProject()
-      const url = URL.createObjectURL(new Blob([exported.text], { type: 'application/json' }))
-      const anchor = document.createElement('a')
-      anchor.href = url
-      anchor.download = exported.filename
-      anchor.style.display = 'none'
-      document.body.append(anchor)
-      anchor.click()
-      anchor.remove()
-      URL.revokeObjectURL(url)
+      await director.renameProjectById(renameProjectId, renameDraft.trim())
+      setRenaming(false)
     } catch (error) { swallow(error) }
   }
-  const clearPreviews = (): void => {
+  const projectAction = async (action: ProjectAction, projectId = project?.id): Promise<void> => {
     setMenuOpen(false)
-    director.clearPreviews()
-  }
-  const restoreOpenedProject = (): void => {
-    if (project === null || snapshot.saving || projectTransitioning) return
-    setMenuOpen(false)
-    if (!window.confirm(t("确定放弃工程“{0}”的更改？\n\n工作流将恢复到本次打开时的状态，撤销和重做记录将清空。期间保存过的更改也会从画布中还原；如需将恢复结果写入工程，请点击“保存”。", project.name))) return
-    try { director.restoreOpenedProject() } catch (error) { window.alert(error instanceof Error ? error.message : String(error)) }
+    if (action === 'import') { projectImportRef.current?.click(); return }
+    const target = snapshot.projects.find(row => row.id === projectId)
+    if (!target) return
+    try {
+      if (action === 'rename') {
+        setRenameProjectId(target.id)
+        setRenameDraft(target.name)
+        setRenaming(true)
+      } else if (action === 'duplicate') {
+        await director.duplicateProject(target.id)
+      } else if (action === 'export') {
+        const exported = await director.exportProject(target.id)
+        const url = URL.createObjectURL(new Blob([exported.text], { type: 'application/json' }))
+        const anchor = document.createElement('a')
+        anchor.href = url
+        anchor.download = exported.filename
+        anchor.style.display = 'none'
+        document.body.append(anchor)
+        anchor.click()
+        anchor.remove()
+        URL.revokeObjectURL(url)
+      } else if (action === 'clear-previews') {
+        director.clearPreviews()
+      } else if (action === 'discard') {
+        const message = target.hasSavedVersion === false
+          ? t('Discard unsaved workflow “{0}”? This removes its editable copy and cached changes.', target.name)
+          : t('Discard changes to “{0}” and restore its last saved version?', target.name)
+        if (window.confirm(message)) await director.discardChanges(target.id)
+      } else if (action === 'delete') {
+        if (window.confirm(t("确定删除工程“{0}”？\n\n工程画布、任务历史与素材将被删除，此操作无法撤销。绑定的 DSH 对话会保留。", target.name))) await director.deleteProject(target.id)
+      }
+    } catch (error) { window.alert(error instanceof Error ? error.message : String(error)) }
   }
   const importProject = async (file: File): Promise<void> => {
-    if (!await saveBeforeProjectCopy('导入')) return
     try { await director.importProject(await file.text()) } catch (error) { swallow(error) }
   }
   const workflowBusy = snapshot.workflowRuns.some(run => run.projectId === project?.id && run.status === 'running')
@@ -358,6 +334,8 @@ function TopBar({
           disabled={snapshot.saving || projectTransitioning}
           onRefresh={() => { setMenuOpen(false); setCreating(false); void director.refreshExamples() }}
           onSelectProject={selectProject}
+          onProjectAction={(id, action) => { void projectAction(action, id) }}
+          onReorder={ids => { void director.reorderProjects(ids).catch(swallow) }}
           onSelectExample={async id => { try { await director.openExample(id) } catch (error) { swallow(error) } }}
         />
         <button type="button" className="vd-icon-button" title={snapshot.saving || projectTransitioning ? t("请等待当前操作完成") : t("新建工程")} disabled={snapshot.saving || projectTransitioning} onClick={() => setCreating(value => !value)}>＋</button>
@@ -385,22 +363,8 @@ function TopBar({
             </svg>
           </button>
           {menuOpen ? (
-            <div className="vd-project-menu" role="menu">
-              <button type="button" disabled={project === null} onClick={beginRename}>{t("重命名工程")}</button>
-              <button type="button" disabled={project === null || snapshot.saving || projectTransitioning} onClick={() => { void duplicateProject() }}>{t("复制工程")}</button>
-              <button type="button" disabled={snapshot.saving || projectTransitioning} onClick={() => { setMenuOpen(false); projectImportRef.current?.click() }}>{t("导入工程")}</button>
-              <button type="button" disabled={project === null || projectTransitioning} onClick={() => { void exportProject() }}>{t("导出工程")}</button>
-              <button type="button" disabled={project === null || snapshot.saving || projectTransitioning} onClick={clearPreviews}>{t("清除预览")}</button>
-              <button type="button" disabled={project === null || snapshot.saving || projectTransitioning || workflowBusy || activeJobCount > 0}
-                title={workflowBusy || activeJobCount > 0 ? t("请等待任务结束或取消任务后再放弃更改") : t("恢复到本次打开时的工作流")}
-                onClick={restoreOpenedProject}>{t("放弃更改")}</button>
-              <button
-                type="button"
-                className="vd-project-delete"
-                disabled={project === null || snapshot.saving || projectTransitioning}
-                onClick={() => { void deleteProject() }}
-              >{t("删除工程")}</button>
-            </div>
+            <ProjectActionsMenu hasProject={project !== null} disabled={snapshot.saving || projectTransitioning}
+              busy={workflowBusy || activeJobCount > 0} includeClearPreviews onAction={action => { void projectAction(action) }} />
           ) : null}
           {renaming ? (
             <div className="vd-rename-popover">
@@ -412,11 +376,11 @@ function TopBar({
                   maxLength={120}
                   onChange={event => setRenameDraft(event.target.value)}
                   onKeyDown={event => {
-                    if (event.key === 'Enter') applyRename()
+                    if (event.key === 'Enter') void applyRename()
                     if (event.key === 'Escape') setRenaming(false)
                   }}
                 />
-                <button type="button" onClick={applyRename}>{t("确定")}</button>
+                <button type="button" onClick={() => { void applyRename() }}>{t("确定")}</button>
               </div>
             </div>
           ) : null}
@@ -486,6 +450,11 @@ function TopBar({
           <JobsIcon />
           <span className="vd-topbar-action-label">{t("任务")}</span>
           {activeJobCount > 0 ? <span className="vd-jobs-count">{activeJobCount}</span> : null}
+        </button>
+        <button type="button" className="vd-topbar-button vd-gallery-button" aria-label={t('Gallery')} title={t('Gallery')}
+          disabled={projectTransitioning} onClick={onGallery}>
+          <GalleryIcon />
+          <span className="vd-topbar-action-label">{t('Gallery')}</span>
         </button>
         <button type="button" className="vd-topbar-button vd-settings-button" aria-label={t("设置")} title={t("设置")} onClick={onSettings}>
           <SettingsIcon />
@@ -1327,6 +1296,13 @@ interface NodeContextMenuPosition {
   screen: { x: number; y: number }
 }
 
+const INPUT_FILE_ACCEPTS = {
+  text: 'text/*,.txt,.md,.markdown,.csv,.json,.srt,.vtt,.log',
+  image: 'image/png,image/jpeg,image/webp,image/gif',
+  audio: 'audio/mpeg,audio/wav,audio/ogg,audio/flac,audio/mp4,audio/webm',
+  video: 'video/mp4,video/webm,video/quicktime,.m4v',
+}
+
 interface ParameterInputPickerPosition {
   nodeId: string
   screen: { x: number; y: number }
@@ -1357,6 +1333,9 @@ function NodeContextMenu({
   onMask,
   onRename,
   onDetails,
+  onReplace,
+  onInspect,
+  uploading,
   videoPreview,
   onSaveVideo,
   onVideoProperties,
@@ -1376,6 +1355,9 @@ function NodeContextMenu({
   onMask(): void
   onRename(): void
   onDetails(): void
+  onReplace(): void
+  onInspect(): void
+  uploading: boolean
   videoPreview: boolean
   onSaveVideo(): void
   onVideoProperties(): void
@@ -1389,6 +1371,7 @@ function NodeContextMenu({
   const runnable = REMOTE_NODE_KINDS.has(node.data.kind) || dependencyRunnable
   const maskable = (node.data.mediaKind === 'image' || node.data.mediaKind === 'video') && node.data.asset !== undefined
   const clip = node.data.mediaKind === 'audio' || node.data.mediaKind === 'video'
+  const mediaInput = node.data.kind === 'load-image' || node.data.kind === 'load-video'
   useEffect(() => {
     const firstItem = menuRef.current?.querySelector<HTMLButtonElement>('button[role="menuitem"]:not(:disabled)')
     const focusTarget = firstItem ?? menuRef.current
@@ -1453,6 +1436,16 @@ function NodeContextMenu({
         <strong>{node.data.title}</strong>
         <span>{node.data.kind}</span>
       </header>
+      {mediaInput ? (
+        <div className="vd-node-context-group">
+          <button type="button" role="menuitem" disabled={uploading} onClick={onReplace}>
+            <span aria-hidden>⇄</span><span>{t("Replace")}<small>{t("Choose a replacement file")}</small></span>
+          </button>
+          <button type="button" role="menuitem" disabled={node.data.asset === undefined} onClick={onInspect}>
+            <span aria-hidden>⌕</span><span>{t("Inspect")}<small>{t("Open in the preview viewer")}</small></span>
+          </button>
+        </div>
+      ) : null}
       {runnable ? (
         <div className="vd-node-context-group">
           {busy ? (
@@ -1947,7 +1940,11 @@ function CanvasStage({
   const ignoreNextPaneClickRef = useRef(false)
   const pastePositionRef = useRef<{ x: number; y: number } | null>(null)
   const selectionGestureRef = useRef<{ pointerId: number; x: number; y: number; moved: boolean; nodeId?: string; previous: Set<string> } | null>(null)
-  const pendingFileRef = useRef<{ mediaKind: 'image' | 'audio' | 'video'; position: { x: number; y: number } } | null>(null)
+  const pendingFileRef = useRef<
+    | { action: 'add'; mediaKind: 'image' | 'audio' | 'video'; position: { x: number; y: number } }
+    | { action: 'replace'; nodeId: string; mediaKind: 'text' | 'image' | 'video' }
+    | null
+  >(null)
   const nodeTypes = useMemo(() => ({ director: DirectorNodeView }), [])
   useEffect(() => {
     onSelectedNodeIdsChange(new Set())
@@ -1963,6 +1960,7 @@ function CanvasStage({
     setParameterInputPicker(null)
     setDetailsNodeId(null)
     setOpenArtifact(null)
+    pendingFileRef.current = null
     setSketchOpen(false)
     setSketchPosition(undefined)
     setSketchNodeId(null)
@@ -2230,13 +2228,8 @@ function CanvasStage({
       if (action.kind === 'file') {
         const input = fileInputRef.current
         if (input === null) return
-        const accepts = {
-          image: 'image/png,image/jpeg,image/webp,image/gif',
-          audio: 'audio/mpeg,audio/wav,audio/ogg,audio/flac,audio/mp4,audio/webm',
-          video: 'video/mp4,video/webm,video/quicktime',
-        }
-        pendingFileRef.current = { mediaKind: action.mediaKind, position }
-        input.accept = accepts[action.mediaKind]
+        pendingFileRef.current = { action: 'add', mediaKind: action.mediaKind, position }
+        input.accept = INPUT_FILE_ACCEPTS[action.mediaKind]
         input.click()
       }
     } catch (error) { swallow(error) }
@@ -2281,12 +2274,32 @@ function CanvasStage({
       : referencePreviewsByTarget(project.graph, snapshot.nodeDefinitions)
   ), [project, snapshot.nodeDefinitions])
 
+  const chooseInputFile = useCallback((nodeId: string): void => {
+    const node = project?.graph.nodes.find(candidate => candidate.id === nodeId)
+    const input = fileInputRef.current
+    if (node === undefined || input === null || uploading) return
+    const kind = node.data.kind === 'load-text' ? 'text'
+      : node.data.kind === 'load-image' ? 'image'
+        : node.data.kind === 'load-video' ? 'video' : undefined
+    if (kind === undefined) return
+    pendingFileRef.current = { action: 'replace', nodeId, mediaKind: kind }
+    input.accept = INPUT_FILE_ACCEPTS[kind]
+    input.click()
+  }, [project, uploading])
+
+  const inspectInput = useCallback((nodeId: string): void => {
+    const asset = project?.graph.nodes.find(candidate => candidate.id === nodeId)?.data.asset
+    if (asset !== undefined) setOpenArtifact({ artifact: previewArtifactFromAsset(asset), properties: false })
+  }, [project])
+
   const runtime = useMemo<DirectorRuntimeValue>(() => ({
     providers: snapshot.providers,
     workflows: snapshot.workflows,
     nodeDefinitions: snapshot.nodeDefinitions,
     references: referencePreviews,
     onChange: (id, patch) => director.updateNode(id, patch),
+    onChooseInputFile: chooseInputFile,
+    onInspectInput: inspectInput,
     onRefreshModels: providerId => director.refreshProviderModels(providerId),
     onEjectModel: (providerId, model) => director.unloadProviderModel(providerId, model),
     onRunNode: nodeId => director.runNode(nodeId),
@@ -2297,7 +2310,7 @@ function CanvasStage({
       setSketchPosition(undefined)
       setSketchOpen(true)
     },
-  }), [director, project, referencePreviews, snapshot.nodeDefinitions, snapshot.providers, snapshot.workflows])
+  }), [director, project, referencePreviews, snapshot.nodeDefinitions, snapshot.providers, snapshot.workflows, chooseInputFile, inspectInput])
 
   if (project === null) return null
   const selectedEdge = project.graph.edges.find(edge => edge.id === selectedEdgeId)
@@ -2636,7 +2649,7 @@ function CanvasStage({
         <span>{t("INFINITE CANVAS")}</span>
         <small>{t("拖放媒体 · 连线构建工作流 · Delete 删除")}</small>
       </div>
-      {uploading ? <div className="vd-uploading">{t("正在写入不可变素材…")}</div> : null}
+      {uploading ? <div className="vd-uploading">{t("Importing file…")}</div> : null}
       {selectionBox ? <div className="vd-canvas-selection" style={{ left: selectionBox.x, top: selectionBox.y, width: selectionBox.width, height: selectionBox.height }} /> : null}
       {canvasNotice ? <div className="vd-canvas-notice" role="status">{canvasNotice}</div> : null}
       {canvasContextMenu ? <CanvasContextMenu position={canvasContextMenu.screen}
@@ -2690,6 +2703,15 @@ function CanvasStage({
           position={nodeContextMenu}
           node={contextNode}
           canRun={contextCanRun}
+          uploading={uploading}
+          onReplace={() => {
+            setNodeContextMenu(null)
+            chooseInputFile(contextNode.id)
+          }}
+          onInspect={() => {
+            setNodeContextMenu(null)
+            inspectInput(contextNode.id)
+          }}
           inputCandidateCount={parameterInputCandidates(contextNode.data, contextDefinition).length}
           onRun={() => {
             setNodeContextMenu(null)
@@ -2773,8 +2795,11 @@ function CanvasStage({
           pendingFileRef.current = null
           if (file === undefined || pending === null) return
           setUploading(true)
-          void director.addFile(file, pending.mediaKind, pending.position)
-            .catch(swallow)
+          const operation = pending.action === 'replace'
+            ? director.replaceInputFile(pending.nodeId, file)
+            : director.addFile(file, pending.mediaKind, pending.position)
+          void operation
+            .catch(error => setCanvasNotice(error instanceof Error ? error.message : String(error)))
             .finally(() => setUploading(false))
         }}
       />
@@ -2865,6 +2890,7 @@ export function DirectorOverlay({ director, chat }: DirectorInjectedProps) {
   const snapshot = useSource(director)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [jobsOpen, setJobsOpen] = useState(false)
+  const [galleryOpen, setGalleryOpen] = useState(false)
   const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(() => new Set())
   const [interactionMode, setInteractionMode] = useState<CanvasInteractionMode>('select')
   const initialChatPanelLayout = useMemo(loadChatPanelLayout, [])
@@ -2878,6 +2904,7 @@ export function DirectorOverlay({ director, chat }: DirectorInjectedProps) {
     if (!snapshot.open) {
       setSettingsOpen(false)
       setJobsOpen(false)
+      setGalleryOpen(false)
     }
   }, [snapshot.open])
   useEffect(() => {
@@ -2916,8 +2943,10 @@ export function DirectorOverlay({ director, chat }: DirectorInjectedProps) {
           onSettings={() => setSettingsOpen(open => !open)}
           selectedNodeIds={selectedNodeIds}
           onJobs={() => setJobsOpen(open => !open)}
+          onGallery={() => setGalleryOpen(true)}
         />
         {jobsOpen ? <JobDrawer snapshot={snapshot} director={director} onClose={() => setJobsOpen(false)} /> : null}
+        {galleryOpen ? <ArtifactGallery project={snapshot.project} loadProjects={director.loadGallery} onClose={() => setGalleryOpen(false)} /> : null}
         {snapshot.error !== null ? (
           <div className={`vd-global-error ${snapshot.conflict ? 'is-conflict' : ''}`}>
             <strong>{snapshot.conflict ? t("工程发生保存冲突") : t("Video Director 错误")}</strong>

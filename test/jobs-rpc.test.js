@@ -263,6 +263,9 @@ test('JobManager persists provider identity progress before the job becomes term
   }
   const completed = await waitForPersistedStatus(store, project.id, job.id, 'completed')
   const persisted = runningProject.jobs.find(candidate => candidate.id === job.id)
+  assert.ok(Date.parse(persisted.startedAt) >= Date.parse(persisted.createdAt))
+  assert.equal(completed.startedAt, persisted.startedAt)
+  assert.ok(Date.parse(completed.completedAt) >= Date.parse(completed.startedAt))
 
   assert.deepEqual({
     projectStatus: runningProject.status,

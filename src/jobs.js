@@ -382,6 +382,7 @@ export class JobManager {
     job.status = 'running'
     job.phase = 'starting'
     job.updatedAt = new Date().toISOString()
+    job.startedAt = job.updatedAt
     await this.#persistCurrent(job)
     try {
       const providerResult = await this.providers.run(

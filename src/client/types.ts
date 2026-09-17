@@ -186,6 +186,9 @@ export interface DirectorNodeData extends Record<string, unknown> {
   phase?: string
   progress?: number
   jobId?: string
+  /** Wall-clock execution times for the latest node run, distinct from media duration. */
+  runStartedAt?: string
+  runCompletedAt?: string
   error?: string
   result?: unknown
   derivedFrom?: string
@@ -229,13 +232,31 @@ export interface ProjectSummary {
   nodeCount: number
   createdAt: string
   updatedAt: string
+  unsaved?: boolean
+  hasSavedVersion?: boolean
 }
+
+export type ProjectDraft = Pick<VideoProject, 'name' | 'graph' | 'settings'>
 
 export interface VideoProject extends Omit<ProjectSummary, 'nodeCount'> {
   schemaVersion: 1
   graph: DirectorGraph
   settings: Record<string, unknown>
   jobs: DirectorJob[]
+  draft?: ProjectDraft
+}
+
+/** Gallery payload omits canvas layout, provider configuration, and job requests. */
+export interface GalleryProject {
+  id: string
+  name: string
+  graph: { nodes: Array<{
+    id: string
+    data: Pick<DirectorNodeData, 'kind' | 'title' | 'asset' | 'assets' | 'text' | 'maskAsset' | 'runCompletedAt'> & {
+      sketchDocument?: Pick<SketchDocument, 'base'>
+    }
+  }> }
+  jobs: Array<Pick<DirectorJob, 'nodeId' | 'operation' | 'createdAt' | 'completedAt' | 'result'>>
 }
 
 export interface ProviderDescriptor {
@@ -348,6 +369,8 @@ export interface DirectorJob {
   createdAt: string
   updatedAt: string
   completedAt?: string
+  /** Recorded when the Host starts execution, after its job queue wait. */
+  startedAt?: string
   /** ComfyUI submission ID (provider prompt_id), not generation prompt text. */
   promptId?: string
   seed?: number

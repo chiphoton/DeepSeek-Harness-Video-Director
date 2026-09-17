@@ -65,6 +65,14 @@ export async function apply(ctx, config) {
       methods: ['GET', 'HEAD'],
       fetch: request => host.store.assetResponse(asset.id, request),
     })
+    if (asset.kind === 'video') ctx.connection.fetch.register({
+      path: `${asset.url}/properties`,
+      methods: ['GET'],
+      fetch: async request => {
+        const result = await host.rpc('assets/properties', { assetId: asset.id }, request.signal)
+        return Response.json(result, { status: result.ok ? 200 : 503, headers: { 'Cache-Control': 'no-store' } })
+      },
+    })
     assetRoutes.add(asset.id)
   }
   host = await createDirectorHost(config, { registerAsset, tools: ctx.get('tools') })

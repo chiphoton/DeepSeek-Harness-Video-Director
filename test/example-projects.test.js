@@ -34,7 +34,7 @@ test('examples are discovered from the plugin folder and cannot read arbitrary f
 const compiled = await build({ entryPoints: [fileURLToPath(new URL('../src/client/controller.ts', import.meta.url))], bundle: true, platform: 'browser', format: 'esm', write: false })
 const { DirectorController } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].contents).toString('base64')}`)
 
-test('opening the bundled example saves current edits and imports independent projects with no generation', async t => {
+test('opening an example caches current edits and creates independent unsaved copies with no generation', async t => {
   const root = await mkdtemp(join(tmpdir(), 'canvas-open-example-'))
   const app = await testHost(root)
   const calls = []
@@ -73,9 +73,11 @@ test('opening the bundled example saves current edits and imports independent pr
   const first = controller.getSnapshot().project
   assert.equal(first.name, 'canvas-demo (2)')
   assert.notEqual(first.id, originalId)
-  assert.equal((await app.store.getProject(originalId)).graph.nodes[0].data.text, 'Keep these unsaved edits')
+  assert.equal((await app.store.getProject(originalId)).draft.graph.nodes[0].data.text, 'Keep these unsaved edits')
   const openingCalls = calls.slice(beforeOpen).map(([, endpoint]) => endpoint)
-  assert.ok(openingCalls.indexOf('projects/save') < openingCalls.indexOf('examples/get'), 'Save before reading/importing the example')
+  assert.equal(openingCalls.includes('projects/save'), false, 'Opening an example must not commit any workflow')
+  assert.equal(controller.getSnapshot().dirty, true)
+  assert.equal((await app.store.getProject(first.id)).hasSavedVersion, false)
   assert.equal(first.graph.nodes.length, archive.project.graph.nodes.length)
   assert.equal(first.graph.edges.length, archive.project.graph.edges.length)
   assert.deepEqual(first.jobs, [])
@@ -90,6 +92,16 @@ test('opening the bundled example saves current edits and imports independent pr
   assert.notEqual(second.graph.nodes.find(node => node.data.kind === 'load-sketch').data.asset.id, firstSketch.id)
   assert.equal(await readFile(examplePath, 'utf8'), originalArchive)
   assert.equal(calls.some(([, endpoint]) => endpoint === 'jobs/start' || endpoint === 'start'), false)
+  await controller.discardChanges(first.id)
+  await assert.rejects(app.store.getProject(first.id), /not found/)
+  assert.throws(() => app.store.asset(firstSketch.id), /not found/)
+  assert.equal(controller.getSnapshot().project.id, second.id)
+  assert.equal(controller.getSnapshot().dirty, true)
+  await controller.saveProject()
+  controller.renameProject('Unsaved example edit')
+  await controller.discardChanges()
+  assert.equal(controller.getSnapshot().project.name, second.name)
+  assert.equal(controller.getSnapshot().dirty, false)
   const rejected = await rpc('/video-director', 'examples/get', { id: '../provider-settings.json' })
   assert.equal(rejected.ok, false)
 })

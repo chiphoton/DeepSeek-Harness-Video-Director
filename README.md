@@ -100,9 +100,13 @@ Text → Prompt Enhancer → H3 Video → Preview → Save Output
 
 Set the provider on each executable vd-node, choose its model or registered comfyui-workflow as applicable, enter a generation prompt, then click **Run**. Use **Save** in the top bar to persist canvas edits; generation can run from the current unsaved canvas snapshot.
 
-The project menu’s **放弃更改** (Discard changes), above Delete Project, asks for confirmation and restores the workflow to its state when the project was opened. It restores the name, nodes, connections, settings, and canvas view, clears undo/redo, and retains job history and stored assets. Saves during that opening do not replace the restore point; use **Save** to persist a restored workflow if it differs from the last save. Wait for queued/running jobs to finish or cancel them before discarding.
+Unsaved workflows appear in *italics* with an ***** in the project picker and its selected title. Edits are cached automatically, independently of **Save**, so you can switch projects and recover drafts after restarting DSH. The picker shows the unsaved count; drag project rows to reorder them (or use Alt+Up / Alt+Down), and use each row’s **⋯** menu for project actions. The order survives restart.
+
+New projects, imports, duplicates, and editable example copies stay unsaved until you click **Save**. **Discard changes** restores the last explicitly saved workflow and clears undo/redo while retaining its jobs and assets. For a never-saved copy, Discard removes the draft and its owned assets; its DSH conversation remains. Wait for queued/running tasks to finish or cancel them before discarding.
 
 Click **Run** again to queue another snapshot. Vd-workflows execute in submission order, with dependency stages and batches kept together. The **Jobs** window shows queued runs and lets you cancel, **Open Workflow**, or **Export Workflow**. Opening a submitted snapshot is undoable; exporting produces an importable project archive with its referenced assets. Keep the current project open while its queue executes.
+
+Starting a vd-workflow or a single node resets other non-frozen, inactive nodes to **IDLE**, preserving their cached outputs. Nodes stay **IDLE** while waiting, show **RUNNING** with their current stage or percentage during execution, and show **COMPLETED** with the local finish time (`MMDD-HH:mm:ss`) and duration in seconds. Frozen nodes retain **FROZEN**. New job durations exclude the Host queue wait; older history uses its available timestamps.
 
 If an SSH tunnel drops, active ComfyUI and Ollama work waits and retries automatically with backoff. ComfyUI retrieves completed outputs using the original prompt ID; Ollama retries the interrupted text request. Permanent configuration or execution errors still fail visibly.
 
@@ -121,6 +125,10 @@ If an SSH tunnel drops, active ComfyUI and Ollama work waits and retries automat
 
 Useful canvas gestures:
 
+- Image and Video inputs offer **Replace** and **Inspect** in their right-click menu. Click an image to inspect it in the Preview viewer, or click the filename to replace its file; hovering or focusing the filename reveals **Replace**. Replacement preserves the node and connections, resets its mask and trim, and supports Undo.
+- Video inspection in Input, Preview, and Save Output shows dimensions, FPS, format, duration, and file size. **Metadata** opens container/stream tags and codec details. Detailed video inspection uses `ffprobe` from FFmpeg on the DSH host; if it is unavailable, browser-readable dimensions and duration still appear.
+- **Gallery**, beside **Tasks**, opens on **All workflows** and groups source artifacts under **Input** and cached results plus retained job history under **Output**. Filter by workflow and search filenames, workflow/node names, media types, or text content; cards identify their workflow, and unsaved drafts are included. Browsing does not switch or save the active workflow. **Refresh** reloads the catalog. Repeated files appear once per workflow/tab. Click any image, video, audio, or text card to inspect it; images support drag-to-pan, wheel/button zoom, Reset view, and Metadata. Closing Inspect preserves the Gallery tab, filter, and search.
+- Text inputs show a live character count above the textbox, with **Import** (UTF-8 text files) and **Clear** below it. Import replaces the text while preserving whitespace; both actions support Undo.
 - Double-click blank space to search the node menu.
 - Drag an output onto blank space to create and connect a compatible node.
 - **Select (V):** drag empty canvas to pan, click a node to select it, and drag a node to move it. **Hand (H):** drag anywhere to pan, including over nodes and their controls. Hold Space for temporary Hand navigation.
@@ -160,14 +168,15 @@ The default Host data directory is `./.dsh-video-director`, resolved from the di
 
 ```text
 .dsh-video-director/
-├── projects/<project-id>/project.json   # canvas, settings, and recent jobs
+├── project-order.json                  # persistent project picker ordering
+├── projects/<project-id>/project.json   # saved workflow, optional draft, and recent jobs
 ├── projects/<project-id>/runs/          # run summaries and immutable submitted snapshots
 ├── assets/<asset-id>.<ext>              # uploaded and generated media
 ├── assets/index.json                    # immutable asset metadata and hashes
 └── workflows.json                       # imported workflow registry
 ```
 
-**Settings → Storage** opens the current folder, changes to a new or empty folder, or resets to the original `dataDir`. A change saves current edits, copies canvas data, and takes effect immediately; previous folders remain as backups. The original data directory keeps `.video-director-storage.json` so the choice survives restart. Generations and workflows must finish or be cancelled first. Native folder controls act on the Harness host machine. Harness continues to manage conversation history and provider credentials. You can also set the initial `dataDir` in the plugin's DSH configuration. **Save Output** downloads a copy through the browser to the browser's configured download directory; the project-owned asset remains under `dataDir/assets`.
+**Settings → Storage** opens the current folder, changes to a new or empty folder, or resets to the original `dataDir`. A change caches current drafts, copies canvas data, and takes effect immediately; previous folders remain as backups. The original data directory keeps `.video-director-storage.json` so the choice survives restart. Generations and workflows must finish or be cancelled first. Native folder controls act on the Harness host machine. Harness continues to manage conversation history and provider credentials. You can also set the initial `dataDir` in the plugin's DSH configuration. **Save Output** downloads a copy through the browser to the browser's configured download directory; the project-owned asset remains under `dataDir/assets`.
 
 ## 📝 Notes
 

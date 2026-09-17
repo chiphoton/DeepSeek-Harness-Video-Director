@@ -4,6 +4,16 @@ import { createPortal } from 'react-dom'
 
 import { parseImageProperties, type ImageProperties } from './image-properties'
 import type { AssetRef, VdNodeResult } from './types'
+import { useModalScrollLock } from './modal-scroll-lock'
+
+interface VideoProperties {
+  width?: number
+  height?: number
+  duration?: number
+  fps?: number
+  format?: string
+  metadata: Array<{ name: string; value: string }>
+}
 
 export interface PreviewArtifact {
   id: string
@@ -54,7 +64,7 @@ function ThumbnailContent({ artifact }: { artifact: PreviewArtifact }): ReactNod
 
 export function ArtifactThumbnail(props: {
   artifact: PreviewArtifact
-  variant?: 'node' | 'job'
+  variant?: 'node' | 'job' | 'gallery'
   onOpen(artifact: PreviewArtifact): void
 }): ReactNode {
   useLanguage()
@@ -64,7 +74,7 @@ export function ArtifactThumbnail(props: {
       className={`nodrag nowheel vd-artifact-thumbnail is-${props.variant ?? 'node'} is-${props.artifact.kind}`}
       aria-label={`Preview ${props.artifact.name}`}
       title={`Preview ${props.artifact.name}`}
-      onClick={() => props.onOpen(props.artifact)}
+      onClick={event => { event.currentTarget.focus(); props.onOpen(props.artifact) }}
     >
       <ThumbnailContent artifact={props.artifact} />
     </button>
@@ -77,6 +87,7 @@ export function ArtifactPreviewDialog(props: {
   onClose(): void
 }): ReactNode {
   useLanguage()
+  useModalScrollLock()
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [copied, setCopied] = useState(false)
@@ -86,7 +97,9 @@ export function ArtifactPreviewDialog(props: {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const [propertiesOpen, setPropertiesOpen] = useState(false)
   const [videoProperties, setVideoProperties] = useState<{ width: number; height: number; duration: number } | null>(null)
+  const [videoMetadata, setVideoMetadata] = useState<VideoProperties | null>(null)
   const drag = useRef<{ pointerId: number; startX: number; startY: number; panX: number; panY: number } | null>(null)
+  const dialogRef = useRef<HTMLElement>(null)
   const titleId = useId()
   const propertiesTitleId = useId()
   const asset = props.artifact.asset
@@ -101,16 +114,14 @@ export function ArtifactPreviewDialog(props: {
     setContextMenu(null)
     setPropertiesOpen(props.initialPropertiesOpen === true)
     setVideoProperties(null)
+    setVideoMetadata(null)
   }, [props.artifact.id, props.initialPropertiesOpen])
 
   useEffect(() => {
-    const bodyOverflow = document.body.style.overflow
-    const rootOverflow = document.documentElement.style.overflow
-    document.body.style.overflow = 'hidden'
-    document.documentElement.style.overflow = 'hidden'
+    const previousFocus = document.activeElement as HTMLElement | null
+    dialogRef.current?.focus()
     return () => {
-      document.body.style.overflow = bodyOverflow
-      document.documentElement.style.overflow = rootOverflow
+      if (previousFocus?.isConnected) previousFocus.focus()
     }
   }, [])
 
@@ -126,14 +137,21 @@ export function ArtifactPreviewDialog(props: {
   }, [contextMenu, propertiesOpen, props.onClose])
 
   useEffect(() => {
-    if (props.artifact.kind !== 'image' || asset === undefined) return
+    if ((props.artifact.kind !== 'image' && props.artifact.kind !== 'video') || asset === undefined) return
     const controller = new AbortController()
-    void fetch(asset.url, { credentials: 'same-origin', signal: controller.signal })
+    const isVideo = props.artifact.kind === 'video'
+    void fetch(isVideo ? `${asset.url}/properties` : asset.url, { credentials: 'same-origin', signal: controller.signal })
       .then(async response => {
+        if (isVideo) {
+          const result = await response.json() as { ok: boolean; value: VideoProperties; error?: { message: string } }
+          if (!response.ok || !result.ok) throw new Error(result.error?.message ?? 'Could not read video metadata.')
+          if (!controller.signal.aborted) setVideoMetadata(result.value)
+          return
+        }
         if (!response.ok) throw new Error(`Could not read image (${String(response.status)}).`)
-        return response.arrayBuffer()
+        const buffer = await response.arrayBuffer()
+        if (!controller.signal.aborted) setProperties(parseImageProperties(buffer, asset.mimeType))
       })
-      .then(buffer => setProperties(parseImageProperties(buffer, asset.mimeType)))
       .catch(error => {
         if (controller.signal.aborted) return
         setPropertyError(error instanceof Error ? error.message : String(error))
@@ -175,6 +193,12 @@ export function ArtifactPreviewDialog(props: {
     setPan({ x: 0, y: 0 })
   }
 
+  const changeImageZoom = (factor: number): void => {
+    const nextZoom = Math.min(8, Math.max(.1, zoom * factor))
+    setPan(current => ({ x: current.x * nextZoom / zoom, y: current.y * nextZoom / zoom }))
+    setZoom(nextZoom)
+  }
+
   const saveArtifact = (): void => {
     if (asset === undefined) return
     const anchor = document.createElement('a')
@@ -192,16 +216,19 @@ export function ArtifactPreviewDialog(props: {
     : naturalSize === null
       ? 'Reading…'
       : `${String(naturalSize.width)} × ${String(naturalSize.height)} px`
-  const format = properties?.format ?? asset?.mimeType.split('/')[1]?.toUpperCase() ?? 'Reading…'
+  const format = videoMetadata?.format ?? properties?.format ?? asset?.mimeType.split('/')[1]?.toUpperCase() ?? 'Reading…'
   const bitDepth = properties === null && propertyError === null ? 'Reading…' : properties?.bitDepth ?? 'Unavailable'
   const date = asset === undefined ? '—' : new Date(asset.createdAt).toLocaleString()
   const mediaLabel = props.artifact.kind === 'video' ? 'Video' : 'Image'
-  const videoDimensions = videoProperties === null
-    ? 'Reading…'
-    : `${String(videoProperties.width)} × ${String(videoProperties.height)} px`
-  const videoDuration = videoProperties === null || !Number.isFinite(videoProperties.duration)
-    ? 'Reading…'
-    : `${videoProperties.duration.toFixed(videoProperties.duration < 10 ? 2 : 1)} s`
+  const pendingVideoValue = videoMetadata === null && propertyError === null ? t('Reading…') : t('Unavailable')
+  const videoWidth = videoProperties?.width || videoMetadata?.width
+  const videoHeight = videoProperties?.height || videoMetadata?.height
+  const videoDimensions = videoWidth && videoHeight ? `${String(videoWidth)} × ${String(videoHeight)} px` : pendingVideoValue
+  const duration = Number.isFinite(videoProperties?.duration) ? videoProperties?.duration : videoMetadata?.duration
+  const videoDuration = duration === undefined ? pendingVideoValue : `${duration.toFixed(duration < 10 ? 2 : 1)} s`
+  const fps = videoMetadata?.fps === undefined ? pendingVideoValue : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 }).format(videoMetadata.fps)} fps`
+  const fileSize = asset === undefined ? '—' : new Intl.NumberFormat(undefined, { style: 'unit', unit: 'byte', unitDisplay: 'short' }).format(asset.size)
+  const embeddedMetadata = props.artifact.kind === 'video' ? videoMetadata : properties
 
   return createPortal(
     <div
@@ -211,13 +238,23 @@ export function ArtifactPreviewDialog(props: {
       }}
     >
       <section
-        className={`vd-artifact-dialog nodrag nowheel${props.artifact.kind === 'image' ? ' is-image-dialog' : ''}`}
+        ref={dialogRef}
+        tabIndex={-1}
+        className={`vd-artifact-dialog nodrag nowheel${props.artifact.kind === 'image' || props.artifact.kind === 'video' ? ' is-visual-dialog' : ''}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         onPointerDown={event => event.stopPropagation()}
         onClick={event => event.stopPropagation()}
         onContextMenu={event => event.stopPropagation()}
+        onKeyDown={event => {
+          if (event.key !== 'Tab') return
+          const scope = propertiesOpen ? dialogRef.current?.querySelector('.vd-image-properties-dialog') : dialogRef.current
+          const controls = [...(scope?.querySelectorAll<HTMLElement>('button:not([disabled]), video[controls], audio[controls]') ?? [])]
+          const first = controls[0], last = controls.at(-1)
+          if (event.shiftKey && (document.activeElement === first || document.activeElement === dialogRef.current)) { event.preventDefault(); last?.focus() }
+          else if (!event.shiftKey && (document.activeElement === last || document.activeElement === dialogRef.current || !scope?.contains(document.activeElement))) { event.preventDefault(); first?.focus() }
+        }}
       >
         <header>
           <div>
@@ -225,6 +262,9 @@ export function ArtifactPreviewDialog(props: {
             <span>{props.artifact.kind}</span>
           </div>
           <div className="vd-artifact-dialog-actions">
+            {asset !== undefined && (props.artifact.kind === 'image' || props.artifact.kind === 'video') ? (
+              <button type="button" onClick={() => setPropertiesOpen(true)}>{t('Metadata')}</button>
+            ) : null}
             {props.artifact.kind === 'text' ? (
               <button type="button" onClick={() => { void copyText() }}>{copied ? 'Copied' : t("Copy")}</button>
             ) : null}
@@ -289,28 +329,45 @@ export function ArtifactPreviewDialog(props: {
                 onLoad={event => setNaturalSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
                 style={{ transform: `translate3d(${String(pan.x)}px, ${String(pan.y)}px, 0) scale(${String(zoom)})` }}
               />
+              <div className="vd-image-view-controls" role="group" aria-label={t('Image view controls')}
+                onPointerDown={event => event.stopPropagation()} onWheel={event => event.stopPropagation()}>
+                <button type="button" aria-label={t('Zoom out')} title={t('Zoom out')} disabled={zoom <= .1} onClick={() => changeImageZoom(1 / 1.25)}>−</button>
+                <output aria-label={t('Zoom')}>{Math.round(zoom * 100)}%</output>
+                <button type="button" aria-label={t('Zoom in')} title={t('Zoom in')} disabled={zoom >= 8} onClick={() => changeImageZoom(1.25)}>+</button>
+                <button type="button" onClick={resetImageView}>{t('Reset view')}</button>
+              </div>
             </div>
           </>
         ) : props.artifact.kind === 'video' && props.artifact.asset !== undefined ? (
-          <div
-            className="vd-artifact-dialog-content is-video"
-            onContextMenu={event => {
-              event.preventDefault()
-              setContextMenu({ x: event.clientX, y: event.clientY })
-            }}
-          >
-            <video
-              src={props.artifact.asset.url}
-              controls
-              playsInline
-              preload="metadata"
-              onLoadedMetadata={event => setVideoProperties({
-                width: event.currentTarget.videoWidth,
-                height: event.currentTarget.videoHeight,
-                duration: event.currentTarget.duration,
-              })}
-            />
-          </div>
+          <>
+            <div className="vd-artifact-image-info is-video-info" aria-label={t('Video properties')}>
+              <span><small>{t('Dimensions')}</small><strong>{videoDimensions}</strong></span>
+              <span><small>{t('FPS')}</small><strong>{fps}</strong></span>
+              <span><small>{t('Format')}</small><strong>{format}</strong></span>
+              <span><small>{t('Duration')}</small><strong>{videoDuration}</strong></span>
+              <span><small>{t('File size')}</small><strong>{fileSize}</strong></span>
+            </div>
+            <div
+              className="vd-artifact-dialog-content is-video"
+              onContextMenu={event => {
+                event.preventDefault()
+                setContextMenu({ x: event.clientX, y: event.clientY })
+              }}
+            >
+              <video
+                key={props.artifact.asset.id}
+                src={props.artifact.asset.url}
+                controls
+                playsInline
+                preload="metadata"
+                onLoadedMetadata={event => setVideoProperties({
+                  width: event.currentTarget.videoWidth,
+                  height: event.currentTarget.videoHeight,
+                  duration: event.currentTarget.duration,
+                })}
+              />
+            </div>
+          </>
         ) : props.artifact.kind === 'audio' && props.artifact.asset !== undefined ? (
           <div className="vd-artifact-dialog-content is-audio">
             <audio src={props.artifact.asset.url} controls preload="metadata" />
@@ -353,18 +410,19 @@ export function ArtifactPreviewDialog(props: {
               <dl>
                 <div><dt>{t("Dimensions")}</dt><dd>{props.artifact.kind === 'video' ? videoDimensions : dimensions}</dd></div>
                 {props.artifact.kind === 'video' ? <div><dt>{t("Duration")}</dt><dd>{videoDuration}</dd></div> : <div><dt>{t("Bit depth")}</dt><dd>{bitDepth}</dd></div>}
+                {props.artifact.kind === 'video' ? <div><dt>{t('FPS')}</dt><dd>{fps}</dd></div> : null}
                 <div><dt>{t("Format")}</dt><dd>{format}</dd></div>
                 <div><dt>{t("Date")}</dt><dd>{date}</dd></div>
                 <div><dt>{t("MIME type")}</dt><dd>{asset.mimeType}</dd></div>
-                <div><dt>{t("File size")}</dt><dd>{new Intl.NumberFormat(undefined, { style: 'unit', unit: 'byte', unitDisplay: 'short' }).format(asset.size)}</dd></div>
+                <div><dt>{t("File size")}</dt><dd>{fileSize}</dd></div>
                 <div><dt>SHA-256</dt><dd className="is-code">{asset.sha256}</dd></div>
               </dl>
-              {props.artifact.kind === 'image' ? <div className="vd-image-metadata">
+              <div className="vd-image-metadata">
                 <strong>{t("Metadata")}</strong>
-                {propertyError !== null ? <p>{propertyError}</p> : properties === null ? <p>{t("Reading embedded metadata…")}</p> : properties.metadata.length === 0 ? <p>{t("No embedded metadata found.")}</p> : (
-                  <dl>{properties.metadata.map((entry, index) => <div key={`${entry.name}:${String(index)}`}><dt>{entry.name}</dt><dd>{entry.value}</dd></div>)}</dl>
+                {propertyError !== null ? <p>{t(propertyError)}</p> : embeddedMetadata === null ? <p>{t("Reading embedded metadata…")}</p> : embeddedMetadata.metadata.length === 0 ? <p>{t("No embedded metadata found.")}</p> : (
+                  <dl>{embeddedMetadata.metadata.map((entry, index) => <div key={`${entry.name}:${String(index)}`}><dt>{entry.name}</dt><dd>{entry.value}</dd></div>)}</dl>
                 )}
-              </div> : null}
+              </div>
             </section>
           </div>
         ) : null}

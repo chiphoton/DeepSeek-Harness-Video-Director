@@ -35,6 +35,7 @@ import { codexModelForNode, effectiveOllamaModel, modelChoicePresentation, ollam
 import { fieldInputModeEnabled, fieldInputPortId, parameterInputCandidates } from './parameter-inputs'
 import { embeddedWorkflowInputPortIds, inputPortsFor, nodeDefinition, portHandleId, portsFor, shouldShowPortLabel, shouldShowReferencePanel } from './ports'
 import { createImeDraft, reduceImeDraft, type ImeDraftEvent, type ImeDraftState } from './ime-draft.js'
+import { completionDetails, nodeStatus, progressDescription } from './node-status'
 import {
   ArtifactPreviewDialog,
   ArtifactThumbnail,
@@ -50,6 +51,8 @@ export interface DirectorRuntimeValue {
   references: Readonly<Record<string, readonly DirectorReferencePreview[]>>
   onChange(nodeId: string, patch: Partial<DirectorNodeData>): void
   onEditSketch(nodeId: string): void
+  onChooseInputFile(nodeId: string): void
+  onInspectInput(nodeId: string): void
   onRefreshModels(providerId: string): Promise<void>
   onEjectModel(providerId: string, model: string): Promise<void>
   onRunNode(nodeId: string): Promise<void>
@@ -378,10 +381,12 @@ function stopWheel(event: React.WheelEvent): void {
   event.stopPropagation()
 }
 
-function StatusView(props: { data: DirectorNodeData }): ReactNode {
+export function StatusView(props: { data: DirectorNodeData }): ReactNode {
   useLanguage()
-  const status = props.data.status ?? 'idle'
-  const frozen = props.data.frozen === true
+  const status = nodeStatus(props.data)
+  const frozen = status === 'FROZEN'
+  const completion = status === 'completed' ? completionDetails(props.data) : undefined
+  const running = progressDescription(props.data)
   const progress = Math.max(0, Math.min(1, props.data.progress ?? 0))
   const color = frozen
     ? '#2563eb'
@@ -389,22 +394,27 @@ function StatusView(props: { data: DirectorNodeData }): ReactNode {
     ? palette.danger
     : status === 'completed'
       ? palette.success
-      : status === 'queued' || status === 'running'
+      : status === 'running'
         ? palette.accent
         : palette.muted
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 7, color, fontSize: 10 }}>
-        <span style={{ width: 6, height: 6, borderRadius: '50%', background: color, flex: '0 0 auto' }} />
-        <span style={{ textTransform: 'uppercase', letterSpacing: '.06em' }}>{t(frozen ? 'FROZEN' : status)}</span>
-        {!frozen && props.data.phase !== undefined && props.data.phase !== '' ? (
-          <span style={{ color: palette.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {t(props.data.phase)}
+    <div className="vd-node-status" role="status">
+      <div className="vd-node-status-line" style={{ color }}>
+        <span className="vd-node-status-dot" style={{ background: color }} />
+        <span className="vd-node-status-label">{t(status)}</span>
+        {completion !== undefined ? (
+          <span className="vd-node-status-details vd-node-status-completion">
+            <time dateTime={props.data.runCompletedAt}>{completion.time}</time>
+            {completion.seconds === undefined ? null : <span> · {t("{0} seconds", completion.seconds)}</span>}
+          </span>
+        ) : status === 'running' ? (
+          <span className="vd-node-status-details">
+            {running.phase === undefined ? null : <span>{t(running.phase)}</span>}
+            {running.percent === undefined ? null : <span>{running.percent}</span>}
           </span>
         ) : null}
-        {!frozen && (status === 'queued' || status === 'running') ? <span style={{ marginLeft: 'auto' }}>{Math.round(progress * 100)}%</span> : null}
       </div>
-      {!frozen && (status === 'queued' || status === 'running') ? (
+      {status === 'running' && running.percent !== undefined ? (
         <div style={{ height: 3, borderRadius: 99, overflow: 'hidden', background: 'rgba(15,23,42,.1)' }}>
           <div style={{ height: '100%', width: `${Math.max(3, progress * 100)}%`, borderRadius: 99, background: palette.accent, transition: 'width .2s ease' }} />
         </div>
@@ -470,20 +480,31 @@ function JsonEditor<T>(props: {
 
 function TextBody(props: { id: string; data: DirectorNodeData; runtime: DirectorRuntimeValue | null }): ReactNode {
   useLanguage()
+  const text = props.data.text ?? ''
   return (
-    <ImeSafeTextarea
-      className="nodrag nowheel"
-      value={props.data.text ?? ''}
-      rows={7}
-      placeholder={t("Write or paste text…")}
-      onWheel={stopWheel}
-      onValueChange={value => props.runtime?.onChange(props.id, { text: value })}
-      style={{ ...fieldStyle, resize: 'vertical', minHeight: 112, lineHeight: 1.5 }}
-    />
+    <div className="vd-text-input-body">
+      <output className="vd-text-count" aria-live="polite">{t("{0} characters", Array.from(text).length)}</output>
+      <ImeSafeTextarea
+        className="nodrag nowheel"
+        aria-label={t("Text input")}
+        value={text}
+        rows={7}
+        placeholder={t("Write or paste text…")}
+        onWheel={stopWheel}
+        onValueChange={value => props.runtime?.onChange(props.id, { text: value })}
+        style={{ ...fieldStyle, resize: 'vertical', minHeight: 112, lineHeight: 1.5 }}
+      />
+      <div className="vd-text-input-actions">
+        <button type="button" className="nodrag" title={t("Import text from a UTF-8 file")} onClick={() => props.runtime?.onChooseInputFile(props.id)}>
+          <span aria-hidden>⇧</span> {t("Import")}
+        </button>
+        <button type="button" className="nodrag" disabled={text.length === 0} onClick={() => props.runtime?.onChange(props.id, { text: '' })}>{t("Clear")}</button>
+      </div>
+    </div>
   )
 }
 
-function MediaPreview(props: { data: DirectorNodeData; onDuration(duration: number): void; onEditSketch(): void }): ReactNode {
+function MediaPreview(props: { data: DirectorNodeData; onDuration(duration: number): void; onEditSketch(): void; onInspect(): void }): ReactNode {
   useLanguage()
   const kind = mediaKind(props.data)
   const asset = props.data.asset
@@ -511,9 +532,9 @@ function MediaPreview(props: { data: DirectorNodeData; onDuration(duration: numb
   }
   if (kind === 'image') {
     return (
-      <div style={{ minHeight: 100, maxHeight: 230, border: `1px solid ${palette.subtleBorder}`, borderRadius: 10, overflow: 'hidden', background: '#f1f5f9', display: 'grid', placeItems: 'center' }}>
+      <button type="button" className="nodrag vd-input-image-preview" aria-label={t("Inspect {0}", asset.name)} title={t("Inspect")} onClick={props.onInspect}>
         <img src={asset.url} alt={asset.name} draggable={false} loading="lazy" style={{ display: 'block', maxWidth: '100%', maxHeight: 230, objectFit: 'contain' }} />
-      </div>
+      </button>
     )
   }
   if (kind === 'audio') {
@@ -922,16 +943,24 @@ function MediaBody(props: { id: string; data: DirectorNodeData; runtime: Directo
   useLanguage()
   const kind = mediaKind(props.data)
   const [duration, setDuration] = useState<number | undefined>(undefined)
+  useEffect(() => setDuration(undefined), [props.data.asset?.id])
+  const replaceable = props.data.kind === 'load-image' || props.data.kind === 'load-video'
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <MediaPreview
         data={props.data}
         onDuration={value => setDuration(Number.isFinite(value) ? value : undefined)}
         onEditSketch={() => props.runtime?.onEditSketch(props.id)}
+        onInspect={() => props.runtime?.onInspectInput(props.id)}
       />
       {props.data.asset !== undefined ? (
         <div title={props.data.asset.name} style={{ display: 'flex', alignItems: 'center', gap: 7, color: palette.muted, fontSize: 10, minWidth: 0 }}>
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{props.data.asset.name}</span>
+          {replaceable ? (
+            <button type="button" className="nodrag vd-input-filename" aria-label={t("Replace {0}", props.data.asset.name)} title={t("Choose a replacement file")} onClick={() => props.runtime?.onChooseInputFile(props.id)}>
+              <span className="vd-input-filename-text">{props.data.asset.name}</span>
+              <span className="vd-input-filename-action" aria-hidden>{t("Replace")} <span>↗</span></span>
+            </button>
+          ) : <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{props.data.asset.name}</span>}
           <span style={{ marginLeft: 'auto', flex: '0 0 auto' }}>{Math.max(1, Math.round(props.data.asset.size / 1024))} KB</span>
         </div>
       ) : null}
@@ -2418,7 +2447,7 @@ export const DirectorNodeView = memo(function DirectorNodeView(props: NodeProps<
             referencePort={promptReferencePort}
           />
         ) : null}
-        {isWorkflow || isTrigger || props.data.frozen === true || (props.data.status !== undefined && props.data.status !== 'idle')
+        {isWorkflow || isTrigger || isSink || props.data.frozen === true || (props.data.status !== undefined && props.data.status !== 'idle')
           ? <StatusView data={props.data} />
           : null}
       </div>
