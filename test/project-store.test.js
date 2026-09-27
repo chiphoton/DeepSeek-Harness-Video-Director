@@ -138,11 +138,11 @@ test('ProjectStore writes immutable, content-hashed copies without overwriting e
   assert.deepEqual(reloaded.listAssets().map(asset => asset.id).sort(), [first.id, second.id].sort())
 })
 
-test('ProjectStore deletes only one project and its independently owned assets', async (t) => {
+test('ProjectStore deletes only one project and retains assets shared by another owner', async (t) => {
   const { root, store } = await createStore(t)
   const doomed = await store.createProject({ name: 'Delete me', sessionId: 'session-delete' })
   const survivor = await store.createProject({ name: 'Keep me', sessionId: 'session-keep' })
-  const bytes = Buffer.from('identical-content-does-not-mean-shared-storage')
+  const bytes = Buffer.from('identical-named-content-shares-storage')
   const assetInput = {
     kind: 'image',
     name: 'same.png',
@@ -152,7 +152,7 @@ test('ProjectStore deletes only one project and its independently owned assets',
   const doomedAsset = await store.putAsset({ ...assetInput, projectId: doomed.id })
   const survivorAsset = await store.putAsset({ ...assetInput, projectId: survivor.id })
 
-  assert.notEqual(doomedAsset.filename, survivorAsset.filename)
+  assert.equal(doomedAsset.filename, survivorAsset.filename)
   assert.equal(doomedAsset.sha256, survivorAsset.sha256)
   assert.deepEqual(await store.deleteProject(doomed.id), {
     projectId: doomed.id,
@@ -163,7 +163,7 @@ test('ProjectStore deletes only one project and its independently owned assets',
   await assert.rejects(Promise.resolve().then(() => store.asset(doomedAsset.id)), {
     code: 'video-director/asset-not-found',
   })
-  await assert.rejects(readFile(join(root, 'assets', doomedAsset.filename)), { code: 'ENOENT' })
+  assert.deepEqual(await readFile(join(root, 'assets', doomedAsset.filename)), bytes)
   assert.equal((await store.getProject(survivor.id)).name, 'Keep me')
   assert.deepEqual((await store.assetBytes(survivorAsset.id)).data, bytes)
 

@@ -65,7 +65,7 @@ export async function apply(ctx, config) {
       methods: ['GET', 'HEAD'],
       fetch: request => host.store.assetResponse(asset.id, request),
     })
-    if (asset.kind === 'video') ctx.connection.fetch.register({
+    if (asset.kind === 'video' || asset.kind === 'audio') ctx.connection.fetch.register({
       path: `${asset.url}/properties`,
       methods: ['GET'],
       fetch: async request => {

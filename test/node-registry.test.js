@@ -64,7 +64,7 @@ test('VdNodeRegistry infers Reference inputs only from actual media bindings', a
   assert.deepEqual(referenceVideo.inputs, [
     {
       id: 'reference', label: 'Reference', types: ['image', 'audio', 'video'], multiple: true,
-      maxByType: { image: 2, audio: 2, video: 1 },
+      maxByType: { image: 9, audio: 3, video: 3 }, maxItems: 12,
     },
     { id: 'flow', label: 'Flow', types: ['flow'], multiple: true },
   ])

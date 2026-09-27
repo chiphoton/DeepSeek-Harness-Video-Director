@@ -341,8 +341,8 @@ function VdNodeLibrarySettings({ snapshot, director }: { snapshot: DirectorSnaps
         {nodeMessage !== null ? <div className="vd-settings-message">{nodeMessage}</div> : null}
       </section>
       <section className="vd-workflow-group">
-        <h3>{t("Node Catalog ·")} {snapshot.nodeDefinitions.length}</h3>
-        {snapshot.nodeDefinitions.map((definition: VdNodeDefinitionDescriptor) => (
+        <h3>{t("Node Catalog ·")} {snapshot.nodeDefinitions.filter(definition => definition.behavior !== 'media').length}</h3>
+        {snapshot.nodeDefinitions.filter(definition => definition.behavior !== 'media').map((definition: VdNodeDefinitionDescriptor) => (
           <article className="vd-workflow-row" key={`${definition.type}@${definition.version}`}>
             <div className="vd-workflow-icon">{definition.behavior === 'preview' ? '◫' : definition.behavior === 'save' ? '⇩' : '◇'}</div>
             <div>

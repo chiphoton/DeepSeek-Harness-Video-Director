@@ -28,9 +28,62 @@ export type DirectorNodeKind =
   | 'output-video'
   | 'preview'
   | 'save'
+  | 'video-trim'
+  | 'video-crop'
+  | 'video-extract-frame'
+  | 'batch-input'
+  | 'batch-output'
+
+export interface BatchItem {
+  id: string
+  name: string
+  relativePath?: string
+  text?: string
+  asset?: AssetRef
+}
+
+export interface BatchInputConfig {
+  source: 'text' | 'files'
+  text?: string
+  items?: BatchItem[]
+  pattern?: string
+  recursive?: boolean
+  sort?: 'input' | 'name'
+  startIndex?: number
+  endIndex?: number
+  errorPolicy?: 'stop' | 'continue'
+}
+
+export interface BatchArtifact {
+  outputNodeId: string
+  sourceNodeId: string
+  sourcePortId: string
+  ordinal: number
+  asset?: AssetRef
+  text?: string
+  seed?: number
+  reused?: boolean
+}
+
+export interface BatchCase {
+  caseId: string
+  batchRunId: string
+  caseIndex: number
+  input: BatchItem
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+  workflowRunId?: string
+  attempt: number
+  seeds: Record<string, number>
+  jobs: DirectorJob[]
+  artifacts: BatchArtifact[]
+  uncertain?: boolean
+  error?: string
+}
 
 export interface AssetRef {
   id: string
+  origin?: 'input' | 'output'
+  filename?: string
   projectId: string
   kind: Exclude<MediaKind, 'text' | 'flow'>
   name: string
@@ -164,6 +217,7 @@ export interface DirectorNodeData extends Record<string, unknown> {
   assets?: AssetRef[]
   maskAsset?: AssetRef
   trim?: { start: number; end?: number }
+  mediaOptions?: Record<string, number | undefined>
   transform?: { width?: number; height?: number; aspectRatio?: string }
   /** Legacy inline comfyui-workflow; the containing vd-workflow lives at project.graph. */
   workflow?: Record<string, unknown>
@@ -200,6 +254,11 @@ export interface DirectorNodeData extends Record<string, unknown> {
   nodeVersion?: string
   nodeDigest?: string
   outputName?: string
+  batch?: BatchInputConfig
+  batchRunId?: string
+  batchCaseIndex?: number
+  batchFollow?: boolean
+  batchFrozenCase?: BatchCase
   vramAction?: VramTriggerAction
   vramReleaseWaitSeconds?: number
   /** Legacy persisted field migrated to vramReleaseWaitSeconds on load. */
@@ -236,13 +295,31 @@ export interface ProjectSummary {
   hasSavedVersion?: boolean
 }
 
-export type ProjectDraft = Pick<VideoProject, 'name' | 'graph' | 'settings'>
+export interface ProjectFolder { id: string; name: string; parentId: string | null }
+export interface ProjectFolderLayout {
+  version: 1
+  revision: number
+  folders: ProjectFolder[]
+  projectParents: Record<string, string | null>
+  projectOrder: string[]
+  examplesParentId: string | null
+}
+export type ProjectShortcut = { kind: 'folder' | 'project'; id: string }
+export type ProjectFolderChange = ({ action: 'create'; name: string; parentId: string | null }
+  | { action: 'rename'; id: string; name: string }
+  | { action: 'move'; kind: 'folder' | 'project'; id: string; parentId: string | null; beforeId?: string | null }
+  | { action: 'delete'; id: string; mode: 'keep-workflows' | 'delete-workflows' }
+  | { action: 'batch-move'; items: ProjectShortcut[]; parentId: string | null }
+  | { action: 'batch-delete'; folderIds: string[]; projectIds: string[]; mode: 'keep-workflows' | 'delete-workflows' }) & { expectedRevision: number }
+
+export type ProjectDraft = Pick<VideoProject, 'name' | 'graph' | 'settings' | 'mediaLibrary'>
 
 export interface VideoProject extends Omit<ProjectSummary, 'nodeCount'> {
   schemaVersion: 1
   graph: DirectorGraph
   settings: Record<string, unknown>
   jobs: DirectorJob[]
+  mediaLibrary?: AssetRef[]
   draft?: ProjectDraft
 }
 
@@ -250,6 +327,7 @@ export interface VideoProject extends Omit<ProjectSummary, 'nodeCount'> {
 export interface GalleryProject {
   id: string
   name: string
+  mediaLibrary?: AssetRef[]
   graph: { nodes: Array<{
     id: string
     data: Pick<DirectorNodeData, 'kind' | 'title' | 'asset' | 'assets' | 'text' | 'maskAsset' | 'runCompletedAt'> & {
@@ -303,6 +381,7 @@ export interface VdPortDescriptor {
   types: MediaKind[]
   required?: boolean
   multiple?: boolean
+  maxItems?: number
   maxByType?: Partial<Record<MediaKind, number>>
 }
 
@@ -333,10 +412,10 @@ export interface VdNodeDefinitionDescriptor {
   description: string
   category: 'input' | 'text' | 'image' | 'audio' | 'video' | 'utility' | 'output'
   builtIn: boolean
-  behavior: 'workflow' | 'preview' | 'save' | 'trigger'
-  execution?: 'comfyui.workflow' | 'system.trigger'
+  behavior: 'media' | 'workflow' | 'preview' | 'save' | 'trigger' | 'batch-input' | 'batch-output'
+  execution?: 'system.ffmpeg' | 'comfyui.workflow' | 'system.trigger'
   triggerAction?: 'vram-trigger' | 'ollama-eject' | 'comfyui-clear'
-  operation?: 'image-generation' | 'image-edit' | 'video-generation' | 'audio-generation'
+  operation?: 'video-trim' | 'video-crop' | 'video-extract-frame' | 'image-generation' | 'image-edit' | 'video-generation' | 'audio-generation'
   workflowKind?: ComfyWorkflowKind
   workflowId?: string
   modelFamily?: string
@@ -355,6 +434,9 @@ export interface DirectorJob {
   workflowRunMode?: VdRunMode
   batchIndex?: number
   batchSize?: number
+  batchRunId?: string
+  caseId?: string
+  caseIndex?: number
   runSequence?: number
   sourceRevision?: number
   nodeDigest?: string
@@ -384,6 +466,15 @@ export type VdRunMode = 'all' | 'selected' | 'from-selection' | 'dependencies'
 
 /** One orchestration run of a vd-workflow scope, potentially containing several vd-jobs. */
 export interface VdRun {
+  scheduler?: 'host'
+  workflowName?: string
+  queuedAt?: string
+  executionStartedAt?: string
+  hidden?: boolean
+  previewResult?: VdNodeResult
+  previewJobId?: string
+  artifactCount?: number
+  cancelRequested?: boolean
   id: string
   projectId: string
   mode: VdRunMode
@@ -395,6 +486,15 @@ export interface VdRun {
   startedAt: string
   completedAt?: string
   error?: string
+  kind?: 'batch'
+  batchRunId?: string
+  caseId?: string
+  caseIndex?: number
+  batchInputNodeId?: string
+  startIndex?: number
+  endIndex?: number
+  completedCases?: number
+  failedCases?: number
 }
 
 /** Result of a vd-node execution through any provider, not specifically ComfyUI. */
@@ -407,6 +507,7 @@ export interface DirectorSnapshot {
   open: boolean
   phase: 'idle' | 'loading' | 'ready' | 'error'
   projects: ProjectSummary[]
+  projectFolders?: ProjectFolderLayout
   examples: Array<{ id: string; name: string }>
   examplesLoading: boolean
   examplesError: string | null
@@ -425,7 +526,9 @@ export interface DirectorSnapshot {
   error: string | null
   providerChecks: Record<string, { state: 'checking' | 'ok' | 'error'; latencyMs?: number; message?: string; transport?: 'rest' | 'mcp' }>
   /** Existing snapshot key for grouped vd-runs. */
+  jobs: DirectorJob[]
   workflowRuns: VdRun[]
+  batchCases: Record<string, BatchCase[]>
 }
 
 // Compatibility aliases for existing type consumers. New code uses the qualified names.

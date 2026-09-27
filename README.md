@@ -104,7 +104,9 @@ Unsaved workflows appear in *italics* with an ***** in the project picker and it
 
 New projects, imports, duplicates, and editable example copies stay unsaved until you click **Save**. **Discard changes** restores the last explicitly saved workflow and clears undo/redo while retaining its jobs and assets. For a never-saved copy, Discard removes the draft and its owned assets; its DSH conversation remains. Wait for queued/running tasks to finish or cancel them before discarding.
 
-Click **Run** again to queue another snapshot. Vd-workflows execute in submission order, with dependency stages and batches kept together. The **Jobs** window shows queued runs and lets you cancel, **Open Workflow**, or **Export Workflow**. Opening a submitted snapshot is undoable; exporting produces an importable project archive with its referenced assets. Keep the current project open while its queue executes.
+Click **Run** again to queue another snapshot. All browser tabs on the same DSH host share one workflow queue, with dependency stages and batches kept together. You can switch, rename, duplicate, import, and export workflows during execution. **Jobs** shows compact runs across all workflows with filtering, live elapsed time, clickable artifacts, and a three-dot menu for artifact/workflow downloads, opening the submitted snapshot, removing history, and inspecting properties. Cancel active runs from **Inspect Property**. Opening a submitted snapshot is undoable; exporting produces an importable project archive with its referenced assets. The DSH backend persists and schedules the complete graph, including dependent stages, triggers, and Batch Input cases. Tabs may be minimized, suspended, or closed after submission. **Run N** adds N separate runs. Keep DSH and the computer running; after a host restart, queued snapshots resume in order, while interrupted active work is marked failed rather than submitted twice.
+
+Duplicating a workflow creates independent asset references to the same stored media bytes. Replacing an input affects only that copy, and deleting one workflow keeps files referenced by other workflows. Portable exports still include their media.
 
 Starting a vd-workflow or a single node resets other non-frozen, inactive nodes to **IDLE**, preserving their cached outputs. Nodes stay **IDLE** while waiting, show **RUNNING** with their current stage or percentage during execution, and show **COMPLETED** with the local finish time (`MMDD-HH:mm:ss`) and duration in seconds. Frozen nodes retain **FROZEN**. New job durations exclude the Host queue wait; older history uses its available timestamps.
 
@@ -125,7 +127,11 @@ If an SSH tunnel drops, active ComfyUI and Ollama work waits and retries automat
 
 Useful canvas gestures:
 
-- Image and Video inputs offer **Replace** and **Inspect** in their right-click menu. Click an image to inspect it in the Preview viewer, or click the filename to replace its file; hovering or focusing the filename reveals **Replace**. Replacement preserves the node and connections, resets its mask and trim, and supports Undo.
+- Adding an Image, Audio, or Video input creates an empty node. Choose or drop a file when ready.
+- Audio inspection opens a compact waveform player with a scrolling timeline, full-track overview, click/drag seeking, zoom, precise playback time, 15-second skip controls, volume, and playback speed. Duration, format, sample rate, channel count, file size, and embedded metadata remain available.
+- **Edit**, to the left of **Metadata** in audio/video previews, opens the **Media Editor**. You can also right-click and choose **Edit Audio** or **Edit Video**. Trim with the waveform handles or exact times; videos also offer a draggable crop rectangle, aspect presets, and **Export current frame**. **Export** downloads the result without changing the source; **Save** applies it to the current source; **Save as new copy** makes the copy active and retains the original in Gallery. **Discard changes** closes without applying edits. The close button exits immediately when unchanged, or asks for confirmation when there are unsaved edits. Source changes support Undo, and closing a context menu only requires clicking elsewhere. Editing requires `ffmpeg` and `ffprobe` on the DSH host; output is MP4 video, FLAC/WAV audio, or PNG frames.
+- Image, Audio, and Video inputs offer **Replace** and **Inspect** in their right-click menu. Click an image to inspect it in the Preview viewer, or click the filename to replace its file; hovering or focusing the filename reveals **Replace**. Replacement preserves the node and connections, resets its mask and trim, and supports Undo.
+- Drop one matching file onto a Text, Image, Audio, or Video input to replace its content. Batch Input accepts multiple supported text/media files and applies its filename regex; unsupported files are skipped with feedback. Drops on input nodes never create extra canvas nodes.
 - Video inspection in Input, Preview, and Save Output shows dimensions, FPS, format, duration, and file size. **Metadata** opens container/stream tags and codec details. Detailed video inspection uses `ffprobe` from FFmpeg on the DSH host; if it is unavailable, browser-readable dimensions and duration still appear.
 - **Gallery**, beside **Tasks**, opens on **All workflows** and groups source artifacts under **Input** and cached results plus retained job history under **Output**. Filter by workflow and search filenames, workflow/node names, media types, or text content; cards identify their workflow, and unsaved drafts are included. Browsing does not switch or save the active workflow. **Refresh** reloads the catalog. Repeated files appear once per workflow/tab. Click any image, video, audio, or text card to inspect it; images support drag-to-pan, wheel/button zoom, Reset view, and Metadata. Closing Inspect preserves the Gallery tab, filter, and search.
 - Text inputs show a live character count above the textbox, with **Import** (UTF-8 text files) and **Clear** below it. Import replaces the text while preserving whitespace; both actions support Undo.
@@ -162,19 +168,31 @@ The Skill is already prepared for plugin distribution: its project source lives 
 
 The project picker includes an **examples/** folder. Select **canvas-demo** or **all-in-one** to open an independent editable copy; current edits are saved first, and importing never starts generation. **Settings → Language** switches English/Chinese immediately and remembers the choice in this browser.
 
+The picker supports nested **virtual folders**. A folder's three-dot menu offers **New Workflow**, **New Folder**, move, rename, and delete. **Move to…** opens a collapsible directory tree with **/** as the root destination; the global menu retains **Import project**. Drag onto a folder to move inside it, or between siblings to reorder; hold near either edge to scroll, and drop on **/** to move to the top level. **Multi-Select** replaces row menus with checkboxes and adds a batch menu for select all, deselect all, invert selection, move, and delete, including items inside collapsed folders. Selecting a folder and its descendants preserves their nesting when moved. Delete confirmation lists affected workflows and folders separately: explicitly selected workflows are deleted, while folder children can be moved to **/** or deleted. Mixed selections require a separate confirmation for the selected workflows. Folder organization updates shortcut metadata only; it never creates disk directories or relocates workflow or asset files.
+
 ## 💾 Where files are saved
 
 The default Host data directory is `./.dsh-video-director`, resolved from the directory where `dsh web` starts:
 
 ```text
 .dsh-video-director/
-├── project-order.json                  # persistent project picker ordering
+├── project-folders.json                # virtual folders, shortcut membership, and ordering
 ├── projects/<project-id>/project.json   # saved workflow, optional draft, and recent jobs
 ├── projects/<project-id>/runs/          # run summaries and immutable submitted snapshots
-├── assets/<asset-id>.<ext>              # uploaded and generated media
-├── assets/index.json                    # immutable asset metadata and hashes
+├── assets/index.json                    # IDs, ownership, original names, hashes, and relative paths
+├── assets/inputs/<original-name>.<ext>   # uploaded input files, shared across workflows
+├── assets/inputs/mask/mask-YYYYMMDD-<short-uuid>.<ext>
+├── assets/inputs/sketch/sketch-YYYYMMDD-<short-uuid>.<ext>
+├── assets/outputs/YYYYMMDD-<uuid>.<ext>  # generated and edited media
+├── migrations/asset-layout-v2.json      # legacy index and completed migration mapping, when needed
 └── workflows.json                       # imported workflow registry
 ```
+
+Input uploads keep their original filenames. An existing name with the same SHA-256 reuses the stored file; different bytes try `name-0001.ext`, `name-0002.ext`, and so on, checking the hash at each candidate. Workflow references share immutable bytes, and deleting a workflow removes a file only when its last reference disappears. Dates use UTC. Generated outputs keep their provider filename in the index and use it for downloads and exports.
+
+Image, Video, Audio, and Sketch inputs offer **Choose from assets**, showing compatible inputs and outputs across all workflows with filename search and a source filter. Selecting an asset adds a reference without copying its media. An empty Sketch input also offers **Draw sketch**.
+
+The first launch with a legacy flat asset folder migrates it automatically. Migration checks local hashes and workflow/job metadata without decoding media or contacting a provider. It preserves IDs and URLs, stages files before atomically replacing the index, and retains the original index and mapping in the migration record. Interrupted migrations resume on launch. Files with no identifiable output provenance remain inputs; a hash mismatch stops migration without changing original files.
 
 **Settings → Storage** opens the current folder, changes to a new or empty folder, or resets to the original `dataDir`. A change caches current drafts, copies canvas data, and takes effect immediately; previous folders remain as backups. The original data directory keeps `.video-director-storage.json` so the choice survives restart. Generations and workflows must finish or be cancelled first. Native folder controls act on the Harness host machine. Harness continues to manage conversation history and provider credentials. You can also set the initial `dataDir` in the plugin's DSH configuration. **Save Output** downloads a copy through the browser to the browser's configured download directory; the project-owned asset remains under `dataDir/assets`.
 
@@ -193,3 +211,5 @@ For configuration, architecture, transport behavior, recovery, security, limitat
 ## License
 
 [MIT](LICENSE). Model weights, ComfyUI, ComfyUI custom-node packages, and external services retain their own licenses and terms.
+
+Batch Input and Batch Output support sequential text/file/folder cases, regex filtering, inclusive index ranges, per-node seed policies, and indexed previews/downloads. See [Batch processing](docs/batch-processing.md). Batch cases run on the DSH backend and continue with the browser closed.

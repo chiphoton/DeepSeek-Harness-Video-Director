@@ -1,4 +1,6 @@
 import { DirectorInputError, finiteNumber, jsonValue, record, string, uuid } from './validation.js'
+import { editMedia } from './media-editor.js'
+import { WorkflowScheduler } from './workflow-scheduler.js'
 
 // Boundary vocabulary: workflows/* manages registered comfyui-workflows;
 // nodes/* manages vd-node definitions; projects/* owns the canvas vd-workflow.
@@ -328,6 +330,7 @@ function normalizeNodeMediaInputs(definition, request, store, fieldInputs = []) 
     if (port.required === true && rows.length === 0) {
       portFailure('port-required', `input port ${port.id} is required`, { portId: port.id })
     }
+    if (Number.isSafeInteger(port.maxItems) && rows.length > port.maxItems) portFailure('port-cardinality-invalid', `input port ${port.id} accepts at most ${port.maxItems} references in total`)
     if (port.multiple !== true && rows.length > 1) {
       portFailure('port-cardinality-invalid', `input port ${port.id} accepts only one value`, { portId: port.id })
     }
@@ -498,14 +501,30 @@ export function createDirectorRpc(options) {
     workflowReferenceTail = result.then(() => {}, () => {})
     return result
   }
-  return async (endpoint, payload, signal) => {
+  const referencedProjectNodes = async project => {
+    const candidates = [...project.graph.nodes, ...(project.draft?.graph.nodes ?? [])]
+    for (const run of await store.listVdRuns(project.id)) {
+      if (run.status === 'queued' || run.status === 'running') candidates.push(...(await store.getVdRun(project.id, run.id)).snapshot.graph.nodes)
+    }
+    return candidates
+  }
+  const scheduler = new WorkflowScheduler({ store, jobs, providers, workflows, nodes,
+    call: async (...args) => {
+      const result = await rpc(args[0], args[1], args[2], true)
+      if (!result.ok) throw Object.assign(new Error(result.error.message), result.error)
+      return result.value
+    } })
+  if (jobs) jobs.workflowScheduler = scheduler
+  const rpc = async (endpoint, payload, signal, hostExecution = false) => {
     try {
       const input = payload === undefined ? {} : record(payload, 'payload')
       switch (endpoint) {
         case 'health':
           return success({ version: 3, providers: providers.publicCatalog().length, workflows: workflows.list().length, nodes: nodes.list().length })
         case 'projects/list':
-          return success({ projects: await store.listProjects() })
+          return success({ projects: await store.listProjects(), projectFolders: store.folders.snapshot() })
+        case 'projects/organize':
+          return success(await withWorkflowReferenceLock(() => store.organizeProjects(input)))
         case 'gallery/list':
           return success({ projects: await store.galleryProjects(signal) })
         case 'projects/get':
@@ -522,22 +541,91 @@ export function createDirectorRpc(options) {
           }) })
         case 'projects/discard':
           return success(await withWorkflowReferenceLock(() => store.discardDraft(uuid(input.projectId, 'projectId'))))
+        case 'vd-runs/submit':
+          return success(await withWorkflowReferenceLock(async () => {
+            for (const workflowId of comfyWorkflowReferences(input.snapshot)) workflows.get(workflowId)
+            for (const reference of vdNodeDefinitionReferences(input.snapshot)) nodes.get(reference.type, reference.version)
+            return scheduler.submit(input)
+          }))
+        case 'vd-runs/resume':
+          return success(await withWorkflowReferenceLock(() => scheduler.resume(uuid(input.projectId, 'projectId'), uuid(input.runId, 'runId'))))
         case 'vd-runs/save':
-          return success({ run: await withWorkflowReferenceLock(() => store.saveVdRun(
-            uuid(input.projectId, 'projectId'), input.run, input.snapshot,
-          )) })
+          return success({ run: await withWorkflowReferenceLock(async () => {
+            const run = { ...record(input.run, 'run') }
+            if (run.scheduler === 'host' || ['queued', 'running'].includes(run.status)) throw new DirectorInputError('Refresh Video Director. Workflow execution is now submitted through vd-runs/submit on the Host.')
+            const previous = await store.getVdRun(uuid(input.projectId, 'projectId'), uuid(run.id, 'run.id')).catch(() => undefined)
+            if (previous?.scheduler === 'host') throw new DirectorInputError('The Host owns this workflow run; use its cancel or delete action.')
+            if (input.resume === true) jobs.runQueue?.cancelled.delete(run.id)
+            if (jobs.runQueue?.cancelled.has(run.batchRunId ?? run.id) && run.status !== 'failed') {
+              run.cancelRequested = true
+              if (run.status !== 'running') run.status = 'cancelled'
+            }
+            const saved = await store.saveVdRun(uuid(input.projectId, 'projectId'), run, input.snapshot)
+            jobs.runQueue?.register(saved)
+            return saved
+          }) })
+        case 'vd-runs/turn': {
+          const run = await store.getVdRun(uuid(input.projectId, 'projectId'), uuid(input.runId, 'runId'))
+          return success({ granted: jobs.runQueue.head(jobs.jobs) === (run.batchRunId ?? run.id),
+            cancelled: jobs.runQueue.cancelled.has(run.batchRunId ?? run.id) || run.status === 'cancelled' })
+        }
+        case 'vd-runs/cancel': {
+          const projectId = uuid(input.projectId, 'projectId')
+          const runId = uuid(input.runId, 'runId')
+          const target = await store.getVdRun(projectId, runId).catch(() => undefined)
+          if (target?.scheduler === 'host' && (scheduler.current?.run.id === (target.batchRunId ?? runId) || scheduler.pending.has(target.batchRunId ?? runId))) return success(await scheduler.cancel(projectId, runId))
+          const runs = await store.listVdRuns(projectId)
+          const project = await store.getProject(projectId)
+          const allJobs = new Map([...project.jobs, ...jobs.jobs.values()].filter(job => job.projectId === projectId).map(job => [job.id, job]))
+          const related = [...allJobs.values()].filter(job => job.workflowRunId === runId || job.batchRunId === runId)
+          if (!runs.some(run => run.id === runId) && !related.length) throw new DirectorInputError('Workflow run was not found.')
+          jobs.runQueue.cancelled.add(runId)
+          const outcomes = await Promise.allSettled(related.filter(job => job.status === 'queued' || job.status === 'running')
+            .map(job => jobs.cancel(projectId, job.id)))
+          const errors = outcomes.filter(result => result.status === 'rejected')
+          if (errors.length) throw new Error(`Could not request cancellation for every job: ${errors.map(result => result.reason.message).join(' ')}`)
+          const pending = outcomes.some(result => result.value.status === 'queued' || result.value.status === 'running')
+          for (const run of runs) {
+            if ((run.id !== runId && run.batchRunId !== runId) || !['queued', 'running'].includes(run.status)) continue
+            const saved = await store.saveVdRun(projectId, { ...run, cancelRequested: true,
+              ...(pending ? {} : { status: 'cancelled', completedAt: new Date().toISOString() }) })
+            jobs.runQueue.register(saved)
+          }
+          return success({ cancelled: true })
+        }
         case 'vd-runs/list':
-          return success({ runs: await store.listVdRuns(uuid(input.projectId, 'projectId')) })
+          return success({ runs: input.projectId === undefined
+            ? (await Promise.all((await store.listProjects()).map(project => store.listVdRuns(project.id)))).flat()
+            : await store.listVdRuns(uuid(input.projectId, 'projectId')) })
+        case 'vd-runs/delete': {
+          const projectId = uuid(input.projectId, 'projectId')
+          const { snapshot: _snapshot, ...run } = await store.getVdRun(projectId, uuid(input.runId, 'runId'))
+          if (['queued', 'running'].includes(run.status)) throw new DirectorInputError('Cancel this run before deleting it from the Job List.')
+          // Keep immutable snapshots for provenance and retained asset references.
+          return success({ run: await store.saveVdRun(projectId, { ...run, hidden: true }) })
+        }
         case 'vd-runs/get':
           return success({ run: await store.getVdRun(uuid(input.projectId, 'projectId'), uuid(input.runId, 'runId')) })
+        case 'vd-runs/jobs': {
+          const projectId = uuid(input.projectId, 'projectId'), runId = uuid(input.runId, 'runId')
+          const receipts = await store.listVdRunJobs(projectId, runId)
+          return success({ jobs: await Promise.all(receipts.map(job => ['queued', 'running'].includes(job.status) ? jobs.get(projectId, job.id) : job)) })
+        }
+        case 'batch-cases/init':
+          return success({ cases: await store.initializeBatchCases(uuid(input.projectId, 'projectId'), uuid(input.runId, 'runId'), input.cases) })
+        case 'batch-cases/list':
+          return success({ cases: await store.listBatchCases(uuid(input.projectId, 'projectId'), uuid(input.runId, 'runId')) })
+        case 'batch-cases/save':
+          return success({ row: await store.saveBatchCase(uuid(input.projectId, 'projectId'), uuid(input.runId, 'runId'), input.row) })
         case 'projects/create': {
           if (input.unsaved !== undefined && typeof input.unsaved !== 'boolean') throw new DirectorInputError('unsaved must be a boolean')
-          const project = await store.createProject({
+          const project = await withWorkflowReferenceLock(() => store.createProject({
             name: string(input.name, 'name', { min: 1, max: 120 }),
             sessionId: string(input.sessionId, 'sessionId', { min: 1, max: 256 }),
             unsaved: input.unsaved === true,
-          })
-          return success({ project })
+            ...(input.parentId !== undefined ? { parentId: input.parentId === null ? null : uuid(input.parentId, 'parentId'), expectedFolderRevision: finiteNumber(input.expectedFolderRevision, 'expectedFolderRevision', { min: 1 }) } : {}),
+          }))
+          return success({ project, projectFolders: store.folders.snapshot() })
         }
         case 'projects/delete': {
           const projectId = uuid(input.projectId, 'projectId')
@@ -566,10 +654,19 @@ export function createDirectorRpc(options) {
           )
           return success({ project })
         }
+        case 'media/edit':
+          return success(await editMedia(store, input, signal, registerAsset))
         case 'assets/properties':
           return success(await store.videoProperties(uuid(input.assetId, 'assetId'), signal))
+        case 'assets/list':
+          return success({ assets: store.availableAssets(input.kind, input.projectId) })
         case 'assets/put': {
           const asset = await store.putAsset(input)
+          await registerAsset(asset)
+          return success({ asset })
+        }
+        case 'assets/link': {
+          const asset = await store.linkAsset(uuid(input.projectId, 'projectId'), uuid(input.sourceId, 'sourceId'))
           await registerAsset(asset)
           return success({ asset })
         }
@@ -626,7 +723,7 @@ export function createDirectorRpc(options) {
             await withWorkflowReferenceLock(async () => {
               for (const summary of await store.listProjects()) {
                 const project = await store.getProject(summary.id)
-                if ([...project.graph.nodes, ...(project.draft?.graph.nodes ?? [])].some(node => node?.data?.workflowId === workflowId)) {
+                if ((await referencedProjectNodes(project)).some(node => node?.data?.workflowId === workflowId)) {
                   const error = new Error(`workflow ${workflowId} is used by project ${project.name}`)
                   error.code = 'video-director/workflow-in-use'
                   throw error
@@ -649,7 +746,7 @@ export function createDirectorRpc(options) {
             const definition = nodes.get(type, version)
             for (const summary of await store.listProjects()) {
               const project = await store.getProject(summary.id)
-              if ([...project.graph.nodes, ...(project.draft?.graph.nodes ?? [])].some(node => (
+              if ((await referencedProjectNodes(project)).some(node => (
                 node?.data?.nodeType === definition.type && (node?.data?.nodeVersion ?? '1.0.0') === definition.version
               ) || (definition.workflowId !== undefined && node?.data?.workflowId === definition.workflowId))) {
                 const error = new Error(`node ${definition.type}@${definition.version} is used by project ${project.name}`)
@@ -665,6 +762,7 @@ export function createDirectorRpc(options) {
           const snapshotRun = input.snapshot === undefined ? undefined : runSnapshotEnvelope(input)
           if (snapshotRun !== undefined) await store.getProject(snapshotRun.projectId)
           const executionInput = snapshotRun?.request ?? input
+          if (executionInput.workflowRunId !== undefined && !hostExecution) throw new DirectorInputError('Refresh Video Director. Submit the complete workflow through vd-runs/submit.')
           const { expectedOutputTypes: _untrustedExpectedOutputTypes, ...requestInput } = executionInput
           let request = requestInput
           // A validated snapshot is authoritative for this one execution. The
@@ -694,7 +792,7 @@ export function createDirectorRpc(options) {
                 throw new DirectorInputError(`job nodeDigest does not match ${definition.type}@${definition.version}`)
               }
             }
-            if (definition.behavior !== 'workflow' || definition.workflowId === undefined || definition.operation === undefined) {
+            if (definition.behavior !== 'media' && (definition.behavior !== 'workflow' || definition.workflowId === undefined || definition.operation === undefined)) {
               throw new DirectorInputError(`node ${definition.type}@${definition.version} is not remotely executable`)
             }
           }
@@ -747,7 +845,7 @@ export function createDirectorRpc(options) {
             request = applyFieldInputValues(request, fieldInputs, mediaInputs)
           }
           if (definition !== undefined) {
-            if (typeof nodes.validateInstance === 'function') {
+            if (definition.behavior !== 'media' && typeof nodes.validateInstance === 'function') {
               nodes.validateInstance(normalizedNodeType, normalizedNodeVersion, request)
             }
             request = {
@@ -810,6 +908,12 @@ export function createDirectorRpc(options) {
             allowTransientNode: snapshotRun !== undefined,
           }) })
         }
+        case 'jobs/list': {
+          const summaries = input.projectId === undefined ? await store.listProjects() : [{ id: uuid(input.projectId, 'projectId') }]
+          const all = await Promise.all(summaries.map(project => store.getProject(project.id)))
+          const records = await Promise.all(all.flatMap(project => project.jobs.map(job => jobs.get(project.id, job.id))))
+          return success({ jobs: records.sort((a, b) => (a.runSequence ?? 0) - (b.runSequence ?? 0)) })
+        }
         case 'jobs/get':
           return success({
             job: await jobs.get(uuid(input.projectId, 'projectId'), uuid(input.jobId, 'jobId')),
@@ -834,4 +938,5 @@ export function createDirectorRpc(options) {
       return failure(error)
     }
   }
+  return rpc
 }

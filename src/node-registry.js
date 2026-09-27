@@ -18,6 +18,33 @@ const RESERVED_FIELDS = new Set([
 ])
 
 const CORE_DEFINITIONS = [
+  ...[
+    ['video-trim', 'Video Trim', [['start', 'Start (seconds)', 0], ['end', 'End (seconds)', undefined]]],
+    ['video-crop', 'Video Crop', [['x', 'Left (pixels)', 0], ['y', 'Top (pixels)', 0], ['width', 'Width (pixels)', 640], ['height', 'Height (pixels)', 480]]],
+    ['video-extract-frame', 'Extract Video Frame', [['time', 'Time (seconds)', 0]]],
+  ].map(([operation, title, fields]) => ({
+    type: `core.${operation}`, version: '1.0.0', digest: `builtin:core.${operation}@1.0.0`,
+    title, description: 'Process a connected video with FFmpeg on the DSH host.', category: 'utility',
+    builtIn: true, behavior: 'media', execution: 'system.ffmpeg', operation,
+    inputs: [{ id: 'video', label: 'Video', types: ['video'], required: true }],
+    outputs: [{ id: 'result', label: 'Result', types: [operation === 'video-extract-frame' ? 'image' : 'video'], multiple: true }],
+    fields: fields.map(([id, label, value]) => ({ id, label, type: 'number', schema: { type: 'number' },
+      ...(value === undefined ? {} : { default: value }), placement: 'primary', control: 'input', min: 0 })), parameterInputs: [],
+  })),
+  ...['input', 'output'].map(direction => ({
+    type: `core.batch-${direction}`,
+    version: '1.0.0',
+    digest: `builtin:core.batch-${direction}@1.0.0`,
+    title: direction === 'input' ? 'Batch Input' : 'Batch Output',
+    description: direction === 'input' ? 'Run an indexed list of text or file cases sequentially.' : 'Preview and download artifacts aligned with their input case.',
+    category: direction === 'input' ? 'input' : 'output',
+    builtIn: true,
+    behavior: `batch-${direction}`,
+    inputs: direction === 'input' ? [] : [{ id: 'media', label: 'Media', types: ['text', 'image', 'audio', 'video'], required: true, multiple: true }],
+    outputs: direction === 'output' ? [] : [{ id: 'media', label: 'Case', types: ['text', 'image', 'audio', 'video'], multiple: true }],
+    fields: [],
+    parameterInputs: [],
+  })),
   {
     type: 'core.preview',
     version: '1.0.0',
@@ -440,6 +467,10 @@ function inferredPorts(workflow) {
         (binding.portIndex ?? 0) + 1,
       )
     }
+  }
+  if (Object.values(workflow.workflow ?? {}).some(node => node.class_type === 'MiniMaxH3ReferenceToVideo')) {
+    const reference = inputById.get('reference')
+    if (reference) reference.maxItems = 12
   }
   const outputType = workflow.kind === 'audio-generation' ? 'audio' : workflow.kind === 'video-generation' ? 'video' : 'image'
   return {

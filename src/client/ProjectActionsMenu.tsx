@@ -1,17 +1,18 @@
 import { t, useLanguage } from './i18n'
 
-export type ProjectAction = 'rename' | 'duplicate' | 'import' | 'export' | 'clear-previews' | 'discard' | 'delete'
+export type ProjectAction = 'rename' | 'duplicate' | 'import' | 'move' | 'export' | 'clear-previews' | 'discard' | 'delete'
 
 export function ProjectActionsMenu(props: {
   disabled?: boolean
   hasProject: boolean
   busy?: boolean
   includeClearPreviews?: boolean
+  includeMove?: boolean
   onAction(action: ProjectAction): void
 }) {
   useLanguage()
   const actions: Array<[ProjectAction, string]> = [
-    ['rename', '重命名工程'], ['duplicate', '复制工程'], ['import', '导入工程'], ['export', '导出工程'],
+    ['rename', '重命名工程'], ['duplicate', '复制工程'], [props.includeMove ? 'move' : 'import', props.includeMove ? 'Move to…' : '导入工程'], ['export', '导出工程'],
     ...(props.includeClearPreviews ? [['clear-previews', '清除预览'] as [ProjectAction, string]] : []),
     ['discard', '放弃更改'], ['delete', '删除工程'],
   ]

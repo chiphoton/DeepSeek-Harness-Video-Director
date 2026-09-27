@@ -153,7 +153,7 @@ export function ArtifactGallery({ project, loadProjects, onClose }: {
           </div>
         </section>
       </div>
-      {openArtifact === null ? null : <ArtifactPreviewDialog artifact={openArtifact} onClose={() => {
+      {openArtifact === null ? null : <ArtifactPreviewDialog artifact={openArtifact} onAssetEdited={() => setRefresh(value => value + 1)} onClose={() => {
         setOpenArtifact(null)
         artifactTrigger.current?.focus()
       }} />}
