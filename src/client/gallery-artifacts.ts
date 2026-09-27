@@ -39,6 +39,7 @@ export function projectGallery(project: GalleryProject): { input: GalleryArtifac
     if (data.maskAsset) add(input, previewArtifactFromAsset(data.maskAsset), data.title)
     if (data.sketchDocument?.base) add(input, previewArtifactFromAsset(data.sketchDocument.base.asset), data.title)
   }
+  for (const asset of project.mediaLibrary ?? []) add(output, previewArtifactFromAsset(asset), 'Media Editor')
   return { input: [...input.values()], output: [...output.values()] }
 }
 

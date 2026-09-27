@@ -1,3 +1,6 @@
+import { BatchInputBody, BatchOutputBody } from './BatchNodes'
+import { inputFileKind } from './input-files'
+import { useInputFileDrop } from './use-input-file-drop'
 import { t, useLanguage } from './i18n'
 import {
   createContext,
@@ -18,6 +21,8 @@ import { createPortal } from 'react-dom'
 import { Handle, Position, type NodeProps, useUpdateNodeInternals } from '@xyflow/react'
 import type {
   AssetRef,
+  BatchCase,
+  VdRun,
   DirectorNode as DirectorFlowNode,
   DirectorNodeData,
   MediaKind,
@@ -52,10 +57,20 @@ export interface DirectorRuntimeValue {
   onChange(nodeId: string, patch: Partial<DirectorNodeData>): void
   onEditSketch(nodeId: string): void
   onChooseInputFile(nodeId: string): void
+  onChooseExistingAsset?(nodeId: string): void
+  onReplaceInputFile?(nodeId: string, file: File): Promise<void>
+  inputFilesBusy?: boolean
   onInspectInput(nodeId: string): void
   onRefreshModels(providerId: string): Promise<void>
   onEjectModel(providerId: string, model: string): Promise<void>
   onRunNode(nodeId: string): Promise<void>
+  batchRuns?: VdRun[]
+  batchCases?: Record<string, BatchCase[]>
+  batchWarnings?: Record<string, string[]>
+  onImportBatchFiles?(nodeId: string, files: File[], directory: boolean): Promise<void>
+  onRunBatch?(nodeId: string, resumeRunId?: string): Promise<string>
+  onCancelBatch?(runId: string): Promise<void>
+  onLoadBatchCases?(runId: string): Promise<BatchCase[]>
 }
 
 const DirectorRuntimeContext = createContext<DirectorRuntimeValue | null>(null)
@@ -271,6 +286,7 @@ const WORKFLOW_KINDS = new Set<DirectorNodeData['kind']>([
 
 function themeFor(kind: DirectorNodeData['kind']): NodeTheme {
   if (kind.startsWith('output-') || kind === 'preview' || kind === 'save') return NODE_THEMES.output
+  if (kind === 'video-trim' || kind === 'video-crop' || kind === 'video-extract-frame') return NODE_THEMES.utility
   if (kind === 'vram-trigger' || kind === 'ollama-eject' || kind === 'comfyui-clear') return NODE_THEMES.utility
   if (WORKFLOW_KINDS.has(kind)) return NODE_THEMES.workflow
   if (kind === 'load-sketch') return NODE_THEMES.sketch
@@ -303,6 +319,11 @@ function kindLabel(kind: DirectorNodeData['kind']): string {
     'output-video': 'VIDEO OUTPUT',
     'preview': 'OUTPUT PREVIEW',
     'save': 'SAVE OUTPUT',
+    'video-trim': 'VIDEO TRIM',
+    'video-crop': 'VIDEO CROP',
+    'video-extract-frame': 'EXTRACT FRAME',
+    'batch-input': 'BATCH INPUT',
+    'batch-output': 'BATCH OUTPUT',
   })[kind]
 }
 
@@ -944,7 +965,7 @@ function MediaBody(props: { id: string; data: DirectorNodeData; runtime: Directo
   const kind = mediaKind(props.data)
   const [duration, setDuration] = useState<number | undefined>(undefined)
   useEffect(() => setDuration(undefined), [props.data.asset?.id])
-  const replaceable = props.data.kind === 'load-image' || props.data.kind === 'load-video'
+  const replaceable = props.data.kind === 'load-image' || props.data.kind === 'load-audio' || props.data.kind === 'load-video'
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <MediaPreview
@@ -964,6 +985,11 @@ function MediaBody(props: { id: string; data: DirectorNodeData; runtime: Directo
           <span style={{ marginLeft: 'auto', flex: '0 0 auto' }}>{Math.max(1, Math.round(props.data.asset.size / 1024))} KB</span>
         </div>
       ) : null}
+      {replaceable || props.data.kind === 'load-sketch' ? <div className="vd-input-resource-actions nodrag">
+        {props.data.asset === undefined && replaceable ? <button type="button" disabled={props.runtime?.inputFilesBusy} onClick={() => props.runtime?.onChooseInputFile(props.id)}>{t('Upload file')}</button> : null}
+        {props.data.kind === 'load-sketch' ? <button type="button" disabled={props.runtime?.inputFilesBusy} onClick={() => props.runtime?.onEditSketch(props.id)}>{t(props.data.asset ? 'Edit sketch' : 'Draw sketch')}</button> : null}
+        <button type="button" disabled={props.runtime?.inputFilesBusy} onClick={() => props.runtime?.onChooseExistingAsset?.(props.id)}>{t('Choose from assets')}</button>
+      </div> : null}
       {(kind === 'audio' || kind === 'video') ? <TrimFields id={props.id} data={props.data} duration={duration} runtime={props.runtime} /> : null}
       {(kind === 'image' || kind === 'video') ? <TransformFields id={props.id} data={props.data} runtime={props.runtime} /> : null}
       {props.data.maskAsset !== undefined ? <span style={{ alignSelf: 'flex-end', color: palette.accent, fontSize: 10 }}>{t("MASK ATTACHED")}</span> : null}
@@ -2366,6 +2392,22 @@ export const DirectorNodeView = memo(function DirectorNodeView(props: NodeProps<
   const runtime = useDirectorRuntime()
   const updateNodeInternals = useUpdateNodeInternals()
   const isWorkflow = WORKFLOW_KINDS.has(props.data.kind)
+  const isBatch = props.data.kind === 'batch-input' || props.data.kind === 'batch-output'
+  const fileKind = inputFileKind(props.data.kind)
+  const batchInput = props.data.kind === 'batch-input'
+  const fileDropEnabled = fileKind !== undefined || batchInput
+  const batchActive = runtime?.batchRuns?.some(run => run.batchInputNodeId === props.id && (run.status === 'queued' || run.status === 'running'))
+  const fileDrop = useInputFileDrop({
+    enabled: fileDropEnabled,
+    disabled: runtime?.inputFilesBusy === true || (batchInput && (props.data.frozen === true || batchActive === true))
+      || (batchInput ? !runtime?.onImportBatchFiles : !runtime?.onReplaceInputFile),
+    kind: fileKind,
+    multiple: batchInput,
+    onFiles: files => batchInput
+      ? runtime!.onImportBatchFiles!(props.id, files, false)
+      : runtime!.onReplaceInputFile!(props.id, files[0]),
+  })
+  const isMediaOperation = ['video-trim', 'video-crop', 'video-extract-frame'].includes(props.data.kind)
   const isSink = props.data.kind === 'preview' || props.data.kind === 'save'
   const isTrigger = props.data.kind === 'vram-trigger' || props.data.kind === 'ollama-eject' || props.data.kind === 'comfyui-clear'
   const hasError = props.data.status === 'failed' || (props.data.error !== undefined && props.data.error !== '')
@@ -2395,7 +2437,7 @@ export const DirectorNodeView = memo(function DirectorNodeView(props: NodeProps<
     '--vd-node-raised': theme.raised,
     '--vd-node-border': theme.border,
     '--vd-node-accent': theme.accent,
-    width: isWorkflow ? 390 : isSink ? 360 : isTrigger ? 350 : 330,
+    width: isBatch ? 390 : isWorkflow ? 390 : isSink ? 360 : isTrigger ? 350 : 330,
     boxSizing: 'border-box',
     borderRadius: 14,
     border: `${hasError ? 2 : 1}px solid ${hasError ? palette.danger : props.selected ? palette.accent : palette.border}`,
@@ -2414,7 +2456,9 @@ export const DirectorNodeView = memo(function DirectorNodeView(props: NodeProps<
   return (
     <article
       data-director-node={props.data.kind}
-      className={props.selected ? 'vd-node-selected' : undefined}
+      className={[props.selected ? 'vd-node-selected' : '', fileDrop.dragging ? 'vd-input-drop-active' : ''].filter(Boolean).join(' ') || undefined}
+      aria-busy={fileDrop.busy || undefined}
+      {...fileDrop.handlers}
       style={nodeStyle}
     >
       {floatingInputs.length > 0 ? <PortHandles direction="input" ports={floatingInputs} allPorts={declaredInputs} /> : null}
@@ -2433,10 +2477,24 @@ export const DirectorNodeView = memo(function DirectorNodeView(props: NodeProps<
       </header>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 11 }}>
+        {fileDropEnabled ? <small className="vd-input-drop-hint">{fileDrop.busy ? t('Importing file…') : batchInput ? t('Drop text, image, audio or video files here') : t('Drop a matching file here to replace this input')}</small> : null}
+        {fileDrop.error ? <small className="vd-input-drop-error" role="alert">{fileDrop.error}</small> : null}
+        {props.data.kind === 'batch-input' ? <BatchInputBody id={props.id} data={props.data} runtime={runtime} /> : null}
+        {props.data.kind === 'batch-output' ? <BatchOutputBody id={props.id} data={props.data} runtime={runtime} /> : null}
+        {isMediaOperation ? <>
+          {definition?.fields.map(field => <label key={field.id} style={labelStyle}>{t(field.label)}
+            <input className="nodrag nowheel" type="number" min={0} step={props.data.kind === 'video-crop' ? 1 : .01}
+              aria-label={t(field.label)} value={props.data.mediaOptions?.[field.id] ?? ''} placeholder={field.id === 'end' ? t('End of video') : ''}
+              onChange={event => runtime?.onChange(props.id, { mediaOptions: { ...props.data.mediaOptions,
+                [field.id]: event.currentTarget.value === '' ? undefined : event.currentTarget.valueAsNumber } })} style={fieldStyle} />
+          </label>)}
+          <button type="button" className="nodrag" style={buttonStyle} disabled={props.data.status === 'queued' || props.data.status === 'running'}
+            onClick={() => { void runtime?.onRunNode(props.id).catch(() => {}) }}>{t('Run')}</button>
+        </> : null}
         {props.data.kind === 'load-text' ? <TextBody id={props.id} data={props.data} runtime={runtime} /> : null}
         {props.data.kind === 'output-text' ? <OutputTextBody data={props.data} /> : null}
         {isSink ? <OutputSinkBody id={props.id} data={props.data} runtime={runtime} /> : null}
-        {!isWorkflow && !isSink && !isTrigger && kind !== 'text' ? <MediaBody id={props.id} data={props.data} runtime={runtime} /> : null}
+        {!isMediaOperation && !isBatch && !isWorkflow && !isSink && !isTrigger && kind !== 'text' ? <MediaBody id={props.id} data={props.data} runtime={runtime} /> : null}
         {isTrigger ? <TriggerBody id={props.id} data={props.data} runtime={runtime} /> : null}
         {isWorkflow ? (
           <GenerationNodeBody

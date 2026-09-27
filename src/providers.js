@@ -1,3 +1,4 @@
+import { MEDIA_OPERATIONS, runMediaOperation } from './ffmpeg-media.js'
 import { createHash, randomInt, randomUUID } from 'node:crypto'
 import { basename, extname } from 'node:path'
 import { CodexPlanImageRuntime } from './codex-plan-provider.js'
@@ -742,6 +743,7 @@ export class ProviderRuntime {
 
   async run(input, signal, progress = () => {}) {
     const requestValue = record(input, 'workflow request')
+    if (MEDIA_OPERATIONS.includes(requestValue.operation)) return runMediaOperation(this.store, requestValue, signal, this.registerAsset, progress)
     if (requestValue.modelFamily === 'minimax-h3' && !this.minimaxH3LicenseAccepted) {
       const error = new Error('MiniMax H3 is locked because minimaxH3LicenseAccepted is disabled; review the model license and AUP before enabling it')
       error.code = 'video-director/minimax-license-required'
@@ -956,6 +958,7 @@ export class ProviderRuntime {
       throw new Error(`${provider.label} returned no image`)
     }
     const asset = await this.store.putAsset({
+      origin: 'output',
       projectId: input.projectId,
       kind: 'image',
       name: `generated-${Date.now()}.${MIME_EXTENSIONS_FOR_NAME(mimeType)}`,
@@ -1202,6 +1205,7 @@ export class ProviderRuntime {
         continue
       }
       const asset = await this.store.putAsset({
+        origin: 'output',
         projectId,
         kind,
         name: item.name || `mcp-output-${String(index + 1)}.${MIME_EXTENSIONS_FOR_NAME(item.mimeType)}`,
@@ -1390,6 +1394,7 @@ export class ProviderRuntime {
       }, signal, progress, 'downloading')
       if (mimeType === 'application/octet-stream') continue
       const asset = await this.store.putAsset({
+        origin: 'output',
         projectId,
         kind: outputKind(mimeType),
         name: basename(descriptor.filename),

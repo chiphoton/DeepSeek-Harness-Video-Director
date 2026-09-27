@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { DirectorInputError, jsonValue, record, string, uuid } from './validation.js'
+import { RunQueue } from './run-queue.js'
 
 const OPERATIONS = new Set([
   'prompt-enhancer',
@@ -8,6 +9,7 @@ const OPERATIONS = new Set([
   'image-edit',
   'video-generation',
   'audio-generation',
+  'video-trim', 'video-crop', 'video-extract-frame',
 ])
 const OUTPUT_TYPES = new Set(['text', 'image', 'audio', 'video', 'sketch', 'mask'])
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'orphaned'])
@@ -152,6 +154,8 @@ export class JobManager {
     this.jobs = new Map()
     this.terminalJobs = new Map()
     this.queue = []
+    this.runQueue = new RunQueue()
+    this.runQueue.onChange = () => this.#drain()
     this.running = 0
     this.nextRunSequence = 0
     this.terminalCacheLimit = options.terminalCacheLimit ?? DEFAULT_TERMINAL_CACHE_LIMIT
@@ -163,6 +167,13 @@ export class JobManager {
   async recover() {
     for (const summary of await this.store.listProjects()) {
       const project = await this.store.getProject(summary.id)
+      for (const run of await this.store.listVdRuns(project.id)) {
+        if (run.scheduler === 'host' && run.status === 'queued') continue
+        if (run.status === 'queued' || run.status === 'running') await this.store.saveVdRun(project.id, {
+          ...run, status: 'failed', completedAt: new Date().toISOString(),
+          error: 'The Harness process stopped. This workflow was not submitted again.',
+        })
+      }
       let changed = false
       const jobs = project.jobs.map((job) => {
         if (job.status !== 'queued' && job.status !== 'running') return job
@@ -251,6 +262,16 @@ export class JobManager {
     if (batchIndex !== undefined && batchSize !== undefined && batchIndex >= batchSize) {
       throw new DirectorInputError('batchIndex must be less than batchSize')
     }
+    const batchRunId = request.batchRunId === undefined ? undefined : uuid(request.batchRunId, 'batchRunId')
+    const caseId = request.caseId === undefined ? undefined : uuid(request.caseId, 'caseId')
+    const caseIndex = request.caseIndex
+    if (batchRunId !== undefined || caseId !== undefined || caseIndex !== undefined) {
+      if (!batchRunId || !caseId || !workflowRunId || !Number.isSafeInteger(caseIndex) || caseIndex < 1 || caseIndex > 1000) throw new DirectorInputError('invalid batch case metadata')
+    }
+    if (batchRunId !== undefined) {
+      const run = await this.store.getVdRun(projectId, workflowRunId)
+      if (run.batchRunId !== batchRunId || run.caseId !== caseId || run.caseIndex !== caseIndex) throw new DirectorInputError('job case metadata does not match its vd-run')
+    }
     const runSourceRevision = sourceRevision(request.sourceRevision)
     const nodeDigest = request.nodeDigest === undefined
       ? undefined
@@ -278,6 +299,7 @@ export class JobManager {
       ...(workflowRunMode === undefined ? {} : { workflowRunMode }),
       ...(batchIndex === undefined ? {} : { batchIndex }),
       ...(batchSize === undefined ? {} : { batchSize }),
+      ...(batchRunId === undefined ? {} : { batchRunId, caseId, caseIndex }),
       ...(runSourceRevision === undefined ? {} : { sourceRevision: runSourceRevision }),
       ...(nodeDigest === undefined ? {} : { nodeDigest }),
       status: 'queued',
@@ -288,8 +310,15 @@ export class JobManager {
       request,
       controller: new AbortController(),
     }
+    this.runQueue.addJob(job)
     this.jobs.set(id, job)
-    await this.#persistJob(project, job)
+    try {
+      await this.#persistJob(project, job)
+    } catch (error) {
+      this.jobs.delete(id)
+      this.#drain()
+      throw error
+    }
     this.queue.push(job)
     this.#drain()
     return publicJob(job)
@@ -368,7 +397,9 @@ export class JobManager {
 
   #drain() {
     while (this.running < this.concurrency && this.queue.length > 0) {
-      const job = this.queue.shift()
+      const index = this.queue.findIndex(job => this.runQueue.allows(job, this.jobs))
+      if (index < 0) return
+      const [job] = this.queue.splice(index, 1)
       if (job === undefined || job.status !== 'queued') continue
       this.running += 1
       void this.#run(job).finally(() => {
@@ -445,6 +476,18 @@ export class JobManager {
     })
     await this.#persistCurrent(job)
     this.#rememberTerminal(job)
+    const group = job.batchRunId ?? job.workflowRunId
+    if (this.runQueue.cancelled.has(group) && this.workflowScheduler?.current?.run.id !== group && ![...this.jobs.values()].some(candidate =>
+      (candidate.batchRunId ?? candidate.workflowRunId) === group && !TERMINAL_STATUSES.has(candidate.status))) {
+      for (const run of await this.store.listVdRuns(job.projectId)) {
+        if (run.id !== group && run.batchRunId !== group) continue
+        const saved = await this.store.saveVdRun(job.projectId, { ...run,
+          status: job.errorCode === 'video-director/remote-cancel-failed' ? 'failed' : 'cancelled',
+          error: job.error, cancelRequested: true, completedAt: new Date().toISOString() })
+        this.runQueue.register(saved)
+      }
+    }
+    this.#drain()
   }
 
   async #persistedJob(projectId, jobId) {

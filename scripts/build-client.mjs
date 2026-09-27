@@ -34,6 +34,11 @@ const external = [
 
 await mkdir(dirname(outfile), { recursive: true })
 
+// Share graph planning, port resolution and output propagation with the Host.
+await build({ entryPoints: [resolve(packageRoot, 'src/client/host-execution.ts')],
+  outfile: resolve(packageRoot, 'lib/workflow-execution.js'), bundle: true,
+  format: 'esm', platform: 'node', target: ['node22'], legalComments: 'none' })
+
 await build({
   entryPoints: [entry],
   outfile,

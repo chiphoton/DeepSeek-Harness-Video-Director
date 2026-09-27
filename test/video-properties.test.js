@@ -10,7 +10,7 @@ import { readVideoProperties, videoPropertiesFromProbe } from '../src/video-prop
 
 const run = promisify(execFile)
 
-test('video details use average rational FPS, skip cover art and retain container and stream tags', () => {
+test('video details use displayed dimensions and average rational FPS, skip cover art and retain tags', () => {
   const result = videoPropertiesFromProbe({
     format: { filename: '/private/host/file.mp4', format_name: 'mov,mp4,m4a,3gp,3g2,mj2', duration: '4.004', tags: { title: 'Generated scene', comment: '{"prompt":"Sunrise"}' } },
     streams: [
@@ -20,8 +20,8 @@ test('video details use average rational FPS, skip cover art and retain containe
     ],
   }, 'video/mp4')
   assert.equal(result.fps, 30000 / 1001)
-  assert.equal(result.width, 1920)
-  assert.equal(result.height, 1080)
+  assert.equal(result.width, 1080)
+  assert.equal(result.height, 1920)
   assert.equal(result.duration, 4.004)
   assert.equal(result.format, 'MP4')
   assert.ok(result.metadata.some(row => row.name === 'Container · comment' && row.value === '{"prompt":"Sunrise"}'))

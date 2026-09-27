@@ -112,10 +112,12 @@ export function portFromHandle(
 }
 
 export function inferredNodeOutputTypes(node: DirectorNode): MediaKind[] {
+  if (node.data.kind === 'video-extract-frame') return ['image']
+  if (node.data.kind === 'video-trim' || node.data.kind === 'video-crop') return ['video']
   // Preview is a pass-through sink. Legacy projects may not carry the built-in
   // node definition, so keep all of its supported outputs connectable before
   // and after it receives data (including mixed-media previews).
-  if (node.data.kind === 'preview') return ['text', 'image', 'audio', 'video']
+  if (node.data.kind === 'preview' || node.data.kind === 'batch-input') return ['text', 'image', 'audio', 'video']
   const result = node.data.result
   if (result !== null && typeof result === 'object' && 'kind' in result) {
     if (result.kind === 'assets' && 'assets' in result && Array.isArray(result.assets)) {
@@ -147,7 +149,7 @@ export function isTriggerNodeKind(kind: DirectorNodeData['kind']): boolean {
 }
 
 export function implicitInputPortForKind(kind: DirectorNodeData['kind']): VdPortDescriptor | undefined {
-  if (kind.startsWith('load-')) return undefined
+  if (kind.startsWith('load-') || kind === 'batch-input') return undefined
   if (kind === 'output-text') return { id: 'input', label: 'Text', types: ['text'], multiple: true }
   if (kind === 'output-image') return { id: 'input', label: 'Image', types: ['image'], multiple: true }
   if (kind === 'output-audio') return { id: 'input', label: 'Audio', types: ['audio'], multiple: true }
@@ -320,6 +322,7 @@ export function resolveConnectionPorts(
   if (input.port.multiple !== true && used > 0) {
     throw new Error(`${input.port.label} accepts only one connection.`)
   }
+  if (input.port.maxItems !== undefined && used >= input.port.maxItems) throw new Error(`${input.port.label} accepts at most ${input.port.maxItems} references in total.`)
   const source = graph.nodes.find(node => node.id === edge.source)
   const sourceKind = source?.data.asset?.kind
     ?? source?.data.mediaKind
@@ -373,6 +376,7 @@ export function validateNodeInputPorts(
   }
   for (const port of inputs) {
     const count = counts.get(port.id) ?? 0
+    if (port.maxItems !== undefined && count > port.maxItems) throw new Error(`${port.label} accepts at most ${port.maxItems} references in total.`)
     if (port.required === true && count === 0) throw new Error(`${port.label} is required.`)
     if (port.multiple !== true && count > 1) throw new Error(`${port.label} accepts only one connection.`)
     for (const [kind, limit] of Object.entries(port.maxByType ?? {})) {

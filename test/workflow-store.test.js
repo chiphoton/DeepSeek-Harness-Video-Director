@@ -352,7 +352,7 @@ test('MiniMax-H3 Reference to Video (Turbo) maps typed references and mirrors th
     ],
   )
   assert.deepEqual(
-    resolved.bindings.filter(binding => binding.referenceKind !== undefined),
+    resolved.bindings.filter(binding => binding.referenceKind !== undefined).slice(0, 5),
     [
       { nodeId: '137', input: 'image', from: 'asset', portId: 'reference', portIndex: 0, optional: true, omitNodeWhenMissing: true, referenceKind: 'image' },
       { nodeId: '139', input: 'image', from: 'asset', portId: 'reference', portIndex: 1, optional: true, omitNodeWhenMissing: true, referenceKind: 'image' },
@@ -367,6 +367,23 @@ test('MiniMax-H3 Reference to Video (Turbo) maps typed references and mirrors th
   assert.deepEqual(resolved.workflow['136'].inputs['ref_video_audios.ref_video_audio_0'], ['143', 1])
   assert.deepEqual(resolved.workflow['136'].inputs['ref_audios.ref_audio_0'], ['145', 0])
   assert.deepEqual(resolved.workflow['136'].inputs['ref_audios.ref_audio_1'], ['146', 0])
+  for (const [kind, count] of [['image', 9], ['video', 3], ['audio', 3]]) {
+    const references = resolved.bindings.filter(binding => binding.referenceKind === kind)
+    assert.deepEqual(references.map(binding => binding.portIndex), Array.from({ length: count }, (_, index) => index))
+    for (const binding of references) {
+      assert.equal(binding.optional, true)
+      assert.equal(binding.omitNodeWhenMissing, true)
+      assert.ok(resolved.workflow[binding.nodeId])
+      const key = `ref_${kind}s.ref_${kind}_${binding.portIndex}`
+      const source = kind === 'video' ? (binding.portIndex === 0 ? '143' : `r2v_components_${binding.portIndex}`) : binding.nodeId
+      assert.deepEqual(resolved.workflow['136'].inputs[key], [source, 0])
+      if (kind === 'video') {
+        assert.deepEqual(resolved.workflow[source].inputs.video, [binding.nodeId, 0])
+        assert.deepEqual(resolved.workflow['136'].inputs[`ref_video_audios.ref_video_audio_${binding.portIndex}`], [source, 1])
+        assert.ok(binding.omitNodeIdsWhenMissing.includes(source))
+      }
+    }
+  }
   assert.deepEqual(resolved.workflow['136'].inputs.prompt, ['138', 0])
   assert.equal(resolved.workflow['138'].inputs.value, '<video_prompt>')
   assert.equal(resolved.workflow['132'].inputs.value, 15)

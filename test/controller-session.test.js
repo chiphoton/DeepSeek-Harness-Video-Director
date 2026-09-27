@@ -12,7 +12,11 @@ import { ProjectStore } from '../src/project-store.js'
 import { createDirectorRpc } from '../src/rpc.js'
 import { record } from '../src/validation.js'
 import { ComfyWorkflowStore } from '../src/workflow-store.js'
+import { WorkflowScheduler } from '../src/workflow-scheduler.js'
+import { RunQueue } from '../src/run-queue.js'
 
+const controllers = new Set()
+test.after(() => { for (const controller of controllers) controller.dispose() })
 let controllerClass
 
 async function DirectorController() {
@@ -26,8 +30,9 @@ async function DirectorController() {
     target: 'es2022',
     write: false,
   })
-  const source = Buffer.from(result.outputFiles[0].contents).toString('base64')
-  controllerClass = (await import(`data:text/javascript;base64,${source}`)).DirectorController
+  const source = Buffer.from(result.outputFiles[0].text + '\n//# sourceURL=controller-tests.js').toString('base64')
+  const Base = (await import(`data:text/javascript;base64,${source}`)).DirectorController
+  controllerClass = class extends Base { constructor(ctx) { super(ctx); controllers.add(this) } }
   return controllerClass
 }
 
@@ -291,9 +296,10 @@ test('project export and Duplicate preserve canvas assets while resetting active
               },
             }
           }
-          if (endpoint === 'assets/put') {
+          if (endpoint === 'assets/put' || endpoint === 'assets/link') {
             assert.ok(payload.projectId === copyProjectId || payload.projectId === importedProjectId)
-            assert.equal(payload.dataBase64, Buffer.from('asset-data').toString('base64'))
+            if (endpoint === 'assets/put') assert.equal(payload.dataBase64, Buffer.from('asset-data').toString('base64'))
+            else assert.equal(payload.sourceId, sourceAssetId)
             const assetId = payload.projectId === copyProjectId ? copyAssetId : importedAssetId
             return {
               ok: true,
@@ -391,7 +397,32 @@ test('new nodes retain Harness provider defaults and explicit project providers'
 
 function existingSessionContext(project, handler, projectGet = async () => ({ ok: true, value: { project } })) {
   const submittedRuns = new Map()
+  const knownJobs = new Map(project.jobs.map(job => [job.id, job]))
+  const cancelledRuns = new Set()
   const drafts = new Map()
+  let definitions = []
+  const store = {
+    saveVdRunJob: async () => {}, // Receipts already live in knownJobs in this in-memory RPC fixture.
+    getProject: async () => structuredClone(project),
+    listVdRuns: async () => [...submittedRuns.values()].map(({ snapshot, ...run }) => structuredClone(run)),
+    getVdRun: async (_id, runId) => structuredClone(submittedRuns.get(runId)),
+    saveVdRun: async (_id, run, snapshot) => {
+      const saved = { ...structuredClone(run), snapshot: submittedRuns.get(run.id)?.snapshot ?? structuredClone(snapshot) }
+      submittedRuns.set(run.id, saved)
+      const { snapshot: _snapshot, ...summary } = saved
+      return summary
+    },
+  }
+  const manager = { jobs: knownJobs, runQueue: new RunQueue(),
+    get: async (_id, jobId) => (await call('jobs/get', { projectId: project.id, jobId })).job,
+    cancel: async (_id, jobId) => (await call('jobs/cancel', { projectId: project.id, jobId })).job }
+  const scheduler = new WorkflowScheduler({ store, jobs: manager, providers: { publicCatalog: () => [] },
+    workflows: { list: () => [] }, nodes: { list: () => definitions }, call: (...args) => call(...args) })
+  const call = async (endpoint, payload) => {
+    const response = await context.connection.rpc.call('', endpoint, payload)
+    if (!response.ok) throw Object.assign(new Error(response.error.message), response.error)
+    return response.value
+  }
   const list = {
     current: project.sessionId,
     byId: { [project.sessionId]: { id: project.sessionId, title: project.name } },
@@ -402,7 +433,7 @@ function existingSessionContext(project, handler, projectGet = async () => ({ ok
       rename: async title => ({ ok: true, value: { title, seq: 1 } }),
     },
   }
-  return {
+  const context = {
     sessions: {
       list: { getSnapshot: () => list, subscribe: () => () => {} },
       create: async () => { throw new Error('existing Session must not be recreated') },
@@ -435,13 +466,37 @@ function existingSessionContext(project, handler, projectGet = async () => ({ ok
             submittedRuns.set(run.id, run)
             return { ok: true, value: { run } }
           }
+          if (endpoint === 'vd-runs/submit') return { ok: true, value: await scheduler.submit(payload) }
+          if (endpoint === 'vd-runs/turn') return { ok: true, value: { granted: true, cancelled: cancelledRuns.has(payload.runId) } }
+          if (endpoint === 'jobs/list') return { ok: true, value: { jobs: [...knownJobs.values()] } }
+          if (endpoint === 'vd-runs/cancel') {
+            const run = submittedRuns.get(payload.runId)
+            if (run?.scheduler === 'host') return { ok: true, value: await scheduler.cancel(payload.projectId, payload.runId) }
+            cancelledRuns.add(payload.runId)
+            const outcomes = await Promise.allSettled([...knownJobs.values()].filter(job => (job.workflowRunId === payload.runId || job.batchRunId === payload.runId) && ['queued', 'running'].includes(job.status)).map(async job => {
+              const result = await handler('jobs/cancel', { projectId: payload.projectId, jobId: job.id })
+              if (!result.ok) throw new Error(result.error.message)
+              return result.value.job
+            }))
+            const errors = outcomes.filter(row => row.status === 'rejected')
+            if (errors.length) throw new Error(`Could not request cancellation for every job: ${errors.map(row => row.reason.message).join(' ')}`)
+            if (!outcomes.some(row => ['queued', 'running'].includes(row.value.status))) {
+              const run = submittedRuns.get(payload.runId)
+              if (run) run.status = 'cancelled'
+            }
+            return { ok: true, value: { cancelled: true } }
+          }
           if (endpoint === 'vd-runs/get') return { ok: true, value: { run: submittedRuns.get(payload.runId) } }
           if (endpoint === 'vd-runs/list') return { ok: true, value: { runs: [...submittedRuns.values()] } }
-          return handler(endpoint, payload)
+          const result = await handler(endpoint, payload)
+          if (endpoint === 'nodes/list' && result?.ok) definitions = result.value.nodeDefinitions
+          if (result?.ok && result.value?.job) knownJobs.set(result.value.job.id, result.value.job)
+          return result
         },
       },
     },
   }
+  return context
 }
 
 test('Codex discovery refreshes metadata while an existing node keeps its unavailable model', async t => {
@@ -1297,6 +1352,7 @@ test('a revision conflict immediately force-saves the current local project', as
 test('a legacy Host that ignores force still saves the current local project after a revision conflict', async () => {
   const Controller = await DirectorController()
   const project = projectFixture('00000000-0000-4000-8000-000000000048')
+  project.mediaLibrary = [{ id: 'edited-media', projectId: project.id, kind: 'audio', name: 'edited.flac', mimeType: 'audio/flac', url: '/edited.flac', size: 1, sha256: 'a'.repeat(64), createdAt: project.createdAt }]
   const remoteJob = { id: 'remote-job', status: 'running' }
   const latest = {
     ...project,
@@ -1305,6 +1361,7 @@ test('a legacy Host that ignores force still saves the current local project aft
     status: 'running',
     jobs: [remoteJob],
     settings: { remote: true },
+    mediaLibrary: [],
   }
   const saves = []
   let getCalls = 0
@@ -1348,6 +1405,7 @@ test('a legacy Host that ignores force still saves the current local project aft
   ])
   assert.equal(saves[2].project.name, 'Current local edit')
   assert.deepEqual(saves[2].project.settings, {})
+  assert.deepEqual(saves[2].project.mediaLibrary, project.mediaLibrary)
   assert.deepEqual(saves[2].project.jobs, [remoteJob])
   assert.equal(controller.getSnapshot().project.revision, 5)
   assert.equal(controller.getSnapshot().dirty, false)
@@ -1941,7 +1999,7 @@ test('an upload completing after a project reload never mutates the reloaded gra
   assert.equal(controller.getSnapshot().project.graph.nodes.length, 0)
 })
 
-for (const kind of ['image', 'video']) {
+for (const kind of ['image', 'audio', 'video']) {
   test(`replacing an input ${kind} preserves its graph identity and restores the original with Undo`, async t => {
     const Controller = await DirectorController()
     const project = projectFixture('00000000-0000-4000-8000-000000000054')
@@ -1975,7 +2033,7 @@ for (const kind of ['image', 'video']) {
     assert.equal(after.nodes[0].data.asset.id, 'new')
     assert.equal(after.nodes[0].data.maskAsset, undefined)
     assert.equal(after.nodes[0].data.result, undefined)
-    assert.deepEqual(after.nodes[0].data.trim, kind === 'video' ? { start: 0 } : undefined)
+    assert.deepEqual(after.nodes[0].data.trim, kind === 'audio' || kind === 'video' ? { start: 0 } : undefined)
     controller.undo()
     const restored = controller.getSnapshot().project.graph
     assert.deepEqual(restored.nodes[0].data.asset, asset)
@@ -2062,7 +2120,6 @@ test('workflow stages reset waiting nodes and retain the current run while a lat
   const jobs = []
   const controller = new Controller(existingSessionContext(project, async (endpoint, payload) => {
     if (endpoint === 'jobs/start') {
-      if (payload.nodeId === 'second') assert.equal(controller.getSnapshot().project.graph.nodes[0].data.status, 'completed')
       const job = { id: `job-${jobs.length}`, projectId: project.id, nodeId: payload.nodeId,
         status: 'running', phase: 'generating', progress: .2, createdAt: project.createdAt, updatedAt: project.updatedAt }
       jobs.push(job)
@@ -2080,6 +2137,7 @@ test('workflow stages reset waiting nodes and retain the current run while a lat
   await controller.start()
   const firstRun = controller.runVdWorkflow({ mode: 'all' })
   await firstStarted
+  await controller.refreshVdRuns()
   const states = () => controller.getSnapshot().project.graph.nodes.slice(0, 3).map(node => node.data.status)
   assert.deepEqual(states(), ['running', 'idle', 'idle'])
   const nextRun = controller.runVdWorkflow({ mode: 'all' })
@@ -2131,6 +2189,67 @@ for (const change of ['reload', 'delete', 'edit']) {
     assert.deepEqual(controller.getSnapshot().project.graph, before)
   })
 }
+
+for (const kind of ['image', 'audio', 'video', 'sketch']) test(`selecting an existing ${kind} links its bytes and is one undoable input change`, async t => {
+  const Controller = await DirectorController()
+  const project = projectFixture('00000000-0000-4000-8000-000000000054')
+  const original = { id: 'old', projectId: project.id, kind, name: 'old.png', mimeType: kind === 'sketch' ? 'image/png' : `${kind}/test`, size: 1, sha256: 'a'.repeat(64), createdAt: project.createdAt, url: '/old' }
+  const shared = { ...original, id: 'existing', projectId: 'another-workflow', name: 'existing.png', url: '/existing', origin: 'output' }
+  project.graph.nodes = [{ id: 'input', type: 'director', position: { x: 12, y: 34 }, data: { kind: `load-${kind}`, title: 'My input', asset: original,
+    ...(kind === 'sketch' ? { sketchDocument: { version: 1, width: 640, height: 480, elements: [] } } : {}) } }]
+  const calls = []
+  const controller = new Controller(existingSessionContext(project, async (endpoint, payload) => {
+    if (endpoint === 'nodes/list') return { ok: true, value: { nodeDefinitions: [] } }
+    calls.push(endpoint)
+    if (endpoint === 'assets/list') { assert.equal(payload.kind, kind); return { ok: true, value: { assets: [shared] } } }
+    assert.equal(endpoint, 'assets/link')
+    assert.equal(payload.projectId, project.id); assert.equal(payload.sourceId, shared.id)
+    assert.equal(payload.dataBase64, undefined)
+    return { ok: true, value: { asset: { ...shared, id: 'linked', projectId: project.id } } }
+  }))
+  t.after(() => controller.dispose())
+  await controller.start()
+  const before = structuredClone(controller.getSnapshot().project.graph)
+  const [asset] = await controller.listInputAssets(kind)
+  await controller.useExistingAsset('input', asset)
+  const after = controller.getSnapshot().project.graph.nodes[0]
+  assert.equal(after.data.asset.id, 'linked')
+  assert.equal(after.data.asset.origin, 'output')
+  assert.equal(after.data.sketchDocument, undefined)
+  assert.deepEqual(after.position, before.nodes[0].position)
+  assert.equal(after.data.title, 'My input')
+  assert.deepEqual(calls, ['assets/list', 'assets/link'])
+  controller.undo()
+  const restored = controller.getSnapshot().project.graph
+  assert.deepEqual(restored.nodes[0].data.asset, before.nodes[0].data.asset)
+  assert.deepEqual(restored.nodes[0].data.sketchDocument, before.nodes[0].data.sketchDocument)
+  assert.deepEqual(restored.nodes[0].position, before.nodes[0].position)
+  assert.equal(restored.nodes[0].data.title, before.nodes[0].data.title)
+  assert.deepEqual(restored.edges, before.edges)
+  assert.equal(controller.getSnapshot().canUndo, false)
+})
+
+test('asset selection rejects mismatched types and stale input changes during linking', async t => {
+  const Controller = await DirectorController()
+  const project = projectFixture('00000000-0000-4000-8000-000000000054')
+  project.graph.nodes = [{ id: 'input', type: 'director', position: { x: 0, y: 0 }, data: { kind: 'load-image', title: 'Image' } }]
+  let release
+  const waiting = new Promise(resolve => { release = resolve })
+  const asset = { id: 'existing', projectId: 'elsewhere', kind: 'image', mimeType: 'image/png', name: 'file.png', size: 1, sha256: 'a'.repeat(64), createdAt: project.createdAt, url: '/image' }
+  const controller = new Controller(existingSessionContext(project, async endpoint => {
+    assert.equal(endpoint, 'assets/link')
+    await waiting
+    return { ok: true, value: { asset: { ...asset, projectId: project.id } } }
+  }))
+  t.after(() => controller.dispose())
+  await controller.start()
+  await assert.rejects(controller.useExistingAsset('input', { ...asset, kind: 'video' }), /matches the input type/)
+  const selecting = controller.useExistingAsset('input', asset)
+  controller.updateNode('input', { asset: { ...asset, id: 'different' } })
+  release()
+  await assert.rejects(selecting, /input changed/)
+  assert.equal(controller.getSnapshot().project.graph.nodes[0].data.asset.id, 'different')
+})
 
 test('invalid and failed media replacements leave the original input and Undo history intact', async t => {
   const Controller = await DirectorController()
@@ -2454,13 +2573,15 @@ test('workflow submissions queue immutable snapshots behind an active run', asyn
   }))
   await controller.start()
   const first = controller.runVdWorkflow({ mode: 'all' })
-  await new Promise(resolve => setTimeout(resolve, 10))
+  for (let i = 0; i < 100 && starts.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 5))
+  await controller.refreshVdRuns()
   controller.updateNode('generate', { prompt: 'second' })
   const second = controller.runVdWorkflow({ mode: 'all' })
   // Attach rejection handling immediately so the old busy-node error is deterministic.
   const outcomes = Promise.allSettled([first, second])
   controller.updateNode('generate', { prompt: 'later edit' })
   try {
+    await controller.refreshVdRuns()
     assert.equal(controller.getSnapshot().workflowRuns.filter(run => run.status === 'queued').length, 1)
     assert.equal(starts.length, 1)
   } finally { release() }
@@ -2514,7 +2635,8 @@ test('cancelling a queued workflow never submits it or releases later work ahead
   const third = controller.runVdWorkflow({ mode: 'all' })
   const outcomes = Promise.allSettled([first, second, third])
   await controller.cancelVdRun(secondId)
-  await new Promise(resolve => setTimeout(resolve, 10))
+  for (let i = 0; i < 100 && starts.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 5))
+  await controller.refreshVdRuns()
   try {
     assert.equal(controller.getSnapshot().workflowRuns.find(run => run.id === secondId).status, 'cancelled')
     assert.equal(starts.length, 1)
@@ -2765,8 +2887,8 @@ test('a workflow run waits for upstream results and persists grouped job metadat
   assert.equal(starts[0].snapshot.request.workflowRunId, workflowRunId)
   assert.equal(starts[1].snapshot.request.workflowRunId, workflowRunId)
   assert.equal(starts[0].snapshot.request.workflowRunMode, 'all')
-  assert.equal(starts[0].snapshot.request.batchIndex, 0)
-  assert.equal(starts[0].snapshot.request.batchSize, 1)
+  assert.equal(starts[0].snapshot.request.batchIndex, undefined)
+  assert.equal(starts[0].snapshot.request.batchSize, undefined)
   assert.equal(JSON.parse(starts[1].snapshot.request.context)[0].text, 'enhanced first')
   assert.equal(controller.getSnapshot().workflowRuns[0].status, 'completed')
   assert.equal(controller.getSnapshot().workflowRuns[0].completedJobs, 2)
@@ -3577,6 +3699,17 @@ test('double-click creation APIs place blank Text, workflow, and Custom Nodes at
   assert.equal(Buffer.byteLength(nodes[1].data.systemPrompt), 12_977)
   assert.equal(nodes[1].data.contextLength, 32_000)
   assert.equal(nodes[1].data.thinking, true)
+
+  for (const [index, kind] of ['image', 'audio', 'video'].entries()) {
+    controller.addInputNode(kind, { x: 700, y: 100 * index })
+    const input = controller.getSnapshot().project.graph.nodes.at(-1)
+    assert.equal(input.data.kind, `load-${kind}`)
+    assert.deepEqual(input.position, { x: 700, y: 100 * index })
+    assert.equal(input.data.asset, undefined)
+    assert.deepEqual(input.data.assets ?? [], [])
+    controller.undo()
+    assert.equal(controller.getSnapshot().project.graph.nodes.some(node => node.id === input.id), false)
+  }
 })
 
 test('a newly created Image Workflow is titled Image Processing', async () => {
@@ -3718,4 +3851,133 @@ test('deleting the current project clears its history and loads the next remaini
   assert.equal(controller.getSnapshot().canRedo, false)
   assert.equal(controller.getSnapshot().dirty, false)
   assert.equal(list.current, projectB.sessionId)
+})
+
+for (const action of ['save', 'copy']) {
+  test(`Media Editor ${action} updates current sources and sinks, preserves job history, supports Undo, and survives reopen`, async t => {
+    const Controller = await DirectorController()
+    const project = projectFixture('00000000-0000-4000-8000-000000000190')
+    const original = { id: 'media-original', projectId: project.id, kind: 'video', name: 'take.mp4', mimeType: 'video/mp4', size: 20, sha256: 'a'.repeat(64), url: '/original', createdAt: project.createdAt }
+    const edited = { ...original, id: 'media-edited', url: '/edited', name: action === 'copy' ? 'take-copy.mp4' : 'take.mp4', sha256: 'b'.repeat(64) }
+    project.graph.nodes = [
+      { id: 'generator', type: 'director', position: { x: 0, y: 0 }, data: { kind: 'video-generation', title: 'Take', asset: original, assets: [original], result: { kind: 'assets', assets: [original] }, status: 'completed', jobId: 'completed-job' } },
+      { id: 'preview', type: 'director', position: { x: 400, y: 0 }, data: { kind: 'preview', title: 'Preview', asset: original, assets: [original] } },
+    ]
+    project.graph.edges = [{ id: 'edge', source: 'generator', target: 'preview', sourceHandle: 'out', targetHandle: 'in' }]
+    project.jobs = [{ id: 'completed-job', projectId: project.id, nodeId: 'generator', operation: 'video-generation', status: 'completed', createdAt: project.createdAt, result: { kind: 'assets', assets: [original] } }]
+    const ctx = existingSessionContext(project, async (endpoint) => {
+      if (endpoint === 'nodes/list') return { ok: true, value: { nodeDefinitions: [] } }
+      assert.equal(endpoint, 'media/edit')
+      return { ok: true, value: { asset: edited } }
+    })
+    const controller = new Controller(ctx); t.after(() => controller.dispose())
+    await controller.start()
+    await controller.editMedia(original, { start: 1, end: 3 }, action, new AbortController().signal)
+    let current = controller.getSnapshot().project
+    assert.equal(current.graph.nodes.length, 2)
+    assert.equal(current.graph.nodes[0].data.asset.id, edited.id)
+    assert.equal(current.graph.nodes[1].data.assets[0].id, edited.id)
+    assert.deepEqual(current.graph.edges, project.graph.edges)
+    assert.equal(current.jobs[0].result.assets[0].id, original.id)
+    assert.deepEqual(current.mediaLibrary.map(asset => asset.id), action === 'copy' ? [original.id, edited.id] : [edited.id])
+    const archive = JSON.parse((await (async () => {
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = async () => new Response(new Uint8Array([1]))
+      try { return await controller.exportProject() } finally { globalThis.fetch = originalFetch }
+    })()).text)
+    assert.equal(archive.project.mediaLibrary.length, action === 'copy' ? 2 : 1)
+    controller.undo()
+    assert.equal(controller.getSnapshot().project.graph.nodes[0].data.asset.id, original.id)
+    assert.deepEqual(controller.getSnapshot().project.mediaLibrary, [])
+    controller.redo()
+    assert.equal(controller.getSnapshot().project.graph.nodes[0].data.asset.id, edited.id)
+    await controller.editMedia(edited, { start: 0, end: 1 }, 'save', new AbortController().signal)
+    const reopened = new Controller(ctx); t.after(() => reopened.dispose())
+    await reopened.start()
+    current = reopened.getSnapshot().project
+    assert.equal(current.graph.nodes[0].data.asset.id, edited.id, 'old completed jobs must not restore unedited media')
+    assert.equal(current.graph.nodes[1].data.assets[0].id, edited.id)
+    assert.ok(current.mediaLibrary.some(asset => asset.id === edited.id))
+  })
+}
+
+test('virtual folder organization preserves the active draft and deletes confirmed children through the real host', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'vd-controller-folders-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const store = new ProjectStore(root, 1024 * 1024); await store.init()
+  const a = await store.createProject({ name: 'Current workflow', sessionId: 'folder-session-a' })
+  const b = await store.createProject({ name: 'Remaining workflow', sessionId: 'folder-session-b' })
+  const host = createDirectorRpc({ store, providers: { publicCatalog: () => [] }, nodes: { list: () => [] }, workflows: { list: () => [] } })
+  const sessions = { current: a.sessionId, byId: Object.fromEntries([a, b].map(p => [p.sessionId, { id: p.sessionId }])) }
+  const Controller = await DirectorController()
+  const controller = new Controller({
+    sessions: { list: { getSnapshot: () => sessions, subscribe: () => () => {} },
+      binding: () => ({ session: { getSnapshot: () => ({}), rename: async title => ({ ok: true, value: { title, seq: 1 } }) } }),
+      open: id => { sessions.current = id }, create: async () => { throw new Error('Sessions already exist') } },
+    connection: { rpc: { call: (_channel, endpoint, payload) => host(endpoint, payload) } },
+  })
+  t.after(() => controller.dispose())
+  await controller.start()
+  controller.renameProject('Unsaved current name')
+  const current = controller.getSnapshot().project
+  await controller.organizeProjects({ action: 'create', name: 'Scenes', parentId: null, expectedRevision: controller.getSnapshot().projectFolders.revision })
+  const folder = controller.getSnapshot().projectFolders.folders.find(row => row.name === 'Scenes')
+  await controller.organizeProjects({ action: 'move', kind: 'project', id: a.id, parentId: folder.id, expectedRevision: controller.getSnapshot().projectFolders.revision })
+  await controller.refreshProjectFolders()
+  assert.deepEqual(controller.getSnapshot().project, current)
+  assert.equal(controller.getSnapshot().projects.find(p => p.id === a.id).name, 'Unsaved current name')
+  assert.equal(controller.getSnapshot().dirty, true)
+  assert.equal(controller.getSnapshot().canUndo, true)
+  assert.equal(controller.getSnapshot().projectFolders.projectParents[a.id], folder.id)
+
+  const previousRevision = controller.getSnapshot().projectFolders.revision
+  await store.organizeProjects({ action: 'rename', id: folder.id, name: 'Other tab rename', expectedRevision: previousRevision })
+  await assert.rejects(controller.organizeProjects({ action: 'delete', id: folder.id, mode: 'delete-workflows', expectedRevision: previousRevision }), /another tab/)
+  assert.equal(controller.getSnapshot().project.id, a.id)
+  assert.equal(controller.getSnapshot().phase, 'ready')
+  assert.equal(controller.getSnapshot().projectFolders.revision, previousRevision + 1)
+
+  await controller.organizeProjects({ action: 'delete', id: folder.id, mode: 'delete-workflows', expectedRevision: controller.getSnapshot().projectFolders.revision })
+  assert.equal(controller.getSnapshot().project.id, b.id)
+  assert.equal(sessions.current, b.sessionId)
+  assert.equal(controller.getSnapshot().dirty, false)
+  assert.equal(controller.getSnapshot().canUndo, false)
+  assert.equal(controller.getSnapshot().canRedo, false)
+  assert.deepEqual(controller.getSnapshot().projects.map(p => p.id), [b.id])
+  await assert.rejects(store.getProject(a.id), { code: 'video-director/project-not-found' })
+})
+
+test('creating a workflow inside a folder switches to it, preserves the previous draft, and publishes placement', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'vd-controller-create-in-folder-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const store = new ProjectStore(root, 1024 * 1024); await store.init()
+  const previous = await store.createProject({ name: 'Previous', sessionId: 'folder-previous' })
+  const host = createDirectorRpc({ store, providers: { publicCatalog: () => [] }, nodes: { list: () => [] }, workflows: { list: () => [] } })
+  const sessions = { current: previous.sessionId, byId: { [previous.sessionId]: { id: previous.sessionId } } }
+  const Controller = await DirectorController()
+  const controller = new Controller({
+    sessions: { list: { getSnapshot: () => sessions, subscribe: () => () => {} },
+      binding: () => ({ session: { getSnapshot: () => ({}), rename: async title => ({ ok: true, value: { title, seq: 1 } }) } }),
+      open: id => { sessions.current = id }, create: async () => { const id = 'folder-new-session'; sessions.byId[id] = { id }; return id } },
+    connection: { rpc: { call: (_channel, endpoint, payload) => host(endpoint, payload) } },
+  })
+  t.after(() => controller.dispose())
+  await controller.start()
+  controller.renameProject('Previous unsaved edit')
+  await controller.organizeProjects({ action: 'create', name: 'New scenes', parentId: null, expectedRevision: controller.getSnapshot().projectFolders.revision })
+  const folder = controller.getSnapshot().projectFolders.folders.find(row => row.name === 'New scenes')
+  await controller.createProject('New workflow', { parentId: folder.id, expectedRevision: controller.getSnapshot().projectFolders.revision })
+  const snapshot = controller.getSnapshot()
+  assert.equal(snapshot.project.name, 'New workflow')
+  assert.equal(snapshot.dirty, true)
+  assert.equal(snapshot.projectFolders.projectParents[snapshot.project.id], folder.id)
+  assert.equal(store.folders.snapshot().projectParents[snapshot.project.id], folder.id)
+  assert.equal((await store.getProject(previous.id)).draft.name, 'Previous unsaved edit')
+  assert.equal(sessions.current, snapshot.project.sessionId)
+  assert.equal(snapshot.canUndo, false)
+
+  await controller.organizeProjects({ action: 'batch-delete', folderIds: [folder.id], projectIds: [snapshot.project.id], mode: 'keep-workflows', expectedRevision: snapshot.projectFolders.revision })
+  assert.equal(controller.getSnapshot().project.id, previous.id)
+  assert.equal(controller.getSnapshot().project.name, 'Previous unsaved edit')
+  assert.equal(controller.getSnapshot().dirty, true)
 })

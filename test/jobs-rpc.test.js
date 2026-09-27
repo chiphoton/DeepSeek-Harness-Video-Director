@@ -63,8 +63,10 @@ test('submitted vd-run snapshots persist independently of canvas saves and canno
     nodeIds: ['original-node'], startedAt: project.createdAt }
   const snapshot = { name: project.name, graph: project.graph, settings: project.settings }
   let result = await rpc('vd-runs/save', { projectId: project.id, run, snapshot })
-  assert.equal(result.ok, true)
-  assert.equal('snapshot' in result.value.run, false)
+  assert.equal(result.ok, false, 'stale browser schedulers must refresh instead of reserving a slot')
+  assert.match(result.error.message, /Refresh Video Director/)
+  const stored = await store.saveVdRun(project.id, run, snapshot)
+  assert.equal('snapshot' in stored, false)
   await assert.rejects(store.deleteProject(project.id), error => {
     assert.equal(error.code, 'video-director/project-busy')
     assert.deepEqual(error.details.activeRunIds, [run.id])
@@ -1094,7 +1096,7 @@ test('Director RPC routes mixed reference media by type and enforces the R2V slo
     { portId: 'reference', mediaKind: 'audio', assetId: audioTwo.id },
   ])
   assert.equal(result.ok, true)
-  const references = queued[0].bindings.filter(binding => binding.referenceKind !== undefined)
+  const references = queued[0].bindings.filter(binding => binding.referenceKind !== undefined && binding.assetId !== undefined)
   assert.deepEqual(references.map(binding => [binding.nodeId, binding.referenceKind, binding.portIndex, binding.assetId]), [
     ['137', 'image', 0, imageOne.id],
     ['139', 'image', 1, imageTwo.id],
@@ -1108,10 +1110,31 @@ test('Director RPC routes mixed reference media by type and enforces the R2V slo
     { portId: 'reference', mediaKind: 'image', assetId: imageTwo.id },
     { portId: 'reference', mediaKind: 'image', assetId: imageThree.id },
   ])
-  assert.equal(result.ok, false)
-  assert.equal(result.error.code, 'video-director/port-cardinality-invalid')
-  assert.match(result.error.message, /at most 2 image/i)
-  assert.equal(queued.length, 1)
+  assert.equal(result.ok, true)
+  assert.equal(queued[1].bindings.find(binding => binding.referenceKind === 'image' && binding.portIndex === 2).assetId, imageThree.id)
+
+  const media = (mediaKind, asset, count) => Array.from({ length: count }, () => ({ portId: 'reference', mediaKind, assetId: asset.id }))
+  result = await start([...media('image', imageOne, 9), ...media('video', videoOne, 3)])
+  assert.equal(result.ok, true)
+  assert.equal(queued[2].bindings.filter(binding => binding.assetId).length, 12)
+  assert.equal(queued[2].bindings.find(binding => binding.nodeId === 'r2v_image_8').assetId, imageOne.id)
+  assert.equal(queued[2].bindings.find(binding => binding.nodeId === 'r2v_video_2').assetId, videoOne.id)
+
+  result = await start([...media('image', imageTwo, 6), ...media('video', videoOne, 3), ...media('audio', audioOne, 3)])
+  assert.equal(result.ok, true)
+  assert.equal(queued[3].bindings.find(binding => binding.nodeId === 'r2v_audio_2').assetId, audioOne.id)
+  for (const [inputs, message] of [
+    [media('image', imageOne, 10), /at most 9 image/i],
+    [media('video', videoOne, 4), /at most 3 video/i],
+    [media('audio', audioOne, 4), /at most 3 audio/i],
+    [[...media('image', imageOne, 9), ...media('video', videoOne, 3), ...media('audio', audioOne, 1)], /at most 12/i],
+  ]) {
+    result = await start(inputs)
+    assert.equal(result.ok, false)
+    assert.equal(result.error.code, 'video-director/port-cardinality-invalid')
+    assert.match(result.error.message, message)
+  }
+  assert.equal(queued.length, 4)
 })
 
 test('Director RPC treats pinned text fields as single typed input ports with literal fallback', async (t) => {
@@ -1438,7 +1461,11 @@ test('Director RPC queues an unsaved typed node from one immutable execution sna
     },
   }
 
-  let result = await rpc('jobs/start', {
+  const staleBrowser = await rpc('jobs/start', envelope)
+  assert.match(staleBrowser.error.message, /Refresh Video Director/)
+  // The Host sends grouped node envelopes through the same validation boundary.
+  const internal = (endpoint, payload) => rpc(endpoint, payload, undefined, true)
+  let result = await internal('jobs/start', {
     ...envelope,
     snapshot: { ...envelope.snapshot, nodeDigest: '0'.repeat(64) },
   })
@@ -1446,7 +1473,7 @@ test('Director RPC queues an unsaved typed node from one immutable execution sna
   assert.equal(result.error.code, 'video-director/invalid-input')
   assert.match(result.error.message, /nodeDigest does not match/i)
 
-  result = await rpc('jobs/start', {
+  result = await internal('jobs/start', {
     ...envelope,
     snapshot: {
       ...envelope.snapshot,
@@ -1456,7 +1483,7 @@ test('Director RPC queues an unsaved typed node from one immutable execution sna
   assert.equal(result.ok, false)
   assert.match(result.error.message, /must be at most 1/i)
 
-  result = await rpc('jobs/start', envelope)
+  result = await internal('jobs/start', envelope)
   assert.equal(result.ok, true)
   assert.equal(result.value.job.status, 'queued')
   assert.deepEqual({

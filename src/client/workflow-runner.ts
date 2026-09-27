@@ -22,6 +22,7 @@ const EXECUTABLE_KINDS = new Set<DirectorNodeData['kind']>([
   'image-edit',
   'video-generation',
   'audio-generation',
+  'video-trim', 'video-crop', 'video-extract-frame',
   'vram-trigger',
   'ollama-eject',
   'comfyui-clear',
@@ -140,7 +141,7 @@ export function planVdRun(
     const node = nodesById.get(id)
     return node !== undefined && node.data.frozen !== true && isExecutableVdNodeKind(node.data.kind)
   })
-  if (runnableIds.length === 0 && frozenNodeIds.length === 0) throw new Error('This vd-run contains no executable vd-nodes.')
+  if (runnableIds.length === 0 && frozenNodeIds.length === 0 && ![...scope].some(id => nodesById.get(id)?.data.kind === 'batch-output')) throw new Error('This vd-run contains no executable vd-nodes.')
   const runnable = new Set(runnableIds)
   const dependencies = new Map(runnableIds.map(id => [id, new Set<string>()]))
   for (const target of runnableIds) {

@@ -18,7 +18,7 @@ async function ports() {
     target: 'es2022',
     write: false,
   })
-  const source = Buffer.from(result.outputFiles[0].contents).toString('base64')
+  const source = Buffer.from(result.outputFiles[0].text + '\n//# sourceURL=client-ports-tests.js').toString('base64')
   portsModule = await import(`data:text/javascript;base64,${source}`)
   return portsModule
 }
@@ -159,6 +159,30 @@ test('reference-to-video rejects connections beyond each media-type slot limit',
   assert.throws(() => resolveConnectionPorts(graph, [definition], {
     source: 'three', sourceHandle: 'out', target: 'target', targetHandle: 'in',
   }), /at most 2 image/i)
+})
+
+test('H3 accepts twelve mixed connections and rejects a thirteenth in both connection and execution validation', async () => {
+  const { resolveConnectionPorts, validateNodeInputPorts } = await ports()
+  const definition = { type: 'test.h3', version: '1.0.0', behavior: 'workflow', fields: [], inputs: [{
+    id: 'reference', label: 'Reference', types: ['image', 'audio', 'video'], multiple: true,
+    maxByType: { image: 9, video: 3, audio: 3 }, maxItems: 12,
+  }], outputs: [{ id: 'result', label: 'Result', types: ['video'] }] }
+  const inputs = [...Array(9).fill('image'), ...Array(3).fill('video'), 'audio'].map((kind, i) => ({
+    id: `input-${i}`, position: { x: 0, y: 0 }, data: { kind: `load-${kind}`, mediaKind: kind },
+  }))
+  const graph = { nodes: [...inputs, { id: 'target', position: { x: 300, y: 0 }, data: {
+    kind: 'video-generation', nodeType: definition.type, nodeVersion: definition.version,
+    workflowId: 'builtin-minimax-h3-reference-to-video-turbo',
+  } }], edges: [], viewport: { x: 0, y: 0, zoom: 1 } }
+  const edge = source => ({ id: `${source}-target`, source, target: 'target', sourceHandle: 'out', targetHandle: 'in', data: { targetPortId: 'reference' } })
+  for (const input of inputs.slice(0, 12)) {
+    assert.equal(resolveConnectionPorts(graph, [definition], edge(input.id)).targetPortId, 'reference')
+    graph.edges.push(edge(input.id))
+  }
+  validateNodeInputPorts(graph, [definition], 'target')
+  assert.throws(() => resolveConnectionPorts(graph, [definition], edge(inputs[12].id)), /at most 12/)
+  graph.edges.push(edge(inputs[12].id))
+  assert.throws(() => validateNodeInputPorts(graph, [definition], 'target'), /at most 12/)
 })
 
 test('parameter inputs expose only eligible text fields and resolve connected values over local fallbacks', async () => {

@@ -52,6 +52,7 @@ export async function createDirectorHost(config, options = {}) {
       const jobs = new JobManager(store, providers, { concurrency: config.jobConcurrency })
       await jobs.recover()
       const rpc = createDirectorRpc({ store, providers, jobs, registerAsset, workflows, nodes, providerSettings })
+      await jobs.workflowScheduler.recover()
       for (const asset of store.listAssets()) await registerAsset(asset)
       return { store, providers, jobs, workflows, nodes, codexModels, rpc }
     } catch (error) {
@@ -87,6 +88,7 @@ export async function createDirectorHost(config, options = {}) {
         throw storageError(`Data was copied to ${dataDir}, but Video Director could not activate it. The original folder is still in use. ${error.message}`)
       }
       await runtime.codexModels.close()
+      await runtime.jobs.workflowScheduler.close()
       runtime = next
       // Settings may have changed through Harness while the copy was in progress.
       providerSettings.refresh()
@@ -147,6 +149,7 @@ export async function createDirectorHost(config, options = {}) {
       await movePromise?.catch(() => {})
       await runtime.codexModels.close()
       await Promise.allSettled([...inFlight])
+      await runtime.jobs.workflowScheduler.close()
     },
   }
 }
