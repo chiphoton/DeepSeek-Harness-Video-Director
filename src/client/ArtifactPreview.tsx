@@ -7,6 +7,7 @@ import type { AssetRef, VdNodeResult } from './types'
 import { useModalScrollLock } from './modal-scroll-lock'
 import { AudioPreviewPlayer } from './AudioPreviewPlayer'
 import { MediaEditor } from './MediaEditor'
+import { VideoThumbnail } from './VideoThumbnail'
 
 interface VideoProperties {
   width?: number
@@ -57,7 +58,7 @@ function ThumbnailContent({ artifact }: { artifact: PreviewArtifact }): ReactNod
   if (artifact.kind === 'video' && artifact.asset !== undefined) {
     return (
       <span className="vd-artifact-video-thumbnail">
-        <video src={artifact.asset.url} aria-hidden="true" muted playsInline preload="metadata" />
+        <VideoThumbnail src={artifact.asset.url} />
         <i aria-hidden="true">▶</i>
       </span>
     )
@@ -170,7 +171,7 @@ export function ArtifactPreviewDialog(props: {
         setPropertyError(error instanceof Error ? error.message : String(error))
       })
     return () => controller.abort()
-  }, [asset, artifact.kind])
+  }, [asset?.id, asset?.url, asset?.sha256, asset?.mimeType, artifact.kind])
 
   useEffect(() => {
     if (contextMenu === null) return

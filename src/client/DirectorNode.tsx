@@ -1,4 +1,5 @@
 import { BatchInputBody, BatchOutputBody } from './BatchNodes'
+import { VideoThumbnail } from './VideoThumbnail'
 import { inputFileKind } from './input-files'
 import { useInputFileDrop } from './use-input-file-drop'
 import { t, useLanguage } from './i18n'
@@ -615,7 +616,7 @@ function ReferenceThumbnail(props: {
     return <img src={reference.asset.url} alt="" draggable={false} loading="lazy" />
   }
   if (reference.asset !== undefined && reference.kind === 'video') {
-    return <video src={reference.asset.url} aria-hidden="true" muted playsInline preload="metadata" />
+    return <VideoThumbnail src={reference.asset.url} />
   }
   if (reference.kind === 'text') {
     return (

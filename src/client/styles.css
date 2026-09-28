@@ -1078,6 +1078,8 @@
 .vd-job-toolbar .vd-job-filter select { height: 34px; padding: 4px 28px 4px 10px; background-color: #141d2b; color: var(--vd-text); font-size: 13px; color-scheme: dark; }
 .vd-job-toolbar .vd-job-error { margin: 0 16px 12px; }
 .vd-job-list { display: flex; flex-direction: column; gap: 8px; padding: 12px; scrollbar-gutter: stable; }
+.vd-job-pagination { flex: 0 0 auto; padding: 8px; text-align: center; color: var(--vd-muted); font-size: 12px; }
+.vd-job-pagination:empty { display: none; }
 .vd-job-card { display: grid; grid-template-columns: 64px minmax(0, 1fr) 28px; gap: 12px; align-items: center; flex: 0 0 auto; padding: 10px; min-height: 86px; border: 1px solid #8294b321; border-radius: 12px; background: #ffffff03; }
 .vd-job-card:hover { background: #879bc90b; border-color: #8294b342; }
 .vd-job-cover { position: relative; height: 64px; width: 64px; overflow: hidden; border-radius: 8px; background: #050b13; }

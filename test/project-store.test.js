@@ -235,6 +235,20 @@ test('ProjectStore serves full, partial, HEAD, and invalid asset ranges', async 
   assert.equal(partial.headers.get('content-length'), '4')
   assert.equal(await partial.text(), '2345')
 
+  for (const [range, expectedRange, body] of [
+    ['bytes=0-1', 'bytes 0-1/10', '01'],
+    ['bytes=2-9999999', 'bytes 2-9/10', '23456789'],
+    ['bytes=5-', 'bytes 5-9/10', '56789'],
+    ['bytes=-3', 'bytes 7-9/10', '789'],
+    ['bytes=-99', 'bytes 0-9/10', '0123456789'],
+  ]) {
+    const response = await store.assetResponse(asset.id, new Request('http://local.test/asset', { headers: { Range: range } }))
+    assert.equal(response.status, 206, range)
+    assert.equal(response.headers.get('content-range'), expectedRange)
+    assert.equal(response.headers.get('content-length'), String(body.length))
+    assert.equal(await response.text(), body)
+  }
+
   const head = await store.assetResponse(asset.id, new Request('http://local.test/asset', {
     method: 'HEAD',
     headers: { Range: 'bytes=0-0' },

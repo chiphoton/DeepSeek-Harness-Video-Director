@@ -1,6 +1,7 @@
 import { DirectorInputError, finiteNumber, jsonValue, record, string, uuid } from './validation.js'
 import { editMedia } from './media-editor.js'
 import { WorkflowScheduler } from './workflow-scheduler.js'
+import { compareJobHistory, groupJobHistory, pageJobHistory } from './job-history.js'
 
 // Boundary vocabulary: workflows/* manages registered comfyui-workflows;
 // nodes/* manages vd-node definitions; projects/* owns the canvas vd-workflow.
@@ -20,6 +21,21 @@ const DIRECT_PARAMETER_INPUT_OPERATIONS = new Set([
 
 function success(value) {
   return { ok: true, value }
+}
+
+function observation(input) {
+  if (input === undefined) return null
+  const value = record(input, 'observe')
+  if (!Array.isArray(value.ids)) throw new DirectorInputError('observe.ids must be an array')
+  return { ids: new Set(value.ids.map(id => uuid(id, 'observe.id'))),
+    projectId: value.projectId === undefined ? undefined : uuid(value.projectId, 'observe.projectId') }
+}
+
+function historyCursor(input) {
+  if (input === undefined) return undefined
+  const value = record(input, 'cursor')
+  return { submitted: string(value.submitted, 'cursor.submitted', { min: 1, max: 40 }),
+    id: string(value.id, 'cursor.id', { min: 1, max: 64 }) }
 }
 
 function failure(error) {
@@ -593,10 +609,14 @@ export function createDirectorRpc(options) {
           }
           return success({ cancelled: true })
         }
-        case 'vd-runs/list':
-          return success({ runs: input.projectId === undefined
+        case 'vd-runs/list': {
+          const observe = observation(input.observe)
+          const runs = input.projectId === undefined
             ? (await Promise.all((await store.listProjects()).map(project => store.listVdRuns(project.id)))).flat()
-            : await store.listVdRuns(uuid(input.projectId, 'projectId')) })
+            : await store.listVdRuns(uuid(input.projectId, 'projectId'))
+          return success({ runs: observe ? runs.filter(run => ['queued', 'running'].includes(run.status)
+            || observe.ids.has(run.id) || (run.projectId === observe.projectId && run.kind === 'batch')) : runs })
+        }
         case 'vd-runs/delete': {
           const projectId = uuid(input.projectId, 'projectId')
           const { snapshot: _snapshot, ...run } = await store.getVdRun(projectId, uuid(input.runId, 'runId'))
@@ -908,10 +928,29 @@ export function createDirectorRpc(options) {
             allowTransientNode: snapshotRun !== undefined,
           }) })
         }
+        case 'jobs/history': {
+          const limit = input.limit ?? 10
+          if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10) throw new DirectorInputError('history limit must be between 1 and 10')
+          const before = historyCursor(input.before)
+          const summaries = input.projectId === undefined ? await store.listProjects() : [{ id: uuid(input.projectId, 'projectId') }]
+          const records = await Promise.all(summaries.map(async summary => {
+            const [runs, project] = await Promise.all([store.listVdRuns(summary.id), store.getProject(summary.id)])
+            return groupJobHistory(runs, project.jobs)
+          }))
+          const page = pageJobHistory(records.flat().sort(compareJobHistory), { before, limit })
+          // Receipts are loaded only by Inspect/Download. Modern run summaries
+          // already contain their cover, artifact count and execution timestamps.
+          return success({ ...page, groups: await Promise.all(page.groups.map(async group => group.run?.previewResult
+            ? { ...group, jobs: [] }
+            : { ...group, jobs: await Promise.all(group.jobs.map(job => ['queued', 'running'].includes(job.status) ? jobs.get(group.projectId, job.id) : job)) })) })
+        }
         case 'jobs/list': {
+          const observe = observation(input.observe)
           const summaries = input.projectId === undefined ? await store.listProjects() : [{ id: uuid(input.projectId, 'projectId') }]
           const all = await Promise.all(summaries.map(project => store.getProject(project.id)))
-          const records = await Promise.all(all.flatMap(project => project.jobs.map(job => jobs.get(project.id, job.id))))
+          const records = await Promise.all(all.flatMap(project => project.jobs
+            .filter(job => !observe || project.id === observe.projectId || observe.ids.has(job.id) || ['queued', 'running'].includes(job.status))
+            .map(job => jobs.get(project.id, job.id))))
           return success({ jobs: records.sort((a, b) => (a.runSequence ?? 0) - (b.runSequence ?? 0)) })
         }
         case 'jobs/get':

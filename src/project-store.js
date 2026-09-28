@@ -734,21 +734,23 @@ export class ProjectStore {
         start = Number(match[1])
         end = match[2] === '' ? info.size - 1 : Number(match[2])
       }
-      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || end >= info.size) {
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start >= info.size || end < start) {
         return new Response('range not satisfiable', {
           status: 416,
           headers: { 'Content-Range': `bytes */${String(info.size)}` },
         })
       }
+      // RFC 9110 §14.1.2: a satisfiable range may extend beyond EOF.
+      end = Math.min(end, info.size - 1)
       headers.set('Content-Length', String(end - start + 1))
       headers.set('Content-Range', `bytes ${String(start)}-${String(end)}/${String(info.size)}`)
       if (request.method === 'HEAD') return new Response(null, { status: 206, headers })
-      const stream = Readable.toWeb(createReadStream(filePath, { start, end }))
+      const stream = Readable.toWeb(createReadStream(filePath, { start, end, signal: request.signal }))
       return new Response(stream, { status: 206, headers })
     }
     headers.set('Content-Length', String(info.size))
     if (request.method === 'HEAD') return new Response(null, { status: 200, headers })
-    return new Response(Readable.toWeb(createReadStream(filePath)), { status: 200, headers })
+    return new Response(Readable.toWeb(createReadStream(filePath, { signal: request.signal })), { status: 200, headers })
   }
 
   async #writeProject(project) {

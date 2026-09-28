@@ -503,6 +503,24 @@ export type VdNodeResult =
   | { kind: 'assets'; assets: AssetRef[]; providerId: string; seed?: number; promptId?: string; frameCount?: number; actualDuration?: number; experimentalDuration?: boolean }
   | { kind: 'mcp-result'; result: unknown; providerId: string; seed?: number; promptId?: string; frameCount?: number; actualDuration?: number; experimentalDuration?: boolean }
 
+export interface JobHistoryCursor { submitted: string; id: string }
+export interface JobHistoryGroup {
+  id: string
+  projectId: string
+  run?: VdRun
+  jobs: DirectorJob[]
+  submitted: string
+}
+export interface JobHistoryPage {
+  groups: JobHistoryGroup[]
+  nextCursor: JobHistoryCursor | null
+}
+export interface JobHistoryState extends JobHistoryPage {
+  initialized: boolean
+  loading: boolean
+  error: string | null
+}
+
 export interface DirectorSnapshot {
   open: boolean
   phase: 'idle' | 'loading' | 'ready' | 'error'
@@ -528,6 +546,8 @@ export interface DirectorSnapshot {
   /** Existing snapshot key for grouped vd-runs. */
   jobs: DirectorJob[]
   workflowRuns: VdRun[]
+  /** Per-filter pages held only by this tab's controller, never persisted. */
+  jobHistory: Record<string, JobHistoryState>
   batchCases: Record<string, BatchCase[]>
 }
 
