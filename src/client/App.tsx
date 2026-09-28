@@ -1,8 +1,13 @@
+import { downloadBlob } from './job-artifacts'
+import { ChatPromptEditor, type ChatPromptEditorHandle } from './ChatPromptEditor'
+import { ChatAttachmentPreview } from './ChatAttachmentPreview'
+import { CHAT_NODE_MIME, chatDroppedFiles, updateChatAliases, type ChatAttachment } from './chat-attachments'
 import { JobDrawer } from './JobDrawer'
 export { JobDrawer } from './JobDrawer'
 import { batchFrozenWarnings } from './batch'
 import { INPUT_FILE_ACCEPTS, inputFileKind, type InputFileKind } from './input-files'
 import { t, useLanguage } from './i18n'
+import { NumberInput } from './NumberInput'
 import {
   Background,
   BackgroundVariant,
@@ -76,6 +81,7 @@ import {
 } from './ports'
 import type {
   AssetRef,
+  InputAssetQuery,
   DirectorEdge,
   DirectorJob,
   DirectorNode,
@@ -236,6 +242,8 @@ function TopBar({
     const closeOnOutsidePointer = (event: PointerEvent): void => {
       const target = event.target
       if (target instanceof Node && runMenuRef.current?.contains(target)) return
+      // Closing the menu unmounts its input before the browser can blur it.
+      runMenuRef.current?.querySelector<HTMLInputElement>('input:focus')?.blur()
       setRunMenuOpen(false)
     }
     const closeOnEscape = (event: globalThis.KeyboardEvent): void => {
@@ -434,13 +442,13 @@ function TopBar({
             <div className="vd-run-menu" role="menu" aria-label={t("运行工作流")}>
               {hasBatchInput ? <p>{t('Case range is configured on Batch Input.')}</p> : <label className="vd-batch-control">
                 <span>{t("批次数")}</span>
-                <input
-                  type="number"
+                <NumberInput
+                  integer
                   min={1}
                   max={20}
                   step={1}
                   value={batchSize}
-                  onChange={event => setBatchSize(Math.max(1, Math.min(20, Number(event.target.value) || 1)))}
+                  onValueCommit={setBatchSize}
                 />
                 <small>{t("固定 seed 每批递增")}</small>
               </label>}
@@ -529,18 +537,38 @@ function ChatPanel({
   providers,
   projectName,
   collapsed,
+  referenceRequest,
+  onHighlightNode,
 }: {
   chat: ProjectChatSource
   director: DirectorController
   providers: DirectorSnapshot['providers']
   projectName: string
   collapsed: boolean
+  referenceRequest: { nodeId: string; nonce: number } | null
+  onHighlightNode(id: string | null): void
 }) {
   useLanguage()
   const snapshot = useSource(chat)
   const [text, setText] = useState('')
-  const [images, setImages] = useState<Array<{ id: string; file: File; previewUrl: string }>>([])
+  const registry = chat.attachments()
+  const attachments = useSource(registry)
+  const previousAttachments = useRef(attachments)
+  useEffect(() => {
+    const previous = previousAttachments.current
+    previousAttachments.current = attachments
+    setText(value => updateChatAliases(value, previous, attachments))
+  }, [attachments])
+  const canvas = useSource(director)
+  const nodes = canvas.project?.graph.nodes ?? []
+  const [preview, setPreview] = useState<ChatAttachment | null>(null)
+  const [uploadingAttachments, setUploadingAttachments] = useState(false)
+  const [nodeMenuOpen, setNodeMenuOpen] = useState(false)
+  const promptRef = useRef<ChatPromptEditorHandle>(null)
+  const videoInputRef = useRef<HTMLInputElement>(null)
+  const folderInputRef = useRef<HTMLInputElement>(null)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
+  const [draggingReferences, setDraggingReferences] = useState(false)
   const [inputMenuOpen, setInputMenuOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [preferences, setPreferences] = useState(loadChatInputPreferences)
@@ -563,11 +591,8 @@ function ChatPanel({
   const transcriptionInFlightRef = useRef(false)
   const sessionIdRef = useRef(snapshot.sessionId)
   sessionIdRef.current = snapshot.sessionId
-  const imagesRef = useRef(images)
-  imagesRef.current = images
   useEffect(() => { bottomRef.current?.scrollIntoView({ block: 'end' }) }, [snapshot.messages, snapshot.running])
   useEffect(() => () => {
-    for (const image of imagesRef.current) URL.revokeObjectURL(image.previewUrl)
     if (recordingTimerRef.current !== null) clearTimeout(recordingTimerRef.current)
     const recorder = mediaRecorderRef.current
     if (recorder !== null && recorder.state !== 'inactive') {
@@ -594,10 +619,9 @@ function ChatPanel({
     setRecording(false)
     setText('')
     setAttachmentError(null)
-    setImages(current => {
-      for (const image of current) URL.revokeObjectURL(image.previewUrl)
-      return []
-    })
+    setPreview(null)
+    setInputMenuOpen(false)
+    setNodeMenuOpen(false)
   }, [snapshot.sessionId])
 
   const modelChoices = snapshot.models.groups.flatMap(group => group.models.map(model => ({
@@ -628,43 +652,44 @@ function ChatPanel({
     })
   }
 
-  const addImages = (files: Iterable<File>): void => {
-    const incoming = [...files]
-    const accepted = incoming.filter(isChatImage)
-    setAttachmentError(accepted.length === incoming.length
-      ? null
-      : t("仅支持 PNG、JPEG、WebP 和 GIF 图片。"))
-    if (accepted.length === 0) return
-    setImages(current => [
-      ...current,
-      ...accepted.map(file => ({ id: crypto.randomUUID(), file, previewUrl: URL.createObjectURL(file) })),
-    ])
-  }
-
-  const removeImage = (id: string): void => {
-    setImages(current => current.filter(image => {
-      if (image.id !== id) return true
-      URL.revokeObjectURL(image.previewUrl)
-      return false
-    }))
-  }
-
-  const send = async () => {
-    const value = text.trim()
-    if ((value === '' && images.length === 0) || snapshot.sending || transcribing) return
-    const outgoingImages = images
-    setText('')
-    setImages([])
+  const showAttachmentError = (error: unknown): void => setAttachmentError(error instanceof Error ? error.message : String(error))
+  useEffect(() => { void registry.load().catch(showAttachmentError) }, [registry])
+  useEffect(() => director.watchVdRuns(), [director])
+  useEffect(() => { if (!inputMenuOpen) { setNodeMenuOpen(false); onHighlightNode(null) } }, [inputMenuOpen, onHighlightNode])
+  useEffect(() => () => onHighlightNode(null), [onHighlightNode])
+  const addFiles = async (files: Iterable<File>, directory = false): Promise<void> => {
     setAttachmentError(null)
     try {
-      await chat.send(value, outgoingImages.map(image => image.file))
-      for (const image of outgoingImages) URL.revokeObjectURL(image.previewUrl)
-    } catch {
-      setText(current => current === '' ? value : `${value}\n${current}`)
-      setImages(current => [...outgoingImages, ...current])
-    }
+      if (directory) await registry.addFolder([...files])
+      else for (const file of files) await registry.addFile(file)
+    } catch (error) { showAttachmentError(error) }
   }
-  const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+  const addNode = async (nodeId: string): Promise<void> => {
+    const node = nodes.find(node => node.id === nodeId)
+    if (!node) return
+    try {
+      await director.prepareChatContext()
+      const item = await registry.addNode(node)
+      promptRef.current?.insert(item.alias)
+      setInputMenuOpen(false); onHighlightNode(null)
+    } catch (error) { showAttachmentError(error) }
+  }
+  useEffect(() => { if (referenceRequest) void addNode(referenceRequest.nodeId) }, [referenceRequest])
+  const removeAttachment = async (item: ChatAttachment): Promise<void> => {
+    try {
+      await registry.remove(item.id)
+      if (preview?.id === item.id) setPreview(null)
+    } catch (error) { showAttachmentError(error) }
+  }
+  const send = async () => {
+    const value = text.trim()
+    if ((value === '' && !attachments.some(item => !item.sent)) || snapshot.sending || transcribing || uploadingAttachments) return
+    setUploadingAttachments(true); setAttachmentError(null)
+    try { await chat.sendAttachments(value); setText(current => current === text ? '' : current) }
+    catch (error) { showAttachmentError(error) }
+    finally { setUploadingAttachments(false) }
+  }
+  const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.nativeEvent.isComposing || event.key !== 'Enter') return
     const shouldSend = preferences.enterInsertsNewline ? event.altKey : !event.shiftKey
     if (shouldSend) {
@@ -715,27 +740,25 @@ function ChatPanel({
     }
   }
 
-  const addFiles = (files: Iterable<File>): void => {
-    const incoming = [...files]
-    const imageFiles = incoming.filter(isChatImage)
-    const audioFiles = incoming.filter(file => !isChatImage(file) && isChatAudio(file))
-    const unsupported = incoming.length - imageFiles.length - audioFiles.length
-    if (imageFiles.length > 0) addImages(imageFiles)
-    if (unsupported > 0) setAttachmentError(t("只支持 PNG、JPEG、WebP、GIF 图片，以及 FLAC、MP3、MP4、M4A、OGG、WAV、WebM 音频。"))
-    if (audioFiles.length > 0) void transcribeFiles(audioFiles)
+  const acceptsReferenceDrop = (event: DragEvent<HTMLElement>): boolean =>
+    Array.from(event.dataTransfer.types).some(type => type === 'Files' || type === CHAT_NODE_MIME)
+      || event.dataTransfer.files.length > 0
+  const dragReferences = (event: DragEvent<HTMLElement>): void => {
+    if (!acceptsReferenceDrop(event)) return
+    // The native DSH composer also listens on document; it must not reject our drop.
+    event.preventDefault(); event.stopPropagation()
+    event.dataTransfer.dropEffect = 'copy'
+    setDraggingReferences(true)
   }
-
-  const paste = (event: ClipboardEvent<HTMLTextAreaElement>): void => {
-    const files = [...event.clipboardData.files]
-    if (files.length === 0) return
-    event.preventDefault()
-    addFiles(files)
-  }
-  const dropFiles = (event: DragEvent<HTMLDivElement>): void => {
-    const files = [...event.dataTransfer.files]
-    if (files.length === 0) return
-    event.preventDefault()
-    addFiles(files)
+  const dropFiles = (event: DragEvent<HTMLElement>): void => {
+    const nodeId = event.dataTransfer.getData(CHAT_NODE_MIME)
+    setDraggingReferences(false)
+    if (nodeId) { event.preventDefault(); event.stopPropagation(); void addNode(nodeId); return }
+    if (!acceptsReferenceDrop(event)) return
+    event.preventDefault(); event.stopPropagation()
+    void chatDroppedFiles(event.dataTransfer).then(async groups => {
+      for (const group of groups) await addFiles(group.files, group.directory)
+    }).catch(showAttachmentError)
   }
 
   const stopRecording = (): void => {
@@ -840,7 +863,13 @@ function ChatPanel({
     }
   }
   return (
-    <aside className="vd-chat-panel" aria-hidden={collapsed}>
+    <aside className={`vd-chat-panel${draggingReferences ? ' vd-chat-drop-active' : ''}`} aria-hidden={collapsed}
+      onDragEnter={dragReferences} onDragOver={dragReferences} onDrop={dropFiles}
+      onDragLeave={event => {
+        if (!acceptsReferenceDrop(event)) return
+        event.stopPropagation()
+        if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDraggingReferences(false)
+      }} onDragEnd={() => setDraggingReferences(false)}>
       <div className="vd-chat-context">
         <span>{t("上下文已绑定")}</span>
         <strong>{projectName}</strong>
@@ -849,7 +878,7 @@ function ChatPanel({
         {snapshot.messages.length === 0 ? (
           <div className="vd-chat-placeholder">
             <span aria-hidden>⌁</span>
-            <p>{t("和 DeepSeek 一起编排当前画布。连线、素材与任务状态会作为工程上下文发送。")}</p>
+            <p>{t("Plan, build and refine this workflow. The agent queries canvas details as needed.")}</p>
           </div>
         ) : snapshot.messages.map(message => (
           <article key={message.id} className={`vd-message vd-message-${message.role}`}>
@@ -863,30 +892,24 @@ function ChatPanel({
       {snapshot.error !== null ? (
         <button type="button" className="vd-chat-error" onClick={chat.clearError}>{snapshot.error}</button>
       ) : null}
-      <div
-        className="vd-chat-composer"
-        onDragOver={event => { if (event.dataTransfer.types.includes('Files')) event.preventDefault() }}
-        onDrop={dropFiles}
-      >
-        {images.length > 0 ? (
-          <div className="vd-chat-images" aria-label={t("待发送图片")}>
-            {images.map(image => (
-              <span key={image.id} className="vd-chat-image">
-                <img src={image.previewUrl} alt={image.file.name || t("待发送图片")} />
-                <button type="button" className="vd-close-icon-button" aria-label={t("移除 {0}", image.file.name || t("图片"))} onClick={() => removeImage(image.id)}><CloseIcon /></button>
-              </span>
-            ))}
+      <div className="vd-chat-composer">
+        {attachments.length > 0 ? <section className="vd-chat-references" aria-label={t('Chat attachments')}>
+          <header><strong>{t('References')}</strong><span>{attachments.length}</span></header>
+          <div className="vd-chat-attachments">
+          {attachments.map(item => <div key={item.id} className="vd-chat-attachment">
+            <button className="vd-chat-attachment-insert" title={`${item.name} · ${t('Insert {0}', item.alias)}`} aria-label={t('Insert {0}', item.alias)} onMouseDown={event => event.preventDefault()} onClick={() => promptRef.current?.insert(item.alias)}>
+              <span className="vd-chat-attachment-thumbnail">{item.kind === 'image' && item.previewUrl ? <img src={item.previewUrl} alt="" loading="lazy" /> : <span className="vd-chat-attachment-symbol" aria-hidden>{item.kind === 'audio' ? '♫' : item.kind === 'video' ? '▶' : item.kind === 'folder' ? '▤' : '◇'}</span>}</span>
+              <strong>{item.alias.slice(1, -1)}</strong>
+            </button>
+            <button className="vd-chat-attachment-preview" aria-label={t('Preview {0}', item.alias)} onClick={() => setPreview(item)}><svg viewBox="0 0 24 24" aria-hidden><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></button>
+            <button className="vd-chat-attachment-remove" aria-label={t('Remove {0}', item.alias)} disabled={uploadingAttachments} onClick={() => void removeAttachment(item)}><CloseIcon /></button>
+          </div>)}
           </div>
-        ) : null}
-        <textarea
-          value={text}
-          rows={3}
-          placeholder={t("询问当前工程，支持粘贴或拖入图片、音频…")}
-          onChange={event => setText(event.target.value)}
-          onKeyDown={keyDown}
-          onPaste={paste}
-        />
-        <span className="vd-chat-context-note">{t("画布上下文自动附带")}</span>
+        </section> : null}
+        <ChatPromptEditor ref={promptRef} value={text} attachments={attachments} onChange={setText} onPreview={setPreview}
+          placeholder={t('Ask about this workflow. Add media, folders or nodes…')} onKeyDown={keyDown} onFiles={files => void addFiles(files)} />
+        <span className="vd-chat-context-note">{t('Canvas summary linked · details on demand')}</span>
+        {uploadingAttachments ? <span className="vd-chat-transcribing">{t('Preparing attachments…')}</span> : null}
         {transcribing ? <span className="vd-chat-transcribing"><i /> {t("正在转写音频…")}</span> : null}
         {attachmentError === null ? null : <span className="vd-chat-attachment-error">{attachmentError}</span>}
         <div className="vd-chat-composer-footer">
@@ -898,7 +921,7 @@ function ChatPanel({
                 aria-label={t("添加多模态输入")}
                 title={t("添加多模态输入")}
                 aria-expanded={inputMenuOpen}
-                disabled={snapshot.sending || transcribing}
+                disabled={snapshot.sending || transcribing || uploadingAttachments}
                 onClick={() => { setInputMenuOpen(open => !open); setSettingsOpen(false) }}
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
@@ -911,8 +934,17 @@ function ChatPanel({
                   </button>
                   <button type="button" role="menuitem" onClick={() => { setInputMenuOpen(false); audioInputRef.current?.click() }}>
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V5l10-2v13M9 9l10-2M6 21c1.7 0 3-1 3-2.3S7.7 16.5 6 16.5s-3 1-3 2.2S4.3 21 6 21Zm10-2c1.7 0 3-1 3-2.3s-1.3-2.2-3-2.2-3 1-3 2.2S14.3 19 16 19Z" /></svg>
-                    <span><strong>{t("音频")}</strong><small>{t("选择文件并转写到输入框")}</small></span>
+                    <span><strong>{t("音频")}</strong><small>{t("Attach an audio file")}</small></span>
                   </button>
+                  <button type="button" role="menuitem" onClick={() => { setInputMenuOpen(false); videoInputRef.current?.click() }}><span aria-hidden>▶</span><span><strong>{t('Video')}</strong><small>{t('Attach a video file')}</small></span></button>
+                  <button type="button" role="menuitem" onClick={() => { setInputMenuOpen(false); folderInputRef.current?.click() }}><span aria-hidden>▤</span><span><strong>{t('Folder')}</strong><small>{t('Attach files with their folder structure')}</small></span></button>
+                  <div className="vd-chat-node-parent" onMouseEnter={() => setNodeMenuOpen(true)} onMouseLeave={() => { setNodeMenuOpen(false); onHighlightNode(null) }}>
+                    <button type="button" role="menuitem" aria-haspopup="menu" aria-expanded={nodeMenuOpen} onClick={() => setNodeMenuOpen(open => !open)} onKeyDown={event => { if (event.key === 'ArrowRight') setNodeMenuOpen(true) }}><span aria-hidden>◇</span><span><strong>{t('Node')}</strong><small>{t('Reference a node on the canvas')}</small></span><span aria-hidden>›</span></button>
+                    {nodeMenuOpen ? <div className="vd-chat-node-submenu" role="menu" aria-label={t('Canvas nodes')}>
+                      {nodes.map(node => <button key={node.id} type="button" role="menuitem" onMouseEnter={() => onHighlightNode(node.id)} onFocus={() => onHighlightNode(node.id)} onBlur={() => onHighlightNode(null)} onClick={() => void addNode(node.id)}><strong>{node.data.title}</strong><small>{t(node.data.kind)}</small></button>)}
+                      {!nodes.length ? <p>{t('No nodes on this canvas')}</p> : null}
+                    </div> : null}
+                  </div>
                 </div>
               ) : null}
             </div>
@@ -1073,7 +1105,7 @@ function ChatPanel({
               className="vd-chat-send"
               aria-label={snapshot.sending ? t("发送中") : t("发送")}
               title={preferences.enterInsertsNewline ? t("发送（Alt + Enter）") : t("发送（Enter）")}
-              disabled={snapshot.sending || transcribing || (text.trim() === '' && images.length === 0)}
+              disabled={snapshot.sending || transcribing || uploadingAttachments || (text.trim() === '' && !attachments.some(item => !item.sent))}
               onClick={() => { void send() }}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 18-8-8 18-2-8-8-2Zm8 2 4-4" /></svg>
@@ -1087,7 +1119,7 @@ function ChatPanel({
           multiple
           hidden
           onChange={event => {
-            if (event.target.files !== null) addImages(event.target.files)
+            if (event.target.files !== null) void addFiles(event.target.files)
             event.target.value = ''
           }}
         />
@@ -1098,10 +1130,13 @@ function ChatPanel({
           multiple
           hidden
           onChange={event => {
-            if (event.target.files !== null) void transcribeFiles([...event.target.files])
+            if (event.target.files !== null) void addFiles(event.target.files)
             event.target.value = ''
           }}
         />
+        <input ref={videoInputRef} type="file" accept={INPUT_FILE_ACCEPTS.video} multiple hidden onChange={event => { if (event.target.files) void addFiles(event.target.files); event.target.value = '' }} />
+        <input ref={folderInputRef} type="file" multiple hidden {...{ webkitdirectory: '' }} onChange={event => { if (event.target.files) void addFiles(event.target.files, true); event.target.value = '' }} />
+        {preview ? <ChatAttachmentPreview key={preview.id} item={preview} nodes={nodes} onClose={() => setPreview(null)} /> : null}
       </div>
     </aside>
   )
@@ -1181,6 +1216,7 @@ function NodeContextMenu({
   onMask,
   onRename,
   onDetails,
+  onReference,
   onReplace,
   onChooseAsset,
   onInspect,
@@ -1206,6 +1242,7 @@ function NodeContextMenu({
   onMask(): void
   onRename(): void
   onDetails(): void
+  onReference(): void
   onReplace(): void
   onChooseAsset(): void
   onInspect(): void
@@ -1290,6 +1327,9 @@ function NodeContextMenu({
         <strong>{node.data.title}</strong>
         <span>{node.data.kind}</span>
       </header>
+      <div className="vd-node-context-group"><button type="button" role="menuitem" onClick={onReference}>
+        <span aria-hidden>◇</span><span>{t('Add to Chat References')}</span>
+      </button></div>
       {editableMedia ? <div className="vd-node-context-group"><button type="button" role="menuitem" onClick={onEditMedia}>
         <MediaEditorIcon name="trim" /><span>{t(editableMedia === 'audio' ? 'Edit Audio' : 'Edit Video')}</span>
       </button></div> : null}
@@ -1773,6 +1813,7 @@ function CanvasStage({
   onInteractionModeChange,
   selectedNodeIds,
   onSelectedNodeIdsChange,
+  onReferenceNode,
 }: {
   snapshot: DirectorSnapshot
   director: DirectorController
@@ -1780,6 +1821,7 @@ function CanvasStage({
   onInteractionModeChange(mode: CanvasInteractionMode): void
   selectedNodeIds: ReadonlySet<string>
   onSelectedNodeIdsChange(ids: Set<string>): void
+  onReferenceNode(id: string): void
 }) {
   useLanguage()
   const project = snapshot.project
@@ -2163,7 +2205,7 @@ function CanvasStage({
     if (asset !== undefined) setOpenArtifact({ artifact: previewArtifactFromAsset(asset), properties: false })
   }, [project])
 
-  const loadInputAssets = useCallback((kind: InputAssetKind) => director.listInputAssets(kind), [director])
+  const loadInputAssets = useCallback((kind: InputAssetKind, options: InputAssetQuery) => director.listInputAssets(kind, options), [director])
 
   const runtime = useMemo<DirectorRuntimeValue>(() => ({
     providers: snapshot.providers,
@@ -2171,6 +2213,7 @@ function CanvasStage({
     nodeDefinitions: snapshot.nodeDefinitions,
     references: referencePreviews,
     onChange: (id, patch) => director.updateNode(id, patch),
+    onReferenceNode,
     onChooseInputFile: chooseInputFile,
     onChooseExistingAsset: setAssetPickerNodeId,
     onReplaceInputFile: replaceInputFile,
@@ -2193,7 +2236,7 @@ function CanvasStage({
       setSketchPosition(undefined)
       setSketchOpen(true)
     },
-  }), [director, project, referencePreviews, snapshot.nodeDefinitions, snapshot.providers, snapshot.workflows, snapshot.workflowRuns, snapshot.batchCases, chooseInputFile, inspectInput, replaceInputFile, importBatchFiles, uploading])
+  }), [director, project, onReferenceNode, referencePreviews, snapshot.nodeDefinitions, snapshot.providers, snapshot.workflows, snapshot.workflowRuns, snapshot.batchCases, chooseInputFile, inspectInput, replaceInputFile, importBatchFiles, uploading])
 
   if (project === null) return null
   const selectedEdge = project.graph.edges.find(edge => edge.id === selectedEdgeId)
@@ -2588,6 +2631,7 @@ function CanvasStage({
           position={nodeContextMenu}
           node={contextNode}
           canRun={contextCanRun}
+          onReference={() => { setNodeContextMenu(null); onReferenceNode(contextNode.id) }}
           uploading={uploading}
           editableMedia={contextMediaAsset?.kind as 'audio' | 'video' | undefined}
           onEditMedia={() => {
@@ -2800,6 +2844,14 @@ export function DirectorOverlay({ director, chat }: DirectorInjectedProps) {
   const [workspaceWidth, setWorkspaceWidth] = useState(() => window.innerWidth)
   const [resizingChatPanel, setResizingChatPanel] = useState(false)
   const workspaceRef = useRef<HTMLElement | null>(null)
+  const [referenceRequest, setReferenceRequest] = useState<{ nodeId: string; nonce: number } | null>(null)
+  const referenceNode = useCallback((nodeId: string) => {
+    setChatPanelOpen(true); setNarrowChatPanelOpen(true)
+    setReferenceRequest({ nodeId, nonce: Date.now() })
+  }, [])
+  const highlightNode = useCallback((id: string | null) => {
+    workspaceRef.current?.querySelectorAll<HTMLElement>('[data-chat-node-id]').forEach(element => element.classList.toggle('vd-chat-node-highlight', element.dataset.chatNodeId === id))
+  }, [])
   useEffect(() => {
     if (!snapshot.open) {
       setSettingsOpen(false)
@@ -2851,6 +2903,10 @@ export function DirectorOverlay({ director, chat }: DirectorInjectedProps) {
           <div className={`vd-global-error ${snapshot.conflict ? 'is-conflict' : ''}`}>
             <strong>{snapshot.conflict ? t("工程发生保存冲突") : t("Video Director 错误")}</strong>
             <span>{snapshot.error}</span>
+            {snapshot.conflict && snapshot.project ? <>
+              <button onClick={() => downloadBlob(new Blob([JSON.stringify(snapshot.project, null, 2)], { type: 'application/json' }), `${snapshot.project!.name}-local-recovery.json`)}>{t('Export local draft')}</button>
+              <button onClick={() => void director.useHostCanvas().catch(() => {})}>{t('Use Host version')}</button>
+            </> : null}
           </div>
         ) : null}
         {snapshot.phase === 'loading' && snapshot.project === null ? <div className="vd-loading">{t("载入 Video Projects…")}</div> : null}
@@ -2869,6 +2925,8 @@ export function DirectorOverlay({ director, chat }: DirectorInjectedProps) {
               providers={snapshot.providers}
               projectName={snapshot.project.name}
               collapsed={chatPanelCollapsed}
+              referenceRequest={referenceRequest}
+              onHighlightNode={highlightNode}
             />
             <div
               className="vd-chat-resizer"
@@ -2914,6 +2972,7 @@ export function DirectorOverlay({ director, chat }: DirectorInjectedProps) {
               onInteractionModeChange={setInteractionMode}
               selectedNodeIds={selectedNodeIds}
               onSelectedNodeIdsChange={setSelectedNodeIds}
+              onReferenceNode={referenceNode}
             />
             <button
               type="button"

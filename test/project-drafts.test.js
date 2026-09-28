@@ -119,7 +119,8 @@ test('Discard restores the latest explicit Save, preserves records, and clears u
   controller.updateNode(id, { text: 'Discard me' })
   controller.renameProject('Temporary name')
   await controller.discardChanges()
-  assert.deepEqual(controller.getSnapshot().project, saved)
+  assert.ok(controller.getSnapshot().project.draftRevision > saved.draftRevision)
+  assert.deepEqual({ ...controller.getSnapshot().project, draftRevision: saved.draftRevision }, saved)
   assert.equal(controller.getSnapshot().dirty, false)
   assert.equal(controller.getSnapshot().canUndo, false)
   assert.equal(controller.getSnapshot().canRedo, false)
@@ -214,4 +215,35 @@ test('a delayed cache acknowledgement does not lose a newer draft', async () => 
   await writing
   assert.deepEqual(writes.map(draft => draft.name), ['First', 'Latest'])
   cache.dispose()
+})
+
+test('compact chat context excludes scripts; Host edits refresh and stale local drafts remain protected', async t => {
+  const app = await fixture(t)
+  const controller = app.controller
+  await controller.createProject('Agent editing')
+  controller.addText('Private synthetic script '.repeat(10000))
+  await controller.prepareChatContext()
+  const project = controller.getSnapshot().project
+  const context = JSON.parse(controller.currentContext())
+  assert.equal(context.canvas.nodeCount, 1)
+  assert.equal(context.canvas.nodes, undefined)
+  assert.ok(controller.currentContext().length < 1000)
+  const call = async (name, revision) => {
+    const result = await app.host.rpc('canvas/command', { projectId: project.id, sessionId: project.sessionId, command: 'edit', args: { expectedDraftRevision: revision, edits: [{ op: 'rename', name }] } })
+    assert.equal(result.ok, true, JSON.stringify(result))
+    return result.value.draftRevision
+  }
+  const revision = await call('Agent draft', context.project.draftRevision)
+  await controller.refreshCanvasFromHost()
+  assert.equal(controller.getSnapshot().project.name, 'Agent draft')
+  controller.renameProject('Human draft')
+  await call('Newer agent draft', revision)
+  await controller.refreshCanvasFromHost()
+  assert.equal(controller.getSnapshot().conflict, true)
+  assert.equal(controller.getSnapshot().project.name, 'Human draft')
+  await assert.rejects(controller.prepareChatContext(), /changed/)
+  assert.equal((await app.host.store.getProject(project.id)).draft.name, 'Newer agent draft')
+  await controller.useHostCanvas()
+  assert.equal(controller.getSnapshot().conflict, false)
+  assert.equal(controller.getSnapshot().project.name, 'Newer agent draft')
 })

@@ -85,6 +85,37 @@ test('deleting an owner concurrently with another upload cannot remove newly sha
   assert.equal((await store.assetBytes(survivor.id)).data.toString(), 'same')
 })
 
+test('asset pages contain 15 matches, retain owner preference and stay stable when new assets arrive', async t => {
+  const { store, second, put } = await fixture(t)
+  for (let index = 0; index < 37; index++) await put(`scene-${String(index).padStart(2, '0')}.png`, `fixture-${index}`, { origin: index < 21 ? 'output' : 'input' })
+  const preferred = await store.linkAsset(second.id, store.availableAssets('image')[0].id)
+  const rpc = createDirectorRpc({ store, registerAsset: async () => {} })
+  const page = async (extra = {}) => {
+    const result = await rpc('assets/list', { kind: 'image', projectId: second.id, limit: 15, ...extra })
+    assert.equal(result.ok, true, result.error?.message); return result.value
+  }
+  const first = await page()
+  assert.equal(first.assets.length, 15)
+  assert.equal(first.total, 37)
+  assert.ok(first.assets.some(row => row.id === preferred.id))
+  const expected = store.availableAssets('image', second.id).map(row => row.filename)
+  await put('newest.png', 'new fixture')
+  const next = await page({ cursor: first.nextCursor })
+  const last = await page({ cursor: next.nextCursor })
+  assert.deepEqual([...first.assets, ...next.assets, ...last.assets].map(row => row.filename), expected)
+  assert.equal(last.assets.length, 7)
+  assert.equal(last.nextCursor, null)
+  const filtered = await page({ query: 'SCENE-', origin: 'output' })
+  assert.equal(filtered.assets.length, 15); assert.equal(filtered.total, 21)
+  assert.ok(filtered.assets.every(row => row.origin === 'output'))
+  const rest = await page({ query: 'SCENE-', origin: 'output', cursor: filtered.nextCursor })
+  assert.equal(rest.assets.length, 6); assert.equal(rest.nextCursor, null)
+  assert.equal((await page({ query: 'missing' })).total, 0)
+  for (const input of [{ limit: 0 }, { limit: 16.5 }, { cursor: 'invalid' }, { origin: 'unknown' }, { cursor: filtered.nextCursor, query: 'different' }]) {
+    assert.equal((await rpc('assets/list', { kind: 'image', projectId: second.id, limit: 15, ...input })).ok, false)
+  }
+})
+
 test('a failed index commit removes newly written bytes but never removes already shared bytes', async t => {
   const { root, store, put } = await fixture(t)
   const original = await put('shared.png', 'same')

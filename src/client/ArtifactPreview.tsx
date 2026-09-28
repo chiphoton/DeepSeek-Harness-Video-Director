@@ -7,6 +7,7 @@ import type { AssetRef, VdNodeResult } from './types'
 import { useModalScrollLock } from './modal-scroll-lock'
 import { AudioPreviewPlayer } from './AudioPreviewPlayer'
 import { MediaEditor } from './MediaEditor'
+import { VideoThumbnail } from './VideoThumbnail'
 
 interface VideoProperties {
   width?: number
@@ -57,7 +58,7 @@ function ThumbnailContent({ artifact }: { artifact: PreviewArtifact }): ReactNod
   if (artifact.kind === 'video' && artifact.asset !== undefined) {
     return (
       <span className="vd-artifact-video-thumbnail">
-        <video src={artifact.asset.url} aria-hidden="true" muted playsInline preload="metadata" />
+        <VideoThumbnail src={artifact.asset.url} />
         <i aria-hidden="true">▶</i>
       </span>
     )
@@ -70,7 +71,7 @@ function ThumbnailContent({ artifact }: { artifact: PreviewArtifact }): ReactNod
 
 export function ArtifactThumbnail(props: {
   artifact: PreviewArtifact
-  variant?: 'node' | 'job' | 'gallery'
+  variant?: 'node' | 'job' | 'gallery' | 'picker'
   onOpen(artifact: PreviewArtifact): void
 }): ReactNode {
   useLanguage()
@@ -153,6 +154,8 @@ export function ArtifactPreviewDialog(props: {
     if ((artifact.kind !== 'image' && artifact.kind !== 'video' && artifact.kind !== 'audio') || asset === undefined) return
     const controller = new AbortController()
     const isTimeBased = artifact.kind === 'video' || artifact.kind === 'audio'
+    // Unsaved composer attachments use local Blob URLs, with no Host metadata route.
+    if (isTimeBased && asset.url.startsWith('blob:')) return
     void fetch(isTimeBased ? `${asset.url}/properties` : asset.url, { credentials: 'same-origin', signal: controller.signal })
       .then(async response => {
         if (isTimeBased) {
@@ -170,7 +173,7 @@ export function ArtifactPreviewDialog(props: {
         setPropertyError(error instanceof Error ? error.message : String(error))
       })
     return () => controller.abort()
-  }, [asset, artifact.kind])
+  }, [asset?.id, asset?.url, asset?.sha256, asset?.mimeType, artifact.kind])
 
   useEffect(() => {
     if (contextMenu === null) return
@@ -282,7 +285,7 @@ export function ArtifactPreviewDialog(props: {
             <span>{artifact.kind}</span>
           </div>
           <div className="vd-artifact-dialog-actions">
-            {asset && (artifact.kind === 'audio' || artifact.kind === 'video') ? <button type="button" onClick={openEditor}>{t('Edit')}</button> : null}
+            {asset && !asset.url.startsWith('blob:') && (artifact.kind === 'audio' || artifact.kind === 'video') ? <button type="button" onClick={openEditor}>{t('Edit')}</button> : null}
             {asset !== undefined && (artifact.kind === 'image' || artifact.kind === 'video' || artifact.kind === 'audio') ? (
               <button type="button" onClick={() => setPropertiesOpen(true)}>{t('Metadata')}</button>
             ) : null}
@@ -420,7 +423,7 @@ export function ArtifactPreviewDialog(props: {
             }}
             onPointerDown={event => event.stopPropagation()}
           >
-            {asset && (artifact.kind === 'audio' || artifact.kind === 'video') ? <button type="button" role="menuitem" onClick={openEditor}>{t(artifact.kind === 'audio' ? 'Edit Audio' : 'Edit Video')}</button> : null}
+            {asset && !asset.url.startsWith('blob:') && (artifact.kind === 'audio' || artifact.kind === 'video') ? <button type="button" role="menuitem" onClick={openEditor}>{t(artifact.kind === 'audio' ? 'Edit Audio' : 'Edit Video')}</button> : null}
             <button type="button" role="menuitem" onClick={saveArtifact}>{t("Save")} {mediaLabel.toLowerCase()}…</button>
             <button type="button" role="menuitem" onClick={() => { setContextMenu(null); setPropertiesOpen(true) }}>{mediaLabel} {t("properties…")}</button>
             {artifact.kind === 'image' ? (

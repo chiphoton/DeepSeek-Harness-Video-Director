@@ -4,6 +4,34 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { apply, Config } from '../index.js'
+import { testHost } from './fixtures/director-host.js'
+import { providerConnectionsFixture } from './fixtures/provider-connections.js'
+
+test('connection edits, discovery, and scoped unload work through the Host RPC', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'video-director-connections-test-'))
+  const fixture = providerConnectionsFixture()
+  const host = await testHost(root, { providerOptions: { fetchImpl: fixture.fetchImpl } })
+  t.after(async () => { await host.close(); await rm(root, { recursive: true, force: true }) })
+  host.providerSettings.base.providers = fixture.providers
+  host.providerSettings.refresh()
+  const saved = await host.rpc('providers/update', { providerId: 'ollama', patch: { baseUrl: 'ollama-new.test:11434' } })
+  assert.equal(saved.ok, true)
+  assert.equal(saved.value.providers.find(provider => provider.id === 'ollama').baseUrl, 'http://ollama-new.test:11434')
+  const catalog = await host.rpc('providers/check', { providerId: 'openai' })
+  assert.deepEqual(catalog.value.models, ['studio-chat', 'studio-image'])
+  assert.equal(JSON.stringify(catalog).includes('synthetic-key'), false)
+  const unloaded = await host.rpc('providers/unload-models', { providerId: 'ollama' })
+  assert.deepEqual(unloaded, { ok: true, value: { status: 'unloaded', unloadedModels: ['studio-vision:27b'] } })
+  assert.deepEqual((await host.rpc('providers/models', { providerId: 'ollama' })).value.loadedModels, [])
+  assert.deepEqual(fixture.calls.filter(call => call.method === 'POST').map(call => call.url), ['http://ollama-new.test:11434/api/generate'])
+  assert.deepEqual(await host.rpc('providers/unload-models', { providerId: 'comfyui' }), { ok: true, value: { status: 'requested' } })
+  assert.deepEqual(fixture.calls.at(-1).body, { unload_models: true, free_memory: true })
+  assert.equal((await host.rpc('providers/unload-models', { providerId: 'openai' })).ok, false)
+  const comfyCatalog = await host.rpc('providers/models', { providerId: 'comfyui' })
+  assert.equal(comfyCatalog.ok, true)
+  assert.deepEqual(comfyCatalog.value.modelInventory, Object.fromEntries(Object.entries(fixture.modelInventory).map(([folder, models]) => [folder, { models }])))
+  assert.equal('modelInputs' in comfyCatalog.value, false)
+})
 
 test('Harness RPC, asset routes and native settings remain connected after moving storage', async t => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'video-director-harness-test-')))

@@ -1,4 +1,7 @@
+import { NumberInput } from './NumberInput'
+import { CHAT_NODE_MIME } from './chat-attachments'
 import { BatchInputBody, BatchOutputBody } from './BatchNodes'
+import { VideoThumbnail } from './VideoThumbnail'
 import { inputFileKind } from './input-files'
 import { useInputFileDrop } from './use-input-file-drop'
 import { t, useLanguage } from './i18n'
@@ -54,6 +57,7 @@ export interface DirectorRuntimeValue {
   workflows: ComfyWorkflowDescriptor[]
   nodeDefinitions: VdNodeDefinitionDescriptor[]
   references: Readonly<Record<string, readonly DirectorReferencePreview[]>>
+  onReferenceNode?(nodeId: string): void
   onChange(nodeId: string, patch: Partial<DirectorNodeData>): void
   onEditSketch(nodeId: string): void
   onChooseInputFile(nodeId: string): void
@@ -392,12 +396,6 @@ function ModelActionButton(props: {
   )
 }
 
-function numberValue(value: string): number | undefined {
-  if (value.trim() === '') return undefined
-  const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : undefined
-}
-
 function stopWheel(event: React.WheelEvent): void {
   event.stopPropagation()
 }
@@ -615,7 +613,7 @@ function ReferenceThumbnail(props: {
     return <img src={reference.asset.url} alt="" draggable={false} loading="lazy" />
   }
   if (reference.asset !== undefined && reference.kind === 'video') {
-    return <video src={reference.asset.url} aria-hidden="true" muted playsInline preload="metadata" />
+    return <VideoThumbnail src={reference.asset.url} />
   }
   if (reference.kind === 'text') {
     return (
@@ -898,30 +896,30 @@ function TrimFields(props: { id: string; data: DirectorNodeData; duration?: numb
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
       <label style={labelStyle}>
         <span>{t("Trim start · sec")}</span>
-        <input
+        <NumberInput
           className="nodrag nowheel"
-          type="number"
+          allowEmpty
           min={0}
           max={end ?? props.duration}
           step="0.01"
           value={start}
           onWheel={stopWheel}
-          onChange={event => update({ start: Math.max(0, numberValue(event.target.value) ?? 0) })}
+          onValueCommit={value => update({ start: value ?? 0 })}
           style={fieldStyle}
         />
       </label>
       <label style={labelStyle}>
         <span>{t("Trim end · sec")}{props.duration === undefined ? '' : ` / ${props.duration.toFixed(2)}`}</span>
-        <input
+        <NumberInput
           className="nodrag nowheel"
-          type="number"
+          allowEmpty
           min={start}
           max={props.duration}
           step="0.01"
           value={end ?? ''}
           placeholder={props.duration === undefined ? 'Full length' : props.duration.toFixed(2)}
           onWheel={stopWheel}
-          onChange={event => update({ end: numberValue(event.target.value) })}
+          onValueCommit={value => update({ end: value })}
           style={fieldStyle}
         />
       </label>
@@ -950,11 +948,11 @@ function TransformFields(props: { id: string; data: DirectorNodeData; runtime: D
       </label>
       <label style={labelStyle}>
         <span>{t("Width")}</span>
-        <input className="nodrag nowheel" type="number" min={1} value={transform.width ?? ''} placeholder={t("auto")} onWheel={stopWheel} onChange={event => update({ width: numberValue(event.target.value) })} style={fieldStyle} />
+        <NumberInput className="nodrag nowheel" allowEmpty integer min={1} value={transform.width ?? ''} placeholder={t("auto")} onWheel={stopWheel} onValueCommit={value => update({ width: value })} style={fieldStyle} />
       </label>
       <label style={labelStyle}>
         <span>{t("Height")}</span>
-        <input className="nodrag nowheel" type="number" min={1} value={transform.height ?? ''} placeholder={t("auto")} onWheel={stopWheel} onChange={event => update({ height: numberValue(event.target.value) })} style={fieldStyle} />
+        <NumberInput className="nodrag nowheel" allowEmpty integer min={1} value={transform.height ?? ''} placeholder={t("auto")} onWheel={stopWheel} onValueCommit={value => update({ height: value })} style={fieldStyle} />
       </label>
     </div>
   )
@@ -1137,15 +1135,11 @@ function ComfyWorkflowParameterField(props: {
   return (
     <label title={props.parameter.label} style={labelStyle}>
       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{props.parameter.label}</span>
-      {props.parameter.type === 'number' ? <input
+      {props.parameter.type === 'number' ? <NumberInput
         className="nodrag nowheel"
-        type="number"
         value={value as string | number}
         onWheel={stopWheel}
-        onChange={event => {
-          const next = Number(event.target.value)
-          if (Number.isFinite(next)) update(next)
-        }}
+        onValueCommit={update}
         style={fieldStyle}
       /> : <ImeSafeInput
         className="nodrag nowheel"
@@ -1275,9 +1269,9 @@ function DefinitionField(props: {
   return (
     <label title={props.field.description || props.field.label} style={labelStyle}>
       <span>{props.field.label}</span>
-      {props.field.type === 'number' ? <input
+      {props.field.type === 'number' ? props.field.control === 'slider' ? <input
         className="nodrag nowheel"
-        type={props.field.control === 'slider' ? 'range' : 'number'}
+        type="range"
         value={value as string | number}
         min={props.field.min}
         max={props.field.max}
@@ -1287,6 +1281,16 @@ function DefinitionField(props: {
           const next = Number(event.target.value)
           if (Number.isFinite(next)) update(next)
         }}
+        style={fieldStyle}
+      /> : <NumberInput
+        className="nodrag nowheel"
+        value={value as string | number}
+        min={props.field.min}
+        max={props.field.max}
+        integer={props.field.integer}
+        step={props.field.step ?? (props.field.integer === true ? 1 : 'any')}
+        onWheel={stopWheel}
+        onValueCommit={update}
         style={fieldStyle}
       /> : <ImeSafeInput
         className="nodrag nowheel"
@@ -1674,15 +1678,15 @@ function GenerationNodeBody(props: {
                 ) : null}
                 <label style={labelStyle}>
                   <span>{t("Duration")}</span>
-                  <input
+                  <NumberInput
                     className="nodrag nowheel"
-                    type="number"
+                    allowEmpty
                     min={0.1}
                     max={15}
                     step="0.1"
                     value={props.data.duration ?? selectedWorkflow.defaults.duration ?? ''}
                     onWheel={stopWheel}
-                    onChange={event => props.runtime?.onChange(props.id, { duration: numberValue(event.target.value) })}
+                    onValueCommit={value => props.runtime?.onChange(props.id, { duration: value })}
                     style={fieldStyle}
                   />
                 </label>
@@ -1737,27 +1741,27 @@ function GenerationNodeBody(props: {
                 <legend style={{ padding: '0 4px', color: palette.muted, fontSize: 9, fontWeight: 650 }}>{t("Image size")}</legend>
                 <label style={labelStyle}>
                   <span>{t("Width")}</span>
-                  <input
+                  <NumberInput
                     className="nodrag nowheel"
-                    type="number"
+                    allowEmpty integer
                     min={1}
                     step={1}
                     value={props.data.width ?? selectedWorkflow.defaults.width}
                     onWheel={stopWheel}
-                    onChange={event => props.runtime?.onChange(props.id, { width: numberValue(event.target.value) })}
+                    onValueCommit={value => props.runtime?.onChange(props.id, { width: value })}
                     style={fieldStyle}
                   />
                 </label>
                 <label style={labelStyle}>
                   <span>{t("Height")}</span>
-                  <input
+                  <NumberInput
                     className="nodrag nowheel"
-                    type="number"
+                    allowEmpty integer
                     min={1}
                     step={1}
                     value={props.data.height ?? selectedWorkflow.defaults.height}
                     onWheel={stopWheel}
-                    onChange={event => props.runtime?.onChange(props.id, { height: numberValue(event.target.value) })}
+                    onValueCommit={value => props.runtime?.onChange(props.id, { height: value })}
                     style={fieldStyle}
                   />
                 </label>
@@ -1770,15 +1774,15 @@ function GenerationNodeBody(props: {
                 <legend style={{ padding: '0 4px', color: palette.muted, fontSize: 9, fontWeight: 650 }}>{t("Output")}</legend>
                 <label style={labelStyle}>
                   <span>{t("Duration")}</span>
-                  <input
+                  <NumberInput
                     className="nodrag nowheel"
-                    type="number"
+                    allowEmpty
                     min={0.1}
                     max={15}
                     step="0.1"
                     value={props.data.duration ?? selectedWorkflow.defaults.duration ?? ''}
                     onWheel={stopWheel}
-                    onChange={event => props.runtime?.onChange(props.id, { duration: numberValue(event.target.value) })}
+                    onValueCommit={value => props.runtime?.onChange(props.id, { duration: value })}
                     style={fieldStyle}
                   />
                 </label>
@@ -1849,9 +1853,9 @@ function GenerationNodeBody(props: {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
             <label style={labelStyle}>
               <span>{t("Context length")}</span>
-              <input
+              <NumberInput
                 className="nodrag nowheel"
-                type="number"
+                allowEmpty integer
                 min={1}
                 max={selectedModelDetails?.contextLength}
                 step={1}
@@ -1860,7 +1864,7 @@ function GenerationNodeBody(props: {
                   ? 'Auto'
                   : `Auto · max ${String(selectedModelDetails.contextLength)}`}
                 onWheel={stopWheel}
-                onChange={event => props.runtime?.onChange(props.id, { contextLength: numberValue(event.target.value) })}
+                onValueCommit={value => props.runtime?.onChange(props.id, { contextLength: value })}
                 style={fieldStyle}
               />
             </label>
@@ -1904,14 +1908,14 @@ function GenerationNodeBody(props: {
           <legend style={{ padding: '0 4px', color: palette.muted, fontSize: 9, fontWeight: 650 }}>{t("Seed")}</legend>
           <label style={labelStyle}>
             <span>{t("Seed")}</span>
-            <input
+            <NumberInput
               className="nodrag nowheel"
-              type="number"
+              allowEmpty integer
               min={0}
               step={1}
               value={props.data.seed ?? selectedWorkflow?.defaults.seed ?? ''}
               onWheel={stopWheel}
-              onChange={event => props.runtime?.onChange(props.id, { seed: numberValue(event.target.value) })}
+              onValueCommit={value => props.runtime?.onChange(props.id, { seed: value })}
               style={fieldStyle}
             />
           </label>
@@ -1943,15 +1947,15 @@ function GenerationNodeBody(props: {
           <legend style={{ padding: '0 4px', color: palette.muted, fontSize: 9, fontWeight: 650 }}>{t("Sampling")}</legend>
           <label style={labelStyle}>
             <span>{t("Sampling steps")}</span>
-            <input
+            <NumberInput
               className="nodrag nowheel"
-              type="number"
+              allowEmpty integer
               min={4}
               max={8}
               step={1}
               value={props.data.steps ?? selectedWorkflow.defaults.steps ?? 4}
               onWheel={stopWheel}
-              onChange={event => props.runtime?.onChange(props.id, { steps: numberValue(event.target.value) })}
+              onValueCommit={value => props.runtime?.onChange(props.id, { steps: value })}
               style={fieldStyle}
             />
           </label>
@@ -1963,14 +1967,14 @@ function GenerationNodeBody(props: {
           <legend style={{ padding: '0 4px', color: palette.muted, fontSize: 9, fontWeight: 650 }}>{t("Sampling")}</legend>
           <label style={labelStyle}>
             <span>{t("Steps")}</span>
-            <input
+            <NumberInput
               className="nodrag nowheel"
-              type="number"
+              allowEmpty integer
               min={1}
               step={1}
               value={props.data.steps ?? selectedWorkflow?.defaults.steps ?? 4}
               onWheel={stopWheel}
-              onChange={event => props.runtime?.onChange(props.id, { steps: numberValue(event.target.value) })}
+              onValueCommit={value => props.runtime?.onChange(props.id, { steps: value })}
               style={fieldStyle}
             />
           </label>
@@ -1981,27 +1985,27 @@ function GenerationNodeBody(props: {
         <div style={{ display: 'grid', gridTemplateColumns: timed ? 'repeat(4, 1fr)' : 'repeat(3, 1fr)', gap: 7 }}>
           <label style={labelStyle}>
             <span>{t("Width")}</span>
-            <input className="nodrag nowheel" type="number" min={1} step={h3 ? 32 : 1} value={props.data.width ?? ''} onWheel={stopWheel} onChange={event => props.runtime?.onChange(props.id, { width: numberValue(event.target.value) })} style={fieldStyle} />
+            <NumberInput className="nodrag nowheel" allowEmpty integer min={1} step={h3 ? 32 : 1} value={props.data.width ?? ''} onWheel={stopWheel} onValueCommit={value => props.runtime?.onChange(props.id, { width: value })} style={fieldStyle} />
           </label>
           <label style={labelStyle}>
             <span>{t("Height")}</span>
-            <input className="nodrag nowheel" type="number" min={1} step={h3 ? 32 : 1} value={props.data.height ?? ''} onWheel={stopWheel} onChange={event => props.runtime?.onChange(props.id, { height: numberValue(event.target.value) })} style={fieldStyle} />
+            <NumberInput className="nodrag nowheel" allowEmpty integer min={1} step={h3 ? 32 : 1} value={props.data.height ?? ''} onWheel={stopWheel} onValueCommit={value => props.runtime?.onChange(props.id, { height: value })} style={fieldStyle} />
           </label>
           {timed ? (
             <label style={labelStyle}>
               <span>{t("Duration")}</span>
-              <input className="nodrag nowheel" type="number" min={0.1} max={h3 ? 15 : undefined} step="0.1" value={props.data.duration ?? ''} onWheel={stopWheel} onChange={event => props.runtime?.onChange(props.id, { duration: numberValue(event.target.value) })} style={fieldStyle} />
+              <NumberInput className="nodrag nowheel" allowEmpty min={0.1} max={h3 ? 15 : undefined} step="0.1" value={props.data.duration ?? ''} onWheel={stopWheel} onValueCommit={value => props.runtime?.onChange(props.id, { duration: value })} style={fieldStyle} />
             </label>
           ) : null}
           <label style={labelStyle}>
             <span>{timed ? 'FPS' : t("Seed")}</span>
-            <input
+            <NumberInput
               className="nodrag nowheel"
-              type="number"
+              allowEmpty integer
               min={0}
               value={timed ? (props.data.fps ?? '') : (props.data.seed ?? '')}
               onWheel={stopWheel}
-              onChange={event => props.runtime?.onChange(props.id, timed ? { fps: numberValue(event.target.value) } : { seed: numberValue(event.target.value) })}
+              onValueCommit={value => props.runtime?.onChange(props.id, timed ? { fps: value } : { seed: value })}
               style={fieldStyle}
             />
           </label>
@@ -2043,15 +2047,15 @@ function GenerationNodeBody(props: {
             </label>
             <label style={labelStyle}>
               <span>{t("Steps")}{props.data.variant === 'turbo' ? ' · 4–8' : ''}</span>
-              <input
+              <NumberInput
                 className="nodrag nowheel"
-                type="number"
+                allowEmpty integer
                 min={props.data.variant === 'turbo' ? 4 : 1}
                 max={props.data.variant === 'turbo' ? 8 : undefined}
                 step={1}
                 value={props.data.steps ?? (props.data.variant === 'turbo' ? 6 : 20)}
                 onWheel={stopWheel}
-                onChange={event => props.runtime?.onChange(props.id, { steps: numberValue(event.target.value) })}
+                onValueCommit={value => props.runtime?.onChange(props.id, { steps: value })}
                 style={fieldStyle}
               />
             </label>
@@ -2362,18 +2366,16 @@ function TriggerBody(props: {
       <span style={{ color: palette.muted, fontSize: 9, lineHeight: 1.35 }}>{description}</span>
       {action === 'comfyui-clear' ? <label style={labelStyle}>
         <span>{t("Release model wait (seconds)")}</span>
-        <input
+        <NumberInput
           className="nodrag nowheel"
           aria-label={t("Release model wait seconds")}
-          type="number"
+          integer
           min={0}
           max={300}
           step={1}
           value={releaseWaitSeconds}
           disabled={running}
-          onChange={event => {
-            const value = event.currentTarget.valueAsNumber
-            if (!Number.isSafeInteger(value) || value < 0 || value > 300) return
+          onValueCommit={value => {
             props.runtime?.onChange(props.id, {
               vramReleaseWaitSeconds: value,
               ...resetStatus,
@@ -2456,6 +2458,7 @@ export const DirectorNodeView = memo(function DirectorNodeView(props: NodeProps<
   return (
     <article
       data-director-node={props.data.kind}
+      data-chat-node-id={props.id}
       className={[props.selected ? 'vd-node-selected' : '', fileDrop.dragging ? 'vd-input-drop-active' : ''].filter(Boolean).join(' ') || undefined}
       aria-busy={fileDrop.busy || undefined}
       {...fileDrop.handlers}
@@ -2465,11 +2468,16 @@ export const DirectorNodeView = memo(function DirectorNodeView(props: NodeProps<
       {definition !== undefined ? <PortHandles direction="output" ports={declaredOutputs} showLabels={props.data.kind !== 'preview' && !isTrigger} /> : null}
       {definition === undefined && hasSource ? <Handle type="source" id="out" position={Position.Right} style={{ width: 10, height: 10, border: `2px solid ${palette.panel}`, background: palette.accent }} /> : null}
 
-      <header style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 11px', borderBottom: `1px solid ${palette.subtleBorder}`, background: palette.raised, borderRadius: '13px 13px 0 0' }}>
+      <header title={t('Double-click to add to chat references')}
+        onDoubleClick={event => { event.stopPropagation(); runtime?.onReferenceNode?.(props.id) }}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 11px', borderBottom: `1px solid ${palette.subtleBorder}`, background: palette.raised, borderRadius: '13px 13px 0 0' }}>
         <span style={{ color: palette.accent, fontSize: 9, fontWeight: 750, letterSpacing: '.09em', flex: '0 0 auto' }}>{t(kindLabel(props.data.kind))}</span>
         <input
           className="nodrag"
           aria-label={t("Node title")}
+          title={t('Double-click to reference in chat; drag to attach')}
+          draggable
+          onDragStart={event => { event.stopPropagation(); event.dataTransfer.setData(CHAT_NODE_MIME, props.id); event.dataTransfer.effectAllowed = 'copy' }}
           value={props.data.title}
           onChange={event => runtime?.onChange(props.id, { title: event.target.value })}
           style={{ minWidth: 0, flex: 1, border: 0, outline: 0, background: 'transparent', color: palette.ink, font: 'inherit', fontSize: 12, fontWeight: 650, textAlign: 'right' }}
@@ -2483,10 +2491,10 @@ export const DirectorNodeView = memo(function DirectorNodeView(props: NodeProps<
         {props.data.kind === 'batch-output' ? <BatchOutputBody id={props.id} data={props.data} runtime={runtime} /> : null}
         {isMediaOperation ? <>
           {definition?.fields.map(field => <label key={field.id} style={labelStyle}>{t(field.label)}
-            <input className="nodrag nowheel" type="number" min={0} step={props.data.kind === 'video-crop' ? 1 : .01}
+            <NumberInput className="nodrag nowheel" allowEmpty integer={props.data.kind === 'video-crop'} min={0} step={props.data.kind === 'video-crop' ? 1 : .01}
               aria-label={t(field.label)} value={props.data.mediaOptions?.[field.id] ?? ''} placeholder={field.id === 'end' ? t('End of video') : ''}
-              onChange={event => runtime?.onChange(props.id, { mediaOptions: { ...props.data.mediaOptions,
-                [field.id]: event.currentTarget.value === '' ? undefined : event.currentTarget.valueAsNumber } })} style={fieldStyle} />
+              onValueCommit={value => runtime?.onChange(props.id, { mediaOptions: { ...props.data.mediaOptions,
+                [field.id]: value } })} style={fieldStyle} />
           </label>)}
           <button type="button" className="nodrag" style={buttonStyle} disabled={props.data.status === 'queued' || props.data.status === 'running'}
             onClick={() => { void runtime?.onRunNode(props.id).catch(() => {}) }}>{t('Run')}</button>

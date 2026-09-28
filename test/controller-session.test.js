@@ -315,7 +315,7 @@ test('project export and Duplicate preserve canvas assets while resetting active
           }
           if (endpoint === 'projects/draft') {
             savedProjects.push(payload.draft)
-            return { ok: true, value: {} }
+            return { ok: true, value: { summary: { draftRevision: (payload.expectedDraftRevision ?? 0) + 1 } } }
           }
           if (endpoint === 'projects/save') {
             savedProjects.push(payload.project)
@@ -638,7 +638,7 @@ test('import clears unavailable generated and Preview artifacts instead of rejec
       if (endpoint === 'projects/create') return { ok: true, value: { project: { ...projectFixture(payload.sessionId), id: importedProjectId, name: payload.name } } }
       if (endpoint === 'projects/draft') {
         savedGraph = payload.draft.graph
-        return { ok: true, value: {} }
+        return { ok: true, value: { summary: { draftRevision: (payload.expectedDraftRevision ?? 0) + 1 } } }
       }
       if (endpoint === 'projects/save') {
         savedGraph = payload.project.graph
@@ -2201,7 +2201,7 @@ for (const kind of ['image', 'audio', 'video', 'sketch']) test(`selecting an exi
   const controller = new Controller(existingSessionContext(project, async (endpoint, payload) => {
     if (endpoint === 'nodes/list') return { ok: true, value: { nodeDefinitions: [] } }
     calls.push(endpoint)
-    if (endpoint === 'assets/list') { assert.equal(payload.kind, kind); return { ok: true, value: { assets: [shared] } } }
+    if (endpoint === 'assets/list') { assert.equal(payload.kind, kind); assert.equal(payload.limit, 15); return { ok: true, value: { assets: [shared], total: 1, nextCursor: null } } }
     assert.equal(endpoint, 'assets/link')
     assert.equal(payload.projectId, project.id); assert.equal(payload.sourceId, shared.id)
     assert.equal(payload.dataBase64, undefined)
@@ -2210,7 +2210,8 @@ for (const kind of ['image', 'audio', 'video', 'sketch']) test(`selecting an exi
   t.after(() => controller.dispose())
   await controller.start()
   const before = structuredClone(controller.getSnapshot().project.graph)
-  const [asset] = await controller.listInputAssets(kind)
+  const { assets: [asset], total, nextCursor } = await controller.listInputAssets(kind, { limit: 15, query: '', origin: 'all' })
+  assert.equal(total, 1); assert.equal(nextCursor, null)
   await controller.useExistingAsset('input', asset)
   const after = controller.getSnapshot().project.graph.nodes[0]
   assert.equal(after.data.asset.id, 'linked')
@@ -3980,4 +3981,82 @@ test('creating a workflow inside a folder switches to it, preserves the previous
   assert.equal(controller.getSnapshot().project.id, previous.id)
   assert.equal(controller.getSnapshot().project.name, 'Previous unsaved edit')
   assert.equal(controller.getSnapshot().dirty, true)
+})
+
+test('OpenAI refresh exposes its discovered models and settings writes preserve other model catalogs', async () => {
+  const Controller = await DirectorController()
+  const project = projectFixture('00000000-0000-4000-8000-000000000111')
+  const providers = [
+    { id: 'api', label: 'API', kind: 'openai-compatible', baseUrl: 'http://api.test/v1', configured: true },
+    { id: 'ollama', label: 'Ollama', kind: 'ollama', baseUrl: 'http://ollama.test', configured: false, availableModels: ['retained-model'] },
+  ]
+  const context = existingSessionContext(project, async (endpoint, input) => {
+    if (endpoint === 'nodes/list') return { ok: true, value: { nodeDefinitions: [] } }
+    if (endpoint === 'providers/check') return { ok: true, value: { ok: true, latencyMs: 2, models: ['api-a', 'api-b'], workflowModels: [] } }
+    if (endpoint === 'providers/update') return { ok: true, value: { providers: providers.map(provider => ({ ...provider, availableModels: undefined, ...(provider.id === input.providerId ? input.patch : {}) })) } }
+    if (endpoint === 'providers/unload-models') { assert.equal(input.providerId, 'ollama'); return { ok: true, value: { status: 'unloaded', unloadedModels: ['retained-model'] } } }
+    throw new Error(`unexpected endpoint ${endpoint}`)
+  })
+  const original = context.connection.rpc.call
+  context.connection.rpc.call = (channel, endpoint, input) => endpoint === 'providers/list'
+    ? Promise.resolve({ ok: true, value: { providers } }) : original(channel, endpoint, input)
+  const controller = new Controller(context)
+  await controller.start()
+  await controller.checkProvider('api')
+  assert.deepEqual(controller.getSnapshot().providers[0].availableModels, ['api-a', 'api-b'])
+  await controller.updateProvider('api', { baseUrl: 'http://changed.test/v1' })
+  assert.deepEqual(controller.getSnapshot().providers[0].availableModels, [])
+  assert.equal(controller.getSnapshot().providerChecks.api, undefined)
+  assert.deepEqual(controller.getSnapshot().providers[1].availableModels, ['retained-model'])
+  assert.equal(await controller.unloadProviderModels('ollama'), 'unloaded')
+  assert.deepEqual(controller.getSnapshot().providers[1].availableModels, ['retained-model'], 'unloading memory must not remove installed models')
+})
+
+test('a settings edit invalidates the old endpoint check before its late response arrives', async () => {
+  const Controller = await DirectorController()
+  const project = projectFixture('00000000-0000-4000-8000-000000000112')
+  const provider = { id: 'api', label: 'API', kind: 'openai-compatible', baseUrl: 'http://old.test/v1', configured: true }
+  let resolveCheck
+  const check = new Promise(resolve => { resolveCheck = resolve })
+  const context = existingSessionContext(project, async (endpoint, input) => {
+    if (endpoint === 'nodes/list') return { ok: true, value: { nodeDefinitions: [] } }
+    if (endpoint === 'providers/check') return check
+    if (endpoint === 'providers/update') return { ok: true, value: { providers: [{ ...provider, ...input.patch }] } }
+    throw new Error(`unexpected endpoint ${endpoint}`)
+  })
+  const original = context.connection.rpc.call
+  context.connection.rpc.call = (channel, endpoint, input) => endpoint === 'providers/list'
+    ? Promise.resolve({ ok: true, value: { providers: [provider] } }) : original(channel, endpoint, input)
+  const controller = new Controller(context)
+  await controller.start()
+  const pending = controller.checkProvider('api')
+  await controller.updateProvider('api', { baseUrl: 'http://new.test/v1' })
+  resolveCheck({ ok: true, value: { ok: true, latencyMs: 2, models: ['old-endpoint-model'], workflowModels: [] } })
+  await pending
+  assert.equal(controller.getSnapshot().providerChecks.api, undefined)
+  assert.deepEqual(controller.getSnapshot().providers[0].availableModels, [])
+})
+
+test('ComfyUI folder inventory survives discovery and clears when its endpoint changes', async () => {
+  const Controller = await DirectorController()
+  const project = projectFixture('00000000-0000-4000-8000-000000000113')
+  const provider = { id: 'comfy', label: 'ComfyUI', kind: 'comfyui', baseUrl: 'http://comfy.test', configured: true }
+  const modelInventory = { checkpoints: { models: ['checkpoint.safetensors'] }, diffusion_models: { models: ['model.gguf'] }, loras: { models: [] }, vae: { models: [] } }
+  const context = existingSessionContext(project, async (endpoint, input) => {
+    if (endpoint === 'nodes/list') return { ok: true, value: { nodeDefinitions: [] } }
+    if (endpoint === 'providers/check') return { ok: true, value: { ok: true, latencyMs: 1, models: [], workflowModels: [] } }
+    if (endpoint === 'providers/models') return { ok: true, value: { models: ['beta'], workflowModels: [{ workflowId: 'example', parameterId: 'scheduler', models: ['beta'] }], modelInventory } }
+    if (endpoint === 'providers/update') return { ok: true, value: { providers: [{ ...provider, ...input.patch }] } }
+    throw new Error(`unexpected endpoint ${endpoint}`)
+  })
+  const original = context.connection.rpc.call
+  context.connection.rpc.call = (channel, endpoint, input) => endpoint === 'providers/list'
+    ? Promise.resolve({ ok: true, value: { providers: [provider] } }) : original(channel, endpoint, input)
+  const controller = new Controller(context)
+  await controller.start()
+  await controller.checkProvider('comfy')
+  assert.deepEqual(controller.getSnapshot().providers[0].modelInventory, modelInventory)
+  assert.deepEqual(controller.getSnapshot().providers[0].workflowModels[0].models, ['beta'])
+  await controller.updateProvider('comfy', { baseUrl: 'http://replacement.test' })
+  assert.equal(controller.getSnapshot().providers[0].modelInventory, undefined)
 })

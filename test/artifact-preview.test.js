@@ -72,6 +72,36 @@ function click(label) {
   return ui.act(async () => button.click())
 }
 
+test('equivalent live snapshots keep an open preview and its metadata request intact', async t => {
+  let reads = 0
+  globalThis.fetch = async () => { reads++; return Response.json({ ok: true, value: properties }) }
+  const root = await mount(t, 'inspect')
+  const player = document.querySelector('.vd-artifact-dialog video')
+  for (let index = 0; index < 5; index++) {
+    await ui.act(async () => root.render(structuredClone(asset)))
+  }
+  assert.equal(document.querySelector('.vd-artifact-dialog video'), player)
+  assert.equal(reads, 1, 'polls must not restart ffprobe for an unchanged immutable asset')
+})
+
+test('offscreen video thumbnails do not load media and release their source when hidden', async t => {
+  let notify, target
+  globalThis.IntersectionObserver = class {
+    constructor(callback) { notify = callback }
+    observe(element) { target = element }
+    unobserve() {}
+    disconnect() {}
+  }
+  t.after(() => { delete globalThis.IntersectionObserver })
+  await mount(t, 'preview')
+  assert.ok(target)
+  assert.equal(target.hasAttribute('src'), false)
+  await ui.act(async () => notify([{ target, isIntersecting: true }]))
+  assert.equal(target.getAttribute('src'), asset.url)
+  await ui.act(async () => notify([{ target, isIntersecting: false }]))
+  assert.equal(target.hasAttribute('src'), false)
+})
+
 for (const kind of ['inspect', 'preview', 'save']) {
   test(`${kind} audio popup shows duration, format, sample rate, channels and embedded metadata`, async t => {
     const audio = { ...asset, id: `audio-${kind}`, url: `/api/video-director/assets/audio-${kind}`, kind: 'audio', mimeType: 'audio/wav', name: 'sound.wav' }
@@ -193,8 +223,10 @@ function inputNumber(label, value) {
   const input = [...document.querySelectorAll('.vd-media-editor label')].find(node => node.textContent === label)?.querySelector('input')
   assert.ok(input, label)
   return ui.act(async () => {
+    input.focus()
     Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set.call(input, String(value))
     input.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+    input.blur()
   })
 }
 

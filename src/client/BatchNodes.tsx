@@ -5,6 +5,7 @@ import { batchRange, batchSourceItems, matchBatchItems } from './batch'
 import { batchArchive, downloadBatchArchive } from './batch-export'
 import { ArtifactPreviewDialog, ArtifactThumbnail, previewArtifactFromAsset, previewArtifactFromText, type PreviewArtifact } from './ArtifactPreview'
 import { t, useLanguage } from './i18n'
+import { NumberInput } from './NumberInput'
 
 type Props = { id: string; data: DirectorNodeData; runtime: DirectorRuntimeValue | null }
 
@@ -63,8 +64,8 @@ export function BatchInputBody({ id, data, runtime }: Props): ReactNode {
     <label>{t('Filename regex')}<input value={config.pattern ?? ''} disabled={locked} placeholder="\\.(png|jpg)$" onChange={event => update({ pattern: event.target.value })} /></label>
     <div className="vd-batch-pair"><label>{t('Order')}<select value={config.sort ?? 'input'} disabled={locked} onChange={event => update({ sort: event.target.value as 'input' | 'name' })}><option value="input">{t('Input order')}</option><option value="name">{t('Natural filename order')}</option></select></label>
       <label className="vd-batch-check"><input type="checkbox" checked={config.recursive !== false} disabled={locked} onChange={event => update({ recursive: event.target.checked })} />{t('Include subfolders')}</label></div>
-    <div className="vd-batch-pair"><label>{t('Start index')}<input type="number" min={1} step={1} value={config.startIndex ?? 1} disabled={locked} onChange={event => update({ startIndex: event.currentTarget.valueAsNumber })} /></label>
-      <label>{t('End index (inclusive)')}<input type="number" min={1} step={1} value={config.endIndex ?? ''} placeholder={String(items.length)} disabled={locked} onChange={event => update({ endIndex: event.currentTarget.value === '' ? undefined : event.currentTarget.valueAsNumber })} /></label></div>
+    <div className="vd-batch-pair"><label>{t('Start index')}<NumberInput integer min={1} step={1} value={config.startIndex ?? 1} disabled={locked} onValueCommit={value => update({ startIndex: value })} /></label>
+      <label>{t('End index (inclusive)')}<NumberInput allowEmpty integer min={1} step={1} value={config.endIndex} placeholder={String(items.length)} disabled={locked} onValueCommit={value => update({ endIndex: value })} /></label></div>
     <label>{t('On case error')}<select value={config.errorPolicy ?? 'stop'} disabled={locked} onChange={event => update({ errorPolicy: event.target.value as 'stop' | 'continue' })}><option value="stop">{t('Stop batch')}</option><option value="continue">{t('Continue; keep failed index')}</option></select></label>
     <button aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{matching ? t('Matching…') : t('{0} matched cases · preview', items.length)}</button>
     {expanded ? <div className="vd-batch-table"><table><thead><tr><th>#</th><th>{t('Input')}</th></tr></thead><tbody>{items.map((item, index) => <tr key={item.id} className={index + 1 < (config.startIndex ?? 1) || index + 1 > (config.endIndex ?? items.length) ? 'vd-batch-excluded' : undefined}><td>{index + 1}</td><td title={item.text ?? item.relativePath ?? item.name}>{item.relativePath ?? item.name}{item.text !== undefined ? ` · ${item.text.slice(0, 80)}` : ''}</td></tr>)}</tbody></table></div> : null}

@@ -102,6 +102,6 @@ Keep protocol strings, RPC endpoints, filenames, external class names, serialize
 | **TEXT WORKFLOW**, **IMAGE WORKFLOW**, **Audio Workflow** | Existing generation vd-node titles or controls; not names for the entire vd-workflow |
 | **Custom Node**, **Nodes & Workflows** | Existing UI labels for vd-node definitions and the ComfyUI workflow registry; qualify them when explaining an action |
 
-Prefer explicit names in new prose and UI copy. When giving navigation instructions, quote the actual current label and explain its scope if needed: “In **Nodes & Workflows**, import the vd-node pack.” Existing descriptive titles such as **Text**, **H3 Video**, and **Preview** can remain short; use the qualified noun when identifying their layer.
+Use **Vd-Node** / **Vd-Workflow** (or the existing `vd-node` / `vd-workflow` spelling) in internal development discussions and APIs to distinguish the ComfyUI layer. User-facing canvas controls use **Node** and **Workflow**. Do not expose the internal prefix in menus, dialogs or ordinary help text; qualify **ComfyUI** only when the user is actually configuring its backend. Existing serialized names remain compatible.
 
 For reviews and bug reports, include both the owner and identifier: “vd-job `j1` for vd-node `v7` failed while binding comfyui-node `12` input `seed` in registered comfyui-workflow `w3`.” Avoid bare “node,” “workflow,” “run,” or “ID” in descriptions that cross layers.

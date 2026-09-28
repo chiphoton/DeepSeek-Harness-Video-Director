@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createDirectorHost } from './director-host.js'
+import { canvasTool } from './canvas-agent.js'
 import { PROVIDER_SETTINGS_NAMESPACE } from './provider-settings.js'
 
 export const name = 'video-director'
@@ -76,6 +77,7 @@ export async function apply(ctx, config) {
     assetRoutes.add(asset.id)
   }
   host = await createDirectorHost(config, { registerAsset, tools: ctx.get('tools') })
+  ctx.inject(['tools'], toolsCtx => { toolsCtx.tools.register(canvasTool(host, toolsCtx)) })
   const { providerSettings } = host
   ctx.on('dispose', () => host.close())
   ctx.inject(['settings'], (settingsCtx) => {

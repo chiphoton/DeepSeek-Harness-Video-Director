@@ -94,6 +94,19 @@ export interface AssetRef {
   url: string
 }
 
+export interface InputAssetQuery {
+  query: string
+  origin: 'all' | 'input' | 'output'
+  cursor?: string
+  limit: number
+}
+
+export interface InputAssetPage {
+  assets: AssetRef[]
+  total: number
+  nextCursor: string | null
+}
+
 export type SketchTool = 'brush' | 'rectangle' | 'circle' | 'ellipse' | 'line' | 'arrow' | 'text' | 'eraser'
 
 export interface SketchPoint {
@@ -288,6 +301,7 @@ export interface ProjectSummary {
   sessionId: string
   status: 'draft' | 'running' | 'ready' | 'error'
   revision: number
+  draftRevision?: number
   nodeCount: number
   createdAt: string
   updatedAt: string
@@ -337,6 +351,8 @@ export interface GalleryProject {
   jobs: Array<Pick<DirectorJob, 'nodeId' | 'operation' | 'createdAt' | 'completedAt' | 'result'>>
 }
 
+export type ComfyModelCategory = 'checkpoints' | 'diffusion_models' | 'loras' | 'vae'
+
 export interface ProviderDescriptor {
   id: string
   label: string
@@ -361,6 +377,7 @@ export interface ProviderDescriptor {
   configured: boolean
   minimaxH3Unlocked: boolean
   availableModels?: string[]
+  modelInventory?: Partial<Record<ComfyModelCategory, { models: string[]; error?: string }>>
   loadedModels?: string[]
   modelDetails?: Array<{
     id: string
@@ -503,6 +520,24 @@ export type VdNodeResult =
   | { kind: 'assets'; assets: AssetRef[]; providerId: string; seed?: number; promptId?: string; frameCount?: number; actualDuration?: number; experimentalDuration?: boolean }
   | { kind: 'mcp-result'; result: unknown; providerId: string; seed?: number; promptId?: string; frameCount?: number; actualDuration?: number; experimentalDuration?: boolean }
 
+export interface JobHistoryCursor { submitted: string; id: string }
+export interface JobHistoryGroup {
+  id: string
+  projectId: string
+  run?: VdRun
+  jobs: DirectorJob[]
+  submitted: string
+}
+export interface JobHistoryPage {
+  groups: JobHistoryGroup[]
+  nextCursor: JobHistoryCursor | null
+}
+export interface JobHistoryState extends JobHistoryPage {
+  initialized: boolean
+  loading: boolean
+  error: string | null
+}
+
 export interface DirectorSnapshot {
   open: boolean
   phase: 'idle' | 'loading' | 'ready' | 'error'
@@ -528,6 +563,8 @@ export interface DirectorSnapshot {
   /** Existing snapshot key for grouped vd-runs. */
   jobs: DirectorJob[]
   workflowRuns: VdRun[]
+  /** Per-filter pages held only by this tab's controller, never persisted. */
+  jobHistory: Record<string, JobHistoryState>
   batchCases: Record<string, BatchCase[]>
 }
 

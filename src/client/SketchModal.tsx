@@ -1,4 +1,5 @@
 import { t, useLanguage } from './i18n'
+import { NumberInput } from './NumberInput'
 import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -275,7 +276,6 @@ export function SketchModal(props: SketchModalProps): ReactNode {
   const [tool, setTool] = useState<SketchTool>('brush')
   const [color, setColor] = useState<string>('#111111')
   const [brush, setBrush] = useState(8)
-  const [brushDraft, setBrushDraft] = useState('8')
   const [brushPreviewSize, setBrushPreviewSize] = useState(8)
   const [brushPreviewVisible, setBrushPreviewVisible] = useState(false)
   const [canvasCursor, setCanvasCursor] = useState<CanvasCursorPreview | null>(null)
@@ -312,7 +312,6 @@ export function SketchModal(props: SketchModalProps): ReactNode {
     setWidthDraft(String(next.present.width))
     setHeightDraft(String(next.present.height))
     setBrush(8)
-    setBrushDraft('8')
     setBrushPreviewVisible(false)
     setCanvasCursor(null)
     setCanvasView(fitSketchCanvasView())
@@ -448,7 +447,6 @@ export function SketchModal(props: SketchModalProps): ReactNode {
   const showBrushPreview = (nextBrush: number): void => {
     const next = Math.max(1, Math.min(200, Math.round(nextBrush)))
     setBrush(next)
-    setBrushDraft(String(next))
     const canvas = canvasRef.current
     const scale = canvas === null ? 1 : canvas.clientWidth / Math.max(1, canvas.width)
     setBrushPreviewSize(Math.max(2, next * scale))
@@ -584,9 +582,9 @@ export function SketchModal(props: SketchModalProps): ReactNode {
     commit({ ...sketch, elements: [...sketch.elements, cloneSketchElement(element)] })
   }
 
-  const applyCanvasSize = (): void => {
-    const width = Number(widthDraft)
-    const height = Number(heightDraft)
+  const applyCanvasSize = (committed: { width?: number; height?: number } = {}): void => {
+    const width = committed.width ?? Number(widthDraft)
+    const height = committed.height ?? Number(heightDraft)
     if (!Number.isFinite(width) || !Number.isFinite(height)) {
       setError('Canvas width and height must be numbers.')
       return
@@ -603,10 +601,11 @@ export function SketchModal(props: SketchModalProps): ReactNode {
     }
   }
 
-  const onSizeKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
+  const onSizeKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>, dimension: 'width' | 'height'): void => {
     if (event.key === 'Enter') {
       event.preventDefault()
-      applyCanvasSize()
+      // Read this Enter commit directly; its state update has not rendered yet.
+      applyCanvasSize({ [dimension]: Number(event.currentTarget.value) })
     }
   }
 
@@ -649,14 +648,14 @@ export function SketchModal(props: SketchModalProps): ReactNode {
           <span className="vd-sketch-canvas-size" aria-label={t("Canvas size")}>
             <label>
               <span>W</span>
-              <input type="number" min={SKETCH_MIN_SIZE} max={SKETCH_MAX_SIZE} value={widthDraft} aria-label={t("Canvas width")} onChange={event => setWidthDraft(event.target.value)} onKeyDown={onSizeKeyDown} />
+              <NumberInput integer min={SKETCH_MIN_SIZE} max={SKETCH_MAX_SIZE} value={widthDraft} aria-label={t("Canvas width")} onValueCommit={value => setWidthDraft(String(value))} onKeyDown={event => onSizeKeyDown(event, 'width')} />
             </label>
             <span aria-hidden>×</span>
             <label>
               <span>H</span>
-              <input type="number" min={SKETCH_MIN_SIZE} max={SKETCH_MAX_SIZE} value={heightDraft} aria-label={t("Canvas height")} onChange={event => setHeightDraft(event.target.value)} onKeyDown={onSizeKeyDown} />
+              <NumberInput integer min={SKETCH_MIN_SIZE} max={SKETCH_MAX_SIZE} value={heightDraft} aria-label={t("Canvas height")} onValueCommit={value => setHeightDraft(String(value))} onKeyDown={event => onSizeKeyDown(event, 'height')} />
             </label>
-            <button type="button" disabled={busy} onClick={applyCanvasSize}>{t("Resize")}</button>
+            <button type="button" disabled={busy} onClick={() => applyCanvasSize()}>{t("Resize")}</button>
             <small>PNG</small>
           </span>
           <span style={{ flex: 1 }} />
@@ -683,18 +682,13 @@ export function SketchModal(props: SketchModalProps): ReactNode {
             </span>
             <label className="vd-sketch-brush-size">
               <span>{t("Size")}</span>
-              <input
-                type="number"
+              <NumberInput
+                integer
                 min={1}
                 max={200}
-                value={brushDraft}
+                value={brush}
                 aria-label={t("Brush size value")}
-                onChange={event => {
-                  setBrushDraft(event.target.value)
-                  const value = Number(event.target.value)
-                  if (Number.isFinite(value) && value >= 1 && value <= 200) showBrushPreview(value)
-                }}
-                onBlur={() => showBrushPreview(Number(brushDraft) || brush)}
+                onValueCommit={showBrushPreview}
               />
               <span>px</span>
               <input type="range" min={1} max={200} value={brush} aria-label={t("Brush size")} onChange={event => showBrushPreview(Number(event.target.value))} />
