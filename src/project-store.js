@@ -19,6 +19,7 @@ import {
 const PROJECT_SCHEMA_VERSION = 1
 const PROJECT_STATUSES = ['draft', 'running', 'ready', 'error']
 const ASSET_KINDS = ['image', 'audio', 'video', 'sketch', 'mask']
+const compareAvailableAssets = (a, b) => b.createdAt.localeCompare(a.createdAt) || a.name.localeCompare(b.name) || a.filename.localeCompare(b.filename)
 const MIME_EXTENSIONS = new Map([
   ['image/png', 'png'],
   ['image/jpeg', 'jpg'],
@@ -36,10 +37,14 @@ const MIME_EXTENSIONS = new Map([
   ['video/quicktime', 'mov'],
 ])
 
-function assertMimeForKind(kind, mimeType) {
+export function supportsAssetMimeType(kind, mimeType) {
   const family = mimeType.split('/', 1)[0]
   const accepted = kind === 'sketch' || kind === 'mask' ? family === 'image' : family === kind
-  if (!accepted || !MIME_EXTENSIONS.has(mimeType)) {
+  return accepted && MIME_EXTENSIONS.has(mimeType)
+}
+
+function assertMimeForKind(kind, mimeType) {
+  if (!supportsAssetMimeType(kind, mimeType)) {
     throw new DirectorInputError(`unsupported ${kind} MIME type: ${mimeType}`)
   }
 }
@@ -61,6 +66,7 @@ function projectSummary(project) {
     sessionId: project.sessionId,
     status: project.status,
     revision: project.revision,
+    draftRevision: project.draftRevision ?? 0,
     nodeCount: (project.draft?.graph ?? project.graph).nodes.length,
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
@@ -87,6 +93,7 @@ function normalizedProject(value, expectedId) {
   const normalized = {
     schemaVersion: PROJECT_SCHEMA_VERSION,
     revision: Number.isSafeInteger(input.revision) && input.revision > 0 ? input.revision : 1,
+    draftRevision: Number.isSafeInteger(input.draftRevision) && input.draftRevision >= 0 ? input.draftRevision : 0,
     id,
     name: string(input.name, 'project.name', { min: 1, max: 120 }),
     sessionId: string(input.sessionId, 'project.sessionId', { min: 1, max: 256 }),
@@ -271,36 +278,64 @@ export class ProjectStore {
     return this.#refreshAssetRefs(normalizedProject(raw, id))
   }
 
-  async saveProject(projectId, value, expectedRevision, { commit = false } = {}) {
+  async saveProject(projectId, value, expectedRevision, { commit = false, expectedDraftRevision } = {}) {
     const id = uuid(projectId, 'projectId')
     return this.#withProjectWrite(id, async () => {
       const current = await this.getProject(id)
+      if (commit) this.#checkDraftRevision(current, expectedDraftRevision)
       return this.#saveProjectFromCurrent(id, commit ? { ...value, jobs: current.jobs } : value, expectedRevision, current, { commit })
     })
   }
 
   /** A draft is durable without changing the explicitly saved workflow or its revision. */
-  async cacheDraft(projectId, draft) {
+  async cacheDraft(projectId, draft, expectedDraftRevision) {
     const id = uuid(projectId, 'projectId')
     return this.#withProjectWrite(id, async () => {
       const current = await this.getProject(id)
-      const project = normalizedProject({ ...current, draft: draft === null ? undefined : record(draft, 'draft') }, id)
+      this.#checkDraftRevision(current, expectedDraftRevision)
+      const project = normalizedProject({ ...current, draftRevision: current.draftRevision + 1, draft: draft === null ? undefined : record(draft, 'draft') }, id)
       await this.#writeProject(project)
       return projectSummary(project)
     })
   }
 
-  async discardDraft(projectId) {
+  #checkDraftRevision(project, expected) {
+    if (expected === undefined) return // Compatibility with older clients.
+    if (!Number.isSafeInteger(expected) || expected !== project.draftRevision) {
+      throw Object.assign(new Error('The workflow changed in another editor or agent. Reload before applying these edits.'), {
+        code: 'video-director/draft-conflict', details: { expectedDraftRevision: expected, currentDraftRevision: project.draftRevision },
+      })
+    }
+  }
+
+  /** Compare and mutate under the same project lock as browser draft writes. */
+  async mutateDraft(projectId, expectedDraftRevision, mutate) {
+    const id = uuid(projectId, 'projectId')
+    return this.#withProjectWrite(id, async () => {
+      const current = await this.getProject(id)
+      if (expectedDraftRevision === undefined) throw new DirectorInputError('expectedDraftRevision is required for canvas edits')
+      this.#checkDraftRevision(current, expectedDraftRevision)
+      const draft = await mutate(structuredClone(current.draft ?? {
+        name: current.name, graph: current.graph, settings: current.settings, mediaLibrary: current.mediaLibrary,
+      }))
+      const project = normalizedProject({ ...current, draft, draftRevision: current.draftRevision + 1 }, id)
+      await this.#writeProject(project)
+      return projectSummary(project)
+    })
+  }
+
+  async discardDraft(projectId, expectedDraftRevision) {
     const id = uuid(projectId, 'projectId')
     const project = await this.#withProjectWrite(id, async () => {
       const current = await this.getProject(id)
+      this.#checkDraftRevision(current, expectedDraftRevision)
       const activeRuns = await this.listVdRuns(id)
       if (current.jobs.some(job => job.status === 'queued' || job.status === 'running')
         || activeRuns.some(run => run.status === 'queued' || run.status === 'running')) {
         throw Object.assign(new Error('Wait for tasks to finish or cancel them before discarding changes.'), { code: 'video-director/project-busy' })
       }
       if (current.hasSavedVersion === false) return null
-      const { draft: _draft, ...saved } = current
+      const { draft: _draft, ...saved } = { ...current, draftRevision: current.draftRevision + 1 }
       await this.#writeProject(saved)
       return saved
     })
@@ -467,10 +502,11 @@ export class ProjectStore {
     })
   }
 
-  async forceSaveProject(projectId, value) {
+  async forceSaveProject(projectId, value, expectedDraftRevision) {
     const id = uuid(projectId, 'projectId')
     return this.#withProjectWrite(id, async () => {
       const current = await this.getProject(id)
+      this.#checkDraftRevision(current, expectedDraftRevision)
       return this.#saveProjectFromCurrent(id, {
         ...current,
         name: value?.name,
@@ -576,6 +612,7 @@ export class ProjectStore {
       ...value,
       id,
       revision: current.revision + 1,
+      draftRevision: current.draftRevision + (commit ? 1 : 0),
       sessionId: preserveSession ? current.sessionId : value.sessionId,
       draft: commit ? undefined : current.draft,
       hasSavedVersion: commit ? true : current.hasSavedVersion,
@@ -677,7 +714,33 @@ export class ProjectStore {
       const previous = unique.get(asset.filename)
       if (!previous || asset.projectId === projectId) unique.set(asset.filename, asset)
     }
-    return [...unique.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.name.localeCompare(b.name))
+    return [...unique.values()].sort(compareAvailableAssets)
+  }
+
+  availableAssetPage(kind, projectId, options = {}) {
+    const limit = options.limit ?? 15
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new DirectorInputError('limit must be an integer between 1 and 100')
+    const query = string(options.query ?? '', 'query', { max: 512 }).toLocaleLowerCase()
+    const origin = oneOf(options.origin ?? 'all', 'origin', ['all', 'input', 'output'])
+    const scope = JSON.stringify([kind, projectId ?? null, query, origin])
+    let after
+    if (options.cursor !== undefined && options.cursor !== null) {
+      try {
+        const cursor = JSON.parse(Buffer.from(string(options.cursor, 'cursor', { max: 4096 }), 'base64url').toString('utf8'))
+        if (cursor.scope !== scope) throw new Error('Cursor filters changed')
+        after = { createdAt: string(cursor.after.createdAt, 'createdAt', { min: 1, max: 64 }),
+          name: string(cursor.after.name, 'name', { max: 512 }), filename: string(cursor.after.filename, 'filename', { min: 1, max: 2048 }) }
+      } catch { throw new DirectorInputError('Invalid asset cursor; restart the asset search') }
+    }
+    const matches = this.availableAssets(kind, projectId).filter(asset => (origin === 'all' || (asset.origin ?? 'input') === origin)
+      && `${asset.name} ${asset.origin === 'input' ? asset.filename?.split('/').at(-1) ?? asset.name : asset.name}`.toLocaleLowerCase().includes(query))
+    // Continue after a stable sort key, so newly generated assets cannot shift later pages.
+    const remaining = after ? matches.filter(asset => compareAvailableAssets(asset, after) > 0) : matches
+    const assets = remaining.slice(0, limit)
+    const last = assets.at(-1)
+    const nextCursor = remaining.length > limit && last ? Buffer.from(JSON.stringify({ scope,
+      after: { createdAt: last.createdAt, name: last.name, filename: last.filename } })).toString('base64url') : null
+    return { assets, total: matches.length, nextCursor }
   }
 
   #refreshAssetRefs(value) {

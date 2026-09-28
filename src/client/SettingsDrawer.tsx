@@ -1,201 +1,20 @@
 import { t, useLanguage } from './i18n'
-import { type ChangeEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { type ChangeEvent, type ReactNode, useEffect, useMemo, useState } from 'react'
 
 import type { DirectorController } from './controller'
 import { CloseIcon } from './icons'
+import { ProviderConnections } from './ProviderConnections'
 import { StorageSettings } from './StorageSettings'
 import { LanguageSettings } from './LanguageSettings'
 import type {
   DirectorSnapshot,
   VdNodeDefinitionDescriptor,
-  ProviderDescriptor,
   ComfyWorkflowDescriptor,
   ComfyWorkflowKind,
 } from './types'
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
-}
-
-function healthLabel(provider: ProviderDescriptor, snapshot: DirectorSnapshot): string {
-  const check = snapshot.providerChecks[provider.id]
-  if (check?.state === 'checking') return t("检查中…")
-  if (check?.state === 'ok') return provider.kind === 'codex-plan' ? t("{0} models available", String(provider.availableModels?.length ?? 0)) : t("可用 · {0} ms", String(check.latencyMs ?? 0))
-  if (check?.state === 'error') return check.message ?? t("连接失败")
-  if (!provider.configured) return t("配置不完整")
-  return t("尚未检查")
-}
-
-function ProviderCard({
-  provider,
-  snapshot,
-  director,
-}: {
-  provider: ProviderDescriptor
-  snapshot: DirectorSnapshot
-  director: DirectorController
-}): ReactNode {
-  useLanguage()
-  const [baseUrl, setBaseUrl] = useState(provider.baseUrl ?? '')
-  const [model, setModel] = useState(provider.model ?? '')
-  const [imageModel, setImageModel] = useState(provider.imageModel ?? '')
-  const [apiKey, setApiKey] = useState('')
-  const [clearApiKey, setClearApiKey] = useState(false)
-  const [edited, setEdited] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [message, setMessage] = useState<string | null>(null)
-  const editRevision = useRef(0)
-  const markEdited = (): void => {
-    editRevision.current += 1
-    setEdited(true)
-  }
-
-  useEffect(() => {
-    if (edited) return
-    setBaseUrl(provider.baseUrl ?? '')
-    setModel(provider.model ?? '')
-    setImageModel(provider.imageModel ?? '')
-    setApiKey('')
-    setClearApiKey(false)
-  }, [edited, provider.apiKeySet, provider.baseUrl, provider.id, provider.imageModel, provider.model])
-
-  const save = async (): Promise<void> => {
-    const revision = editRevision.current
-    setBusy(true)
-    setMessage(null)
-    try {
-      await director.updateProvider(provider.id, {
-        baseUrl,
-        ...(provider.kind === 'ollama' || provider.kind === 'openai-compatible' ? { model } : {}),
-        ...(provider.kind === 'openai-compatible' ? { imageModel } : {}),
-        ...(apiKey === '' ? {} : { apiKey }),
-        ...(clearApiKey ? { clearApiKey: true } : {}),
-      })
-      if (editRevision.current === revision) {
-        setApiKey('')
-        setClearApiKey(false)
-        setEdited(false)
-        setMessage(t("配置已保存并实时生效"))
-      } else {
-        setMessage(t("先前配置已保存；保存期间的新修改尚未保存。"))
-      }
-    } catch (error) {
-      setMessage(messageOf(error))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const check = snapshot.providerChecks[provider.id]
-  const availableModels = provider.availableModels ?? []
-  const selectedModelMissing = model !== '' && !availableModels.includes(model)
-  return (
-    <section className="vd-settings-card">
-      <header>
-        <div>
-          <strong>{provider.label}</strong>
-          <span>{provider.kind}</span>
-        </div>
-        <span className={`vd-health vd-health-${check?.state ?? (provider.configured ? 'idle' : 'error')}`}>
-          {healthLabel(provider, snapshot)}
-        </span>
-      </header>
-      {provider.kind === 'comfyui' ? (
-        <p className="vd-settings-note">{t("只需填写 ComfyUI 的 IP 和端口。Video Director 会在 Host 内自动探测并选择 REST 或 ComfyUI MCP；节点和用户无需选择传输方式。")}</p>
-      ) : null}
-      {provider.kind === 'codex-plan' ? (
-        <>
-          <p className="vd-settings-note">{t("Uses your local Codex sign-in. Models sync from Codex and use their default reasoning effort. Choose a model in text/image nodes.")}</p>
-          <label className="vd-clear-secret">
-            <input type="checkbox" checked={provider.fastMode === true} disabled={busy} onChange={event => {
-              const fastMode = event.target.checked
-              setBusy(true)
-              setMessage(null)
-              void director.updateProvider(provider.id, { fastMode })
-                .catch(error => setMessage(messageOf(error)))
-                .finally(() => setBusy(false))
-            }} />
-            {t("Fast (priority)")}
-          </label>
-          <p className="vd-settings-note">{t("Faster responses with increased usage. Applies to supported Codex models in text/image nodes. Off by default.")}</p>
-          {provider.codexCatalog?.source === 'cache' ? <p className="vd-settings-note">{t("Using the saved model list. Refresh models to check for updates.")}</p> : null}
-        </>
-      ) : null}
-      {provider.kind === 'comfyui' && provider.modelDiscovery?.state === 'ready' ? (
-        <p className="vd-settings-note">{t("已从 ComfyUI 同步模型枚举；模型只会出现在对应 Workflow 已声明开放的参数下拉中，Workflow 仍是节点的主选择。")}</p>
-      ) : null}
-      {provider.modelDiscovery?.state === 'error' ? (
-        <p className="vd-settings-note">{t("模型列表刷新失败：")}{provider.modelDiscovery.message ?? t("未知错误")}{t("。当前选择已保留，可用下面的按钮重试。")}</p>
-      ) : null}
-      {provider.kind === 'codex-plan' ? null : <div className="vd-settings-grid">
-        <label className="vd-span-2">
-          <span>{provider.kind === 'comfyui' ? 'ComfyUI IP / Port' : 'Base URL'}</span>
-          <input value={baseUrl} placeholder={provider.kind === 'comfyui' ? '127.0.0.1:8188' : 'https://api.example.com/v1'} onChange={event => { setBaseUrl(event.target.value); markEdited() }} />
-        </label>
-        {provider.kind === 'ollama' ? (
-          <label>
-            <span>{t("默认文字 / 多模态模型")}</span>
-            <select
-              value={model}
-              disabled={availableModels.length === 0 && !selectedModelMissing}
-              onChange={event => { setModel(event.target.value); markEdited() }}
-            >
-              {model === '' ? (
-                <option value="">{provider.modelDiscovery?.state === 'loading' ? t("正在从 Ollama 获取模型…") : t("尚未检测到可用模型")}</option>
-              ) : null}
-              {selectedModelMissing ? <option value={model}>{model} {t("· 当前配置（API 未返回）")}</option> : null}
-              {availableModels.map(candidate => <option key={candidate} value={candidate}>{candidate}</option>)}
-            </select>
-          </label>
-        ) : provider.kind === 'openai-compatible' ? (
-          <label>
-            <span>{t("默认文字 / 多模态模型")}</span>
-            <input value={model} placeholder="qwen3-vl" onChange={event => { setModel(event.target.value); markEdited() }} />
-          </label>
-        ) : null}
-        {provider.kind === 'openai-compatible' ? (
-          <label>
-            <span>{t("默认图像模型")}</span>
-            <input value={imageModel} placeholder="gpt-image-2" onChange={event => { setImageModel(event.target.value); markEdited() }} />
-          </label>
-        ) : null}
-        {(provider.kind === 'openai-compatible' || provider.requiresApiKey || provider.apiKeySet) ? (
-          <label className="vd-span-2">
-            <span>API Key {provider.apiKeySet ? t("· 已保存（不会回显）") : ''}</span>
-            <input
-              type="password"
-              autoComplete="new-password"
-              value={apiKey}
-              disabled={clearApiKey}
-              placeholder={provider.apiKeySet ? t("留空以保留当前密钥") : t("输入密钥")}
-              onChange={event => { setApiKey(event.target.value); markEdited() }}
-            />
-          </label>
-        ) : null}
-      </div>}
-      <footer>
-        {provider.apiKeySet ? (
-          <label className="vd-clear-secret">
-            <input type="checkbox" checked={clearApiKey} onChange={event => { setClearApiKey(event.target.checked); markEdited() }} />
-            {t("清除已保存密钥")}
-          </label>
-        ) : <span />}
-        <div>
-          <button type="button" className="vd-secondary" disabled={check?.state === 'checking' || provider.modelDiscovery?.state === 'loading'} onClick={() => { void director.checkProvider(provider.id) }}>
-            {provider.kind === 'codex-plan'
-              ? t("Refresh models")
-              : provider.kind === 'ollama' || provider.kind === 'comfyui' || provider.kind === 'comfyui-mcp'
-                ? t("检查连接并刷新模型")
-                : t("检查连接")}
-          </button>
-          {provider.kind === 'codex-plan' ? null : (
-            <button type="button" className="vd-primary" disabled={busy} onClick={() => { void save() }}>{busy ? t("保存中…") : t("保存配置")}</button>
-          )}
-        </div>
-      </footer>
-      {message !== null ? <div className="vd-settings-message">{message}</div> : null}
-    </section>
-  )
 }
 
 function workflowKindLabel(kind: ComfyWorkflowKind): string {
@@ -298,7 +117,7 @@ function VdNodeLibrarySettings({ snapshot, director }: { snapshot: DirectorSnaps
     setNodeMessage(null)
     try {
       const value: unknown = JSON.parse(await file.text())
-      if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error(t("vd-node pack 必须是 JSON 对象。"))
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error(t("节点包必须是 JSON 对象。"))
       setNodePack(value as Record<string, unknown>)
       setNodeFilename(file.name)
     } catch (error) {
@@ -421,17 +240,7 @@ export function SettingsDrawer({
         <button type="button" role="tab" aria-selected={tab === 'language'} className={tab === 'language' ? 'is-active' : ''} onClick={() => setTab('language')}>{t('Language')}</button>
       </nav>
       <div className="vd-settings-body">
-        {tab === 'providers' ? (
-          <>
-            <div className="vd-settings-intro">
-              <strong>{t("Provider 连接")}</strong>
-              <p>{t("这些是全局连接设置，会通过 DSH 原生设置 持久化并实时应用；API Key 不会发送回浏览器。")}</p>
-            </div>
-            {snapshot.providers.map(provider => (
-              <ProviderCard key={provider.id} provider={provider} snapshot={snapshot} director={director} />
-            ))}
-          </>
-        ) : tab === 'storage' ? <StorageSettings snapshot={snapshot} director={director} /> : tab === 'language' ? <LanguageSettings /> : <VdNodeLibrarySettings snapshot={snapshot} director={director} />}
+        {tab === 'providers' ? <ProviderConnections snapshot={snapshot} director={director} /> : tab === 'storage' ? <StorageSettings snapshot={snapshot} director={director} /> : tab === 'language' ? <LanguageSettings /> : <VdNodeLibrarySettings snapshot={snapshot} director={director} />}
       </div>
     </aside>
   )

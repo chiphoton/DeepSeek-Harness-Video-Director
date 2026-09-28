@@ -34,6 +34,7 @@ const MAX_MODEL_ID_LENGTH = 512
 const MAX_COMFY_SELECTOR_LENGTH = 256
 const MAX_MODEL_DISCOVERY_RESPONSE_BYTES = 4 * 1024 * 1024
 const MAX_COMFY_OBJECT_INFO_RESPONSE_BYTES = 32 * 1024 * 1024
+const COMFY_MODEL_FOLDERS = ['checkpoints', 'diffusion_models', 'loras', 'vae']
 const MAX_TRANSCRIPTION_AUDIO_BYTES = 25 * 1024 * 1024
 const MAX_TRANSCRIPTION_RESPONSE_BYTES = 1024 * 1024
 
@@ -588,13 +589,35 @@ export class ProviderRuntime {
         MAX_COMFY_OBJECT_INFO_RESPONSE_BYTES,
         `${provider.label} object_info`,
       )
-      return comfyModelCatalog(parseJsonText(text, `${provider.label} object_info`))
+      const catalog = comfyModelCatalog(parseJsonText(text, `${provider.label} object_info`))
+      // Workflow enums also contain samplers, schedulers and output formats.
+      // The Settings inventory must come from model folders, not those enums.
+      const entries = await Promise.all(COMFY_MODEL_FOLDERS.map(async folder => {
+        const label = `${provider.label} ${folder} inventory`
+        try {
+          const response = await request(this.fetch, `${provider.baseUrl}/models/${folder}`, { headers: this.#headers(provider) }, {
+            signal, timeoutMs, label,
+          })
+          const body = parseJsonText(await limitedResponseText(response, MAX_MODEL_DISCOVERY_RESPONSE_BYTES, label), label)
+          if (!Array.isArray(body)) throw new Error(`${label} returned an invalid model list`)
+          return [folder, { models: uniqueStrings(body) }]
+        } catch (error) {
+          // One inventory failure must not discard the other folders or the
+          // workflow parameter choices needed to edit existing nodes.
+          return [folder, { models: [], error: error instanceof Error ? error.message : String(error) }]
+        }
+      }))
+      signal?.throwIfAborted()
+      return { ...catalog, modelInventory: Object.fromEntries(entries) }
     }
     return { models: [], modelInputs: [] }
   }
 
   async modelStatus(providerId, model, signal) {
-    const provider = this.#provider(providerId)
+    return this.#modelStatus(this.#provider(providerId), model, signal)
+  }
+
+  async #modelStatus(provider, model, signal) {
     if (provider.kind !== 'ollama') throw new DirectorInputError(`${provider.label} does not support model status checks`)
     if (provider.baseUrl === undefined) throw new Error(`${provider.label} requires an Ollama endpoint`)
     const selectedModel = string(model, 'model', { min: 1, max: MAX_MODEL_ID_LENGTH })
@@ -611,7 +634,10 @@ export class ProviderRuntime {
   }
 
   async unloadModel(providerId, model, signal) {
-    const provider = this.#provider(providerId)
+    return this.#unloadModel(this.#provider(providerId), model, signal)
+  }
+
+  async #unloadModel(provider, model, signal) {
     if (provider.kind !== 'ollama') throw new DirectorInputError(`${provider.label} does not support unloading models`)
     if (provider.baseUrl === undefined) throw new Error(`${provider.label} requires an Ollama endpoint`)
     const selectedModel = string(model, 'model', { min: 1, max: MAX_MODEL_ID_LENGTH })
@@ -625,7 +651,7 @@ export class ProviderRuntime {
       label: `${provider.label} model unload`,
     })
     await limitedResponseText(response, MAX_MODEL_DISCOVERY_RESPONSE_BYTES, `${provider.label} model unload`)
-    return this.modelStatus(providerId, selectedModel, signal)
+    return this.#modelStatus(provider, selectedModel, signal)
   }
 
   async runTrigger(action, options = {}, signal) {
@@ -635,6 +661,40 @@ export class ProviderRuntime {
     if (action === 'ollama-eject') return this.#reconnect(() => this.#ejectOllamaModels(signal), signal)
     if (action === 'comfyui-clear') return this.#reconnect(() => this.#clearComfyUi(options.releaseWaitSeconds ?? 10, signal), signal)
     throw new DirectorInputError(`unknown VRAM trigger action: ${String(action)}`)
+  }
+
+  async unloadModels(providerId, signal) {
+    const provider = this.#provider(providerId)
+    if (provider.kind === 'ollama') {
+      const catalog = await this.models(providerId, signal)
+      const unloadedModels = []
+      for (const model of catalog.loadedModels ?? []) {
+        const status = await this.#unloadModel(provider, model, signal)
+        if (status.loaded) throw new Error(`${provider.label} did not confirm that ${model} was unloaded.`)
+        unloadedModels.push(model)
+      }
+      return { status: 'unloaded', unloadedModels }
+    }
+    if (provider.kind === 'comfyui' || provider.kind === 'comfyui-mcp') {
+      await this.#requestComfyUnload(provider, signal)
+      // /free acknowledges executor flags, not completion of the unload.
+      return { status: 'requested' }
+    }
+    throw new DirectorInputError(`${provider.label} does not support unloading models`)
+  }
+
+  async #requestComfyUnload(provider, signal) {
+    if (!provider.baseUrl) throw new DirectorInputError(`${provider.label} requires a ComfyUI REST endpoint`)
+    const response = await request(this.fetch, `${provider.baseUrl}/free`, {
+      method: 'POST',
+      headers: { ...this.#headers(provider), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ unload_models: true, free_memory: true }),
+    }, {
+      signal,
+      timeoutMs: Math.min(provider.timeoutMs, 30_000),
+      label: `${provider.label} model unload and cache clear`,
+    })
+    await limitedResponseText(response, MAX_MODEL_DISCOVERY_RESPONSE_BYTES, `${provider.label} model unload and cache clear`)
   }
 
   async #ejectOllamaModels(signal) {
@@ -671,16 +731,7 @@ export class ProviderRuntime {
     const targets = [...byEndpoint.values()]
     if (targets.length === 0) throw new Error('No configured ComfyUI REST endpoint is available for model unload.')
     for (const provider of targets) {
-      const response = await request(this.fetch, `${provider.baseUrl}/free`, {
-        method: 'POST',
-        headers: { ...this.#headers(provider), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ unload_models: true, free_memory: true }),
-      }, {
-        signal,
-        timeoutMs: Math.min(provider.timeoutMs, 30_000),
-        label: `${provider.label} model unload and cache clear`,
-      })
-      await limitedResponseText(response, MAX_MODEL_DISCOVERY_RESPONSE_BYTES, `${provider.label} model unload and cache clear`)
+      await this.#requestComfyUnload(provider, signal)
     }
     // ComfyUI's /free route acknowledges the request after setting executor
     // flags; it does not expose a completion token. Give the executor loop a

@@ -1,4 +1,5 @@
 import type { DirectorController } from './controller'
+import { ChatAttachmentRegistry, type ChatAttachment } from './chat-attachments'
 import type {
   ChatModelDirectory,
   ChatModelDirectoryState,
@@ -463,6 +464,7 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
   private projectId: string | null = null
   private sessionId: string | null = null
   private disposed = false
+  private readonly attachmentRegistries = new Map<string, ChatAttachmentRegistry>()
   private disposeDirector: (() => void) | undefined
   private disposeSessions: (() => void) | undefined
   private disposeSession: (() => void) | undefined
@@ -491,8 +493,34 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
     return () => { this.listeners.delete(listener) }
   }
 
+  attachments(): ChatAttachmentRegistry {
+    const project = this.director.getSnapshot().project
+    if (!project) throw new Error('Select a workflow first')
+    const key = `${project.id}:${project.sessionId}`
+    let registry = this.attachmentRegistries.get(key)
+    if (!registry) {
+      registry = new ChatAttachmentRegistry(input => this.director.chatReferences(input), project.id, project.sessionId)
+      this.attachmentRegistries.set(key, registry)
+    }
+    return registry
+  }
+
+  async sendAttachments(text: string): Promise<void> {
+    const project = this.director.getSnapshot().project
+    await this.director.prepareChatContext()
+    const registry = this.attachments()
+    const selected = registry.getSnapshot().filter(item => !item.sent || text.includes(item.alias))
+    const prepared = await registry.prepare(selected)
+    if (this.director.getSnapshot().project?.sessionId !== project?.sessionId) throw new Error('The chat session changed during upload')
+    // Only explicitly used/new images enter this turn; other media stays on the Host.
+    const images = prepared.filter(item => item.kind === 'image' && item.file && item.file.size <= 8 * 1024 * 1024).map(item => item.file!)
+    const references = prepared.map(({ alias, kind, name, nodeId }) => ({ alias, kind, name, nodeId }))
+    await this.send(text || references.map(item => item.alias).join(' '), images, JSON.stringify({ attachments: references }))
+    await registry.markSent(prepared)
+  }
+
   /** Send through DSH's optimistic submission + identified native prompt path. */
-  send = async (text: string, images: readonly File[] = []): Promise<void> => {
+  send = async (text: string, images: readonly File[] = [], attachmentContext = ''): Promise<void> => {
     const visibleText = text.trim()
     if (visibleText === '' && images.length === 0) return
     const project = this.director.getSnapshot().project
@@ -500,16 +528,17 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
     if (project === null || sessionId === null) {
       this.unboundError = 'Select a Video Project before sending a message.'
       this.rebuild()
-      return
+      throw new Error(this.unboundError)
     }
     const binding = sessionId === this.sessionId ? this.binding : undefined
     if (binding === undefined) {
-      this.localErrors.set(sessionId, 'The project\'s DeepSeek session is still opening.')
+      const message = 'The project\'s DeepSeek session is still opening.'
+      this.localErrors.set(sessionId, message)
       this.rebuild()
-      return
+      throw new Error(message)
     }
 
-    const payload = embedDirectorContext(visibleText, this.director.currentContext())
+    const payload = embedDirectorContext(visibleText, this.director.currentContext() + (attachmentContext ? `\n${attachmentContext}` : ''))
     const controller = new AbortController()
     this.promptControllers.add(controller)
     this.sending.set(sessionId, (this.sending.get(sessionId) ?? 0) + 1)
@@ -601,6 +630,8 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
     this.disposed = true
     this.detachBinding()
     this.detachModelDirectory()
+    for (const registry of this.attachmentRegistries.values()) registry.dispose()
+    this.attachmentRegistries.clear()
     this.disposeDirector?.()
     this.disposeSessions?.()
     this.disposeDirector = undefined

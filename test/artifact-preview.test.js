@@ -223,8 +223,10 @@ function inputNumber(label, value) {
   const input = [...document.querySelectorAll('.vd-media-editor label')].find(node => node.textContent === label)?.querySelector('input')
   assert.ok(input, label)
   return ui.act(async () => {
+    input.focus()
     Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set.call(input, String(value))
     input.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+    input.blur()
   })
 }
 

@@ -102,7 +102,7 @@ export function CanvasContextMenu({ position, canPaste, resettingVram, onMap, on
 }) {
   useLanguage()
   return <CanvasMenu label={t("Canvas menu")} className="vd-pane-context-menu" style={{ left: position.x, top: position.y }} onClose={onClose}>
-    <button type="button" role="menuitem" onClick={onMap}><span aria-hidden>⊞</span><span>{t("Add vd-node…")}</span></button>
+    <button type="button" role="menuitem" onClick={onMap}><span aria-hidden>⊞</span><span>{t("Add Node…")}</span></button>
     <button type="button" role="menuitem" disabled={resettingVram} onClick={onResetVram}><span aria-hidden>↻</span><span>{resettingVram ? t("Resetting VRAM…") : t("Reset VRAM")}</span></button>
     <button type="button" role="menuitem" disabled={!canPaste} onClick={onPaste}><span aria-hidden>▣</span><span>{t("Paste")}</span><kbd>Ctrl+V</kbd></button>
   </CanvasMenu>

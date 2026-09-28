@@ -6,6 +6,14 @@ export function CloseIcon() {
   )
 }
 
+export function RefreshIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19 8a7.5 7.5 0 1 0 .25 7.5M19 4v4h-4" /></svg>
+}
+
+export function UnloadIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m12 4-7 9h14l-7-9ZM5 17h14v3H5Z" /></svg>
+}
+
 export function PlayIcon() {
   return (
     <svg className="vd-topbar-action-icon vd-play-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">

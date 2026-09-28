@@ -85,8 +85,10 @@ Open **Settings → Connections** in Video-Director:
 
 - **Ollama:** defaults to `127.0.0.1:11434`; install a model such as Qwen3.8-27B on the Ollama host, then select it in Video-Director.
 - **ComfyUI:** defaults to `127.0.0.1:8188`; install each comfyui-workflow's required models and ComfyUI custom-node packages on the ComfyUI server.
-- **OpenAI-compatible:** set the Base URL, model ids, and API key for your provider.
-- **Codex Plan:** uses the machine's existing Codex sign-in for prompt and image workflows. Models and default reasoning effort come from the installed CLI. **Refresh models** reloads the catalog; **Fast (priority)** is optional and off by default. Set `DSH_VIDEO_DIRECTOR_CODEX_PATH` if Codex is not on PATH.
+- **OpenAI Compatible:** set the Base URL and API key, then refresh to discover the provider's model list.
+- **Codex Coding Plan:** uses the machine's existing Codex sign-in for prompt and image workflows. Models and default reasoning effort come from the installed CLI. **Refresh** reloads the catalog; **Fast (priority)** is optional and off by default. Set `DSH_VIDEO_DIRECTOR_CODEX_PATH` if Codex is not on PATH.
+
+Connection fields save when you leave the field or press Enter. **Refresh** checks the saved connection and displays its model inventory; choose generation models on individual nodes. ComfyUI lists installed files under **checkpoints**, **diffusion_models**, **loras**, and **vae** tabs, with search inside each category. Samplers, schedulers, and other workflow options remain in node controls. **Unload Models** releases loaded Ollama models or requests ComfyUI model/cache cleanup on that card's endpoint. Installed model files remain available. On narrow screens, Refresh and Unload Models use icons. A blank API key field keeps the saved key; **Clear saved key** explicitly removes its settings override.
 
 You only need one working provider to begin. Video-Director does not silently install models, ComfyUI custom-node packages, or external services.
 
@@ -138,9 +140,11 @@ Useful canvas gestures:
 - Double-click blank space to search the node menu.
 - Drag an output onto blank space to create and connect a compatible node.
 - **Select (V):** drag empty canvas to pan, click a node to select it, and drag a node to move it. **Hand (H):** drag anywhere to pan, including over nodes and their controls. Hold Space for temporary Hand navigation.
+- The sidebar accepts **Image, Audio, Video, Folder and Node** references. Compact tiles show preview/remove controls on hover or keyboard focus; clicking the body inserts an atomic alias such as `<Image 1>`. Removing an unsent reference renumbers draft aliases; aliases already sent remain stable. Double-click anywhere on a node title bar, drag its editable title into chat, choose **+ → Node**, or right-click the node and choose **Add to Chat References**. Media and folders can be dropped anywhere in the sidebar. Folder previews offer a searchable tree. Aliases belong to the conversation; imported canvas assets retain their original filenames.
+- Sidebar context contains a compact workflow summary. The Host-owned `vd_canvas` tool queries details on demand and can edit/validate/run workflows after tabs close. Conflicting human/agent edits are detected. See [sidebar architecture and validation](docs/sidebar-chat-architecture-2026-09-28.md) for commands, context handling and current limits.
 - **Ctrl-drag** selects a group in either mode; **Ctrl-click** adds or removes a node. On macOS, **Command** also works for these gestures and shortcuts; Ctrl-click selects without opening a context menu. Selected nodes have an expanded border, and draggable node areas use a crosshair cursor in Select mode. **Ctrl+B** freezes or unfreezes the selection.
 - Scroll to zoom over the canvas or nodes. Scrollable fields and panels consume the wheel to scroll their own content.
-- Right-click empty canvas for the **vd-node catalog**, **Reset VRAM**, or **Paste**. Right-click a node for Run/Cancel, Freeze, **Copy**, Duplicate, Rename, Details, and Delete. Input fields retain their native context menu.
+- Right-click empty canvas for the **Node catalog**, **Reset VRAM**, or **Paste**. Right-click a node for Run/Cancel, Freeze, **Copy**, Duplicate, Rename, Details, and Delete. Input fields retain their native context menu.
 - **Ctrl+C / Ctrl+V** copy and paste nodes within the current project, including connections between copied nodes. Copy captures a snapshot; pasted nodes get new identities and are created at the cursor. Reset VRAM unloads configured Ollama models and releases ComfyUI model/cache memory.
 - Select a node and use **Run** for one node, a selection, downstream nodes, or the whole graph.
 - Connect generated media to **Preview** and **Save Output**; unconnected results receive an automatic Preview.
@@ -190,7 +194,7 @@ The default Host data directory is `./.dsh-video-director`, resolved from the di
 
 Input uploads keep their original filenames. An existing name with the same SHA-256 reuses the stored file; different bytes try `name-0001.ext`, `name-0002.ext`, and so on, checking the hash at each candidate. Workflow references share immutable bytes, and deleting a workflow removes a file only when its last reference disappears. Dates use UTC. Generated outputs keep their provider filename in the index and use it for downloads and exports.
 
-Image, Video, Audio, and Sketch inputs offer **Choose from assets**, showing compatible inputs and outputs across all workflows with filename search and a source filter. Selecting an asset adds a reference without copying its media. An empty Sketch input also offers **Draw sketch**.
+Image, Video, Audio, and Sketch inputs offer **Choose from assets**, showing compatible inputs and outputs across all workflows with filename search and a source filter. The chooser loads 15 items at a time; scrolling to the bottom loads the next 15, including for search/filter results. Click a thumbnail to preview without selecting, then select a row and choose **Use asset** to attach it. Selecting an asset adds a reference without copying its media. An empty Sketch input also offers **Draw sketch**.
 
 The first launch with a legacy flat asset folder migrates it automatically. Migration checks local hashes and workflow/job metadata without decoding media or contacting a provider. It preserves IDs and URLs, stages files before atomically replacing the index, and retains the original index and mapping in the migration record. Interrupted migrations resume on launch. Files with no identifiable output provenance remain inputs; a hash mismatch stops migration without changing original files.
 

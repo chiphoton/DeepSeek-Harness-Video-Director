@@ -4,3 +4,6 @@ export * from './node-results'
 export * from './workflow-runner'
 export { isTriggerNodeKind, nodeDefinition, resolveEdgePorts } from './ports'
 export { materializeBatchCase, collectBatchArtifacts } from './batch'
+
+export { editVdCanvas } from './canvas-commands'
+export { batchSourceItems, batchRange } from './batch'

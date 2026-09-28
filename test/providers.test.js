@@ -602,6 +602,7 @@ test('ComfyUI workflow polling has no overall provider deadline', async () => {
 test('ComfyUI model discovery keeps every string enum target for exact workflow mapping', async () => {
   const runtime = createUnifiedComfyRuntime({
     fetchImpl: async (url) => {
+      if (url.includes('/models/')) return Response.json([])
       assert.equal(url, 'http://127.0.0.1:8188/object_info')
       return Response.json({
         InvalidMetadata: null,
@@ -1376,4 +1377,99 @@ test('MiniMax H3 compiles the next 17k+5 frame count and disables MCP seed rando
   assert.equal(calls[0].arguments.args.workflow['15'].inputs.noise_seed, 42)
   assert.equal(calls[0].arguments.args.workflow['9'].inputs.steps, 8)
   assert.equal(calls[0].arguments.args.workflow['9'].inputs.scheduler, 'simple')
+})
+
+test('provider-card unload affects only its Ollama provider and confirms every loaded model', async () => {
+  let loaded = ['studio-a', 'studio-b']
+  const calls = []
+  const runtime = new ProviderRuntime({ store: {}, providers: [
+    { id: 'selected', label: 'Selected', kind: 'ollama', baseUrl: 'http://selected.test' },
+    { id: 'other', label: 'Other', kind: 'ollama', baseUrl: 'http://other.test' },
+  ], fetchImpl: async (url, init = {}) => {
+    calls.push(url)
+    assert.ok(url.startsWith('http://selected.test/'))
+    if (url.endsWith('/api/tags') || url.endsWith('/api/ps')) return Response.json({ models: loaded.map(name => ({ name })) })
+    assert.ok(url.endsWith('/api/generate'))
+    const body = JSON.parse(init.body)
+    assert.equal(body.keep_alive, 0)
+    loaded = loaded.filter(name => name !== body.model)
+    return Response.json({ done: true })
+  } })
+  assert.deepEqual(await runtime.unloadModels('selected'), { status: 'unloaded', unloadedModels: ['studio-a', 'studio-b'] })
+  assert.deepEqual(loaded, [])
+  assert.equal(calls.filter(url => url.endsWith('/api/generate')).length, 2)
+})
+
+test('provider-card ComfyUI unload requests only that endpoint and reports acknowledgement honestly', async () => {
+  const calls = []
+  const runtime = new ProviderRuntime({ store: {}, providers: [
+    { id: 'selected', label: 'Selected', kind: 'comfyui', baseUrl: 'http://selected.test' },
+    { id: 'other', label: 'Other', kind: 'comfyui', baseUrl: 'http://other.test' },
+    { id: 'api', label: 'API', kind: 'openai-compatible', baseUrl: 'http://api.test' },
+  ], fetchImpl: async (url, init) => { calls.push({ url, body: JSON.parse(init.body) }); return Response.json({}) } })
+  assert.deepEqual(await runtime.unloadModels('selected'), { status: 'requested' })
+  assert.deepEqual(calls, [{ url: 'http://selected.test/free', body: { unload_models: true, free_memory: true } }])
+  await assert.rejects(runtime.unloadModels('api'), /does not support/)
+  assert.equal(calls.length, 1)
+})
+
+test('provider-card unload surfaces failures instead of reporting success', async () => {
+  const runtime = new ProviderRuntime({ store: {}, providers: [
+    { id: 'ollama', label: 'Ollama', kind: 'ollama', baseUrl: 'http://ollama.test' },
+  ], fetchImpl: async url => Response.json(url.endsWith('/api/generate') ? { done: true } : { models: [{ name: 'still-loaded' }] }) })
+  await assert.rejects(runtime.unloadModels('ollama'), /did not confirm.*unloaded/)
+})
+
+test('an in-flight unload stays on its original endpoint after a connection edit', async () => {
+  let loaded = ['studio-a', 'studio-b']
+  const provider = { id: 'ollama', label: 'Ollama', kind: 'ollama', baseUrl: 'http://original.test' }
+  const runtime = new ProviderRuntime({ store: {}, providers: [provider], fetchImpl: async (url, options = {}) => {
+    assert.ok(url.startsWith('http://original.test/'), 'unload must never switch servers halfway through')
+    if (url.endsWith('/api/tags') || url.endsWith('/api/ps')) return Response.json({ models: loaded.map(name => ({ name })) })
+    loaded = loaded.filter(name => name !== JSON.parse(options.body).model)
+    runtime.configure([{ ...provider, baseUrl: 'http://replacement.test' }])
+    return Response.json({ done: true })
+  } })
+  assert.deepEqual(await runtime.unloadModels('ollama'), { status: 'unloaded', unloadedModels: ['studio-a', 'studio-b'] })
+})
+
+test('ComfyUI inventory uses model folders while sampler enums remain workflow choices', async () => {
+  const requests = []
+  const runtime = createUnifiedComfyRuntime({ fetchImpl: async url => {
+    const path = new URL(url).pathname
+    requests.push(path)
+    if (path === '/object_info') return Response.json({
+      KSampler: { input: { required: { sampler_name: [['euler']], scheduler: [['beta']] } } },
+      UNETLoader: { input: { required: { unet_name: [['workflow-model.safetensors']] } } },
+    })
+    if (path === '/models/checkpoints') return Response.json(['nested/checkpoint.safetensors', 'nested/checkpoint.safetensors', 12, '', 'x'.repeat(513)])
+    if (path === '/models/diffusion_models') return Response.json(['unused-by-workflow.gguf'])
+    if (path === '/models/loras') return Response.json(Array.from({ length: 2_050 }, (_, i) => `lora-${i}.safetensors`))
+    if (path === '/models/vae') return Response.json([])
+    assert.fail(`Unexpected URL ${url}`)
+  } })
+  const result = await runtime.models('comfyui')
+  assert.deepEqual(result.modelInventory.checkpoints, { models: ['nested/checkpoint.safetensors'] })
+  assert.deepEqual(result.modelInventory.diffusion_models, { models: ['unused-by-workflow.gguf'] })
+  assert.equal(result.modelInventory.loras.models.length, 2_048)
+  assert.deepEqual(result.modelInventory.vae, { models: [] })
+  assert.ok(result.modelInputs.some(input => input.input === 'scheduler' && input.models.includes('beta')))
+  assert.doesNotMatch(JSON.stringify(result.modelInventory), /beta|euler|workflow-model/)
+  assert.deepEqual(requests.sort(), ['/models/checkpoints', '/models/diffusion_models', '/models/loras', '/models/vae', '/object_info'])
+})
+
+test('one failed ComfyUI folder retains other inventories and workflow choices without returning error bodies', async () => {
+  const runtime = createUnifiedComfyRuntime({ fetchImpl: async url => {
+    if (url.endsWith('/object_info')) return Response.json({ KSampler: { input: { required: { scheduler: [['beta']] } } } })
+    if (url.endsWith('/models/loras')) return new Response('private-upstream-error-body', { status: 403 })
+    if (url.endsWith('/models/vae')) return Response.json({ invalid: true })
+    return Response.json(['usable.safetensors'])
+  } })
+  const result = await runtime.models('comfyui')
+  assert.deepEqual(result.modelInventory.checkpoints.models, ['usable.safetensors'])
+  assert.deepEqual(result.modelInventory.diffusion_models.models, ['usable.safetensors'])
+  assert.match(result.modelInventory.loras.error, /403/)
+  assert.match(result.modelInventory.vae.error, /invalid model list/)
+  assert.doesNotMatch(JSON.stringify(result), /private-upstream-error-body/)
+  assert.ok(result.modelInputs[0].models.includes('beta'))
 })

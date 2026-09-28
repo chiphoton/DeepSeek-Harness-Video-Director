@@ -45,9 +45,12 @@ test('Batch Input has a direct Run Batch action and validates inclusive indices'
   assert.deepEqual(calls, [['run', 'batch-node']])
   const end = [...document.querySelectorAll('input[type=number]')][1]
   await ui.act(async () => {
+    end.focus()
     Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set.call(end, '1')
     end.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
   })
+  assert.equal(button('Run Batch').disabled, false, 'an incomplete range edit must not be validated while typing')
+  await ui.act(async () => end.blur())
   assert.equal(button('Run Batch').disabled, true)
   assert.match(document.body.textContent, /inclusive range/)
 })
@@ -58,6 +61,28 @@ test('FROZEN Batch Input disables run, import and source edits', async t => {
   assert.equal(button('Choose files').disabled, true)
   assert.equal(button('Choose folder').disabled, true)
   assert.ok(document.querySelector('input[webkitdirectory]'))
+})
+
+test('Batch Input allows empty drafts, restoring required start and clearing optional end on blur', async t => {
+  await mount(t, { kind: 'batch-input', batch: { source: 'text', text: 'first\nsecond', startIndex: 1, endIndex: 1 } })
+  const [start, end] = document.querySelectorAll('input[type=number]')
+  const clear = async input => ui.act(async () => {
+    input.focus()
+    Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set.call(input, '')
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+  })
+  await clear(start)
+  assert.equal(start.value, '')
+  assert.equal(button('Run Batch').disabled, false)
+  await ui.act(async () => start.blur())
+  assert.equal(start.value, '1')
+  await clear(end)
+  assert.equal(end.value, '')
+  await ui.act(async () => end.blur())
+  assert.equal(end.value, '')
+  assert.equal(button('Run Batch').disabled, false)
+  await ui.act(async () => button('2 matched cases · preview').click())
+  assert.equal(document.querySelectorAll('.vd-batch-excluded').length, 0, 'clearing end must include all cases')
 })
 
 test('Batch Output selects an exact failed index without showing another case’s artifact', async t => {

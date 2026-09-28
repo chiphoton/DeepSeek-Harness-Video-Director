@@ -1,7 +1,7 @@
 import type { ProjectDraft } from './types'
 
 const PREFIX = 'video-director:draft:v1:'
-type Entry = { draft: ProjectDraft | null }
+type Entry = { draft: ProjectDraft | null; expectedRevision?: number }
 
 /** Immediate browser recovery plus serialized, coalesced writes to the Host. */
 export class ProjectDraftCache {
@@ -11,7 +11,7 @@ export class ProjectDraftCache {
   private paused = new Set<string>()
 
   constructor(
-    private write: (id: string, draft: ProjectDraft | null) => Promise<unknown>,
+    private write: (id: string, draft: ProjectDraft | null, expectedRevision?: number) => Promise<{ draftRevision?: number } | void>,
     private onError: (error: unknown) => void,
   ) {}
 
@@ -28,8 +28,8 @@ export class ProjectDraftCache {
     } catch { return undefined }
   }
 
-  stage(id: string, draft: ProjectDraft | null): void {
-    const entry = { draft: structuredClone(draft) }
+  stage(id: string, draft: ProjectDraft | null, expectedRevision?: number): void {
+    const entry = { draft: structuredClone(draft), expectedRevision: this.pending.get(id)?.expectedRevision ?? expectedRevision }
     this.pending.set(id, entry)
     try { globalThis.localStorage?.setItem(PREFIX + id, JSON.stringify(entry)) }
     catch (error) { this.onError(error) }
@@ -47,14 +47,21 @@ export class ProjectDraftCache {
     if (this.paused.has(id)) return
     const entry = this.pending.get(id)
     if (!entry) return
-    const writing = this.write(id, entry.draft).then(() => {
+    const writing = this.write(id, entry.draft, entry.expectedRevision).then(result => {
       if (this.pending.get(id) === entry) this.forget(id)
+      else if (result?.draftRevision !== undefined) {
+        const next = this.pending.get(id)!
+        next.expectedRevision = result.draftRevision
+        try { globalThis.localStorage?.setItem(PREFIX + id, JSON.stringify(next)) } catch {}
+      }
     })
     this.writes.set(id, writing)
     try { await writing }
     finally { if (this.writes.get(id) === writing) this.writes.delete(id) }
     if (this.pending.has(id)) await this.flush(id)
   }
+
+  hasPending(id: string): boolean { return this.pending.has(id) || this.writes.has(id) }
 
   pause(id: string): void { this.paused.add(id) }
   resume(id: string): void { this.paused.delete(id) }

@@ -66,7 +66,9 @@ const bundle = await build({ stdin: { resolveDir: resolve('src/client'), loader:
   director.snapshot = {...director.getSnapshot(),phase:'ready',open:true,...structuredClone({project,projects,jobs,workflowRuns:runs})};
   director.subscribe(()=>window.metrics.notifications++);
   const chatState = {sessionId:'synthetic',messages:[],running:false,sending:false,error:null,models:{groups:[],current:null,status:'ready',error:null}};
-  const chat = {subscribe:()=>()=>{},getSnapshot:()=>chatState};
+  const emptyAttachments = [];
+  const registry = {subscribe:()=>()=>{},getSnapshot:()=>emptyAttachments,load:async()=>{}};
+  const chat = {subscribe:()=>()=>{},getSnapshot:()=>chatState,attachments:()=>registry};
   setLanguage('en');
   createRoot(document.getElementById('root')).render(<Profiler id="studio" onRender={(_,phase,duration)=>{window.metrics.commits++;window.metrics.renderMs+=duration}}><DirectorOverlay director={director} chat={chat} /></Profiler>);
   window.director = director;

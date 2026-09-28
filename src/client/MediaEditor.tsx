@@ -1,6 +1,7 @@
 import { useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { AudioPreviewPlayer } from './AudioPreviewPlayer'
+import { NumberInput } from './NumberInput'
 import { constrainCrop, VideoCropOverlay } from './MediaSelections'
 import { MediaEditingContext, type MediaCrop, type MediaEditAction } from './media-editing'
 import { audioTime } from './audio-waveform'
@@ -169,11 +170,11 @@ export function MediaEditor({ asset, onClose, onSaved, initial }: {
           {tool === 'trim' ? <>
             <div className="vd-media-selection-summary"><strong>{t('Keep selection')}</strong><span>{(range.end - range.start).toFixed(2)} s / {audioTime(duration, true)}</span></div>
             <div className="vd-media-editor-fields">
-              <label>{t('Start (seconds)')}<input type="number" min={0} max={Math.max(0, range.end - .01)} step="0.01" value={Number(range.start.toFixed(3))} disabled={!!busy}
-                onChange={event => { const value = event.target.valueAsNumber; if (Number.isFinite(value)) selectRange(Math.max(0, Math.min(range.end - .01, value)), range.end) }} /></label>
+              <label>{t('Start (seconds)')}<NumberInput min={0} max={Math.max(0, range.end - .01)} step="0.01" value={Number(range.start.toFixed(3))} disabled={!!busy}
+                onValueCommit={value => selectRange(value, range.end)} /></label>
               <button type="button" disabled={!!busy || !duration} onClick={() => selectRange(Math.min(time, range.end - .01), range.end)}>{t('Set start here')}</button>
-              <label>{t('End (seconds)')}<input type="number" min={range.start + .01} max={duration} step="0.01" value={Number(range.end.toFixed(3))} disabled={!!busy}
-                onChange={event => { const value = event.target.valueAsNumber; if (Number.isFinite(value)) selectRange(range.start, Math.min(duration, Math.max(range.start + .01, value))) }} /></label>
+              <label>{t('End (seconds)')}<NumberInput min={range.start + .01} max={duration} step="0.01" value={Number(range.end.toFixed(3))} disabled={!!busy}
+                onValueCommit={value => selectRange(range.start, value)} /></label>
               <button type="button" disabled={!!busy || !duration} onClick={() => selectRange(range.start, Math.max(time, range.start + .01))}>{t('Set end here')}</button>
               <button type="button" disabled={!!busy} onClick={() => selectRange(0, duration)}>{t('Reset trim')}</button>
             </div>
@@ -181,8 +182,8 @@ export function MediaEditor({ asset, onClose, onSaved, initial }: {
             <div className="vd-media-selection-summary"><strong>{t('Crop video')}</strong><span>{crop?.width ?? size.width} × {crop?.height ?? size.height} px</span></div>
             <div className="vd-media-editor-fields is-crop">
               {(['x', 'y', 'width', 'height'] as const).map((key, index) => <label key={key}>{t(['Left (pixels)', 'Top (pixels)', 'Width (pixels)', 'Height (pixels)'][index])}
-                <input type="number" min={key === 'x' || key === 'y' ? 0 : 2} step={key === 'x' || key === 'y' ? 1 : 2} value={(crop ?? fullCrop())[key]} disabled={!!busy}
-                  onChange={event => { const value = event.target.valueAsNumber; if (Number.isFinite(value)) setCrop(constrainCrop({ ...(crop ?? fullCrop()), [key]: value }, size.width, size.height)) }} /></label>)}
+                <NumberInput integer min={key === 'x' || key === 'y' ? 0 : 2} step={key === 'x' || key === 'y' ? 1 : 2} value={(crop ?? fullCrop())[key]} disabled={!!busy}
+                  onValueCommit={value => setCrop(constrainCrop({ ...(crop ?? fullCrop()), [key]: value }, size.width, size.height))} /></label>)}
               {[1, 16 / 9, 9 / 16].map((ratio, index) => <button key={ratio} type="button" disabled={!!busy} onClick={() => applyAspect(ratio)}>{['1:1', '16:9', '9:16'][index]}</button>)}
               <button type="button" disabled={!!busy} onClick={() => setCrop(null)}>{t('Reset crop')}</button>
             </div>

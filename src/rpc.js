@@ -1,3 +1,5 @@
+import { ChatReferences } from './chat-references.js'
+import { createCanvasAgent } from './canvas-agent.js'
 import { DirectorInputError, finiteNumber, jsonValue, record, string, uuid } from './validation.js'
 import { editMedia } from './media-editor.js'
 import { WorkflowScheduler } from './workflow-scheduler.js'
@@ -531,10 +533,18 @@ export function createDirectorRpc(options) {
       return result.value
     } })
   if (jobs) jobs.workflowScheduler = scheduler
+  const references = new ChatReferences(store, registerAsset)
+  const canvas = createCanvasAgent({ store, references, nodes, workflows, call: async (...args) => {
+    const result = await rpc(...args)
+    if (!result.ok) throw Object.assign(new Error(result.error.message), result.error)
+    return result.value
+  } })
   const rpc = async (endpoint, payload, signal, hostExecution = false) => {
     try {
       const input = payload === undefined ? {} : record(payload, 'payload')
       switch (endpoint) {
+        case 'chat/references': return success(await references.call(input))
+        case 'canvas/command': return success(await (input.command === 'edit' || input.command === 'save' ? withWorkflowReferenceLock(() => canvas(input, signal)) : canvas(input, signal)))
         case 'health':
           return success({ version: 3, providers: providers.publicCatalog().length, workflows: workflows.list().length, nodes: nodes.list().length })
         case 'projects/list':
@@ -553,10 +563,10 @@ export function createDirectorRpc(options) {
               for (const workflowId of comfyWorkflowReferences(input.draft)) workflows.get(workflowId)
               for (const reference of vdNodeDefinitionReferences(input.draft)) nodes.get(reference.type, reference.version)
             }
-            return store.cacheDraft(uuid(input.projectId, 'projectId'), input.draft)
+            return store.cacheDraft(uuid(input.projectId, 'projectId'), input.draft, input.expectedDraftRevision)
           }) })
         case 'projects/discard':
-          return success(await withWorkflowReferenceLock(() => store.discardDraft(uuid(input.projectId, 'projectId'))))
+          return success(await withWorkflowReferenceLock(() => store.discardDraft(uuid(input.projectId, 'projectId'), input.expectedDraftRevision)))
         case 'vd-runs/submit':
           return success(await withWorkflowReferenceLock(async () => {
             for (const workflowId of comfyWorkflowReferences(input.snapshot)) workflows.get(workflowId)
@@ -662,8 +672,8 @@ export function createDirectorRpc(options) {
             for (const workflowId of comfyWorkflowReferences(input.project)) workflows.get(workflowId)
             for (const reference of vdNodeDefinitionReferences(input.project)) nodes.get(reference.type, reference.version)
             return input.force === true
-              ? store.forceSaveProject(projectId, input.project)
-              : store.saveProject(projectId, input.project, expectedRevision, { commit: true })
+              ? store.forceSaveProject(projectId, input.project, input.expectedDraftRevision)
+              : store.saveProject(projectId, input.project, expectedRevision, { commit: true, expectedDraftRevision: input.expectedDraftRevision })
           })
           return success({ project })
         }
@@ -679,7 +689,9 @@ export function createDirectorRpc(options) {
         case 'assets/properties':
           return success(await store.videoProperties(uuid(input.assetId, 'assetId'), signal))
         case 'assets/list':
-          return success({ assets: store.availableAssets(input.kind, input.projectId) })
+          return success(['limit', 'cursor', 'query', 'origin'].some(key => input[key] !== undefined)
+            ? store.availableAssetPage(input.kind, input.projectId, input)
+            : { assets: store.availableAssets(input.kind, input.projectId) })
         case 'assets/put': {
           const asset = await store.putAsset(input)
           await registerAsset(asset)
@@ -707,6 +719,10 @@ export function createDirectorRpc(options) {
             string(input.providerId, 'providerId', { min: 1, max: 128 }),
             string(input.model, 'model', { min: 1, max: 512 }),
             signal,
+          ))
+        case 'providers/unload-models':
+          return success(await providers.unloadModels(
+            string(input.providerId, 'providerId', { min: 1, max: 128 }), signal,
           ))
         case 'triggers/run':
           {
