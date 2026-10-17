@@ -732,6 +732,8 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
   private transitionVersion = 0
   private disposed = false
   private readonly sessionLifetime = new AbortController()
+  private readonly sessionTitleWrites = new Map<SessionId, Promise<void>>()
+  private readonly sessionTitleErrors = new Map<SessionId, string>()
   private readonly jobTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private hostObservationTimer?: ReturnType<typeof setTimeout>
   private runRefresh: Promise<void> | null = null
@@ -757,6 +759,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
           throw error
         })
         this.draftRevisions.set(projectId, summary?.draftRevision ?? (this.draftRevisions.get(projectId) ?? 0))
+        if (summary) await this.syncSessionTitles([summary])
         return { draftRevision: summary?.draftRevision }
       },
       error => { if (!this.disposed) this.patch({ conflict: (error as { code?: string }).code === 'video-director/draft-conflict', error: `Could not cache workflow changes: ${errorMessage(error)}` }) },
@@ -800,7 +803,10 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
       }
       const catalog = this.ctx.sessions.list.getSnapshot().byId
       const selected = projects.projects.find(project => (catalog[project.sessionId as SessionId]?.retainedBy.mainView ?? 0) > 0) ?? projects.projects[0]
+      await this.syncSessionTitles(projects.projects)
+      const titleError = this.snapshot.error
       if (selected !== undefined) await this.loadProject(selected.id, false)
+      if (titleError && !this.snapshot.error) this.patch({ error: titleError })
       void this.drafts.flush().catch(error => this.patch({ error: errorMessage(error) }))
     } catch (error) {
       this.patch({ phase: 'error', error: errorMessage(error) })
@@ -1220,11 +1226,19 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
   }
 
   async renameProjectById(projectId: string, name: string): Promise<void> {
-    if (projectId === this.snapshot.project?.id) { this.renameProject(name); return }
+    name = name.trim()
+    if (!name) return
+    if (projectId === this.snapshot.project?.id) {
+      const unchanged = name === this.snapshot.project.name
+      this.renameProject(name)
+      await this.drafts.flush(projectId)
+      if (unchanged) await this.syncSessionTitles(this.snapshot.projects.filter(project => project.id === projectId))
+      return
+    }
     await this.drafts.flush(projectId)
     const { project: saved } = await this.rpc<{ project: VideoProject }>('projects/get', { projectId })
     const project = { ...saved, ...saved.draft }
-    if (project.name === name) return
+    if (project.name === name) { await this.syncSessionTitles([project]); return }
     const draft = this.historyState({ ...project, name })
     const unsaved = saved.hasSavedVersion === false || !sameJson(draft, this.historyState(saved))
     this.draftRevisions.set(projectId, saved.draftRevision ?? 0)
@@ -1297,13 +1311,17 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
       const result = await this.rpc<{ project: VideoProject | null; projects: ProjectSummary[] }>('projects/discard', { projectId, expectedDraftRevision: this.draftRevisions.get(projectId) ?? this.snapshot.projects.find(row => row.id === projectId)?.draftRevision ?? 0 })
       this.drafts.forget(projectId)
       this.patch({ projects: result.projects, phase: 'ready' })
-      if (!current) return
+      if (!current) {
+        if (result.project) await this.syncSessionTitles([result.project])
+        return
+      }
       this.resetHistory()
       this.baseProject = null
       this.savedState = null
       this.patch({ project: null, dirty: false, canvasResetVersion: this.snapshot.canvasResetVersion + 1 })
       const nextId = result.project?.id ?? result.projects[0]?.id
       if (nextId !== undefined) await this.loadProject(nextId, result.project === null)
+      if (result.project) await this.syncSessionTitles([result.project])
     } catch (error) {
       this.patch({ phase: 'ready', error: errorMessage(error) })
       throw error
@@ -2964,6 +2982,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
         saved = await this.forceSaveProject(local)
       }
       this.acceptSaved(saved, editVersion)
+      await this.syncSessionTitles([saved])
     } catch (error) {
       const conflict = ['video-director/revision-conflict', 'video-director/draft-conflict'].includes((error as Error & { code?: string }).code ?? '')
       this.patch({
@@ -3315,6 +3334,36 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
       const result = await reference.binding.session.rename(title)
       if (!result.ok) throw remoteError(result.error)
     })
+  }
+
+  /** Synchronize only durable name/link metadata; never generate a title from chat or workflow content. */
+  private async syncSessionTitles(projects: ReadonlyArray<Pick<ProjectSummary, 'sessionId' | 'name'>>): Promise<void> {
+    await Promise.all(projects.map(project => {
+      const sessionId = project.sessionId as SessionId
+      const prior = this.sessionTitleWrites.get(sessionId) ?? Promise.resolve()
+      const write = prior.then(async () => {
+        if (this.disposed) return
+        const session = this.ctx.sessions.list.getSnapshot().byId[sessionId]
+        // Missing histories must not be recreated just to fix a title.
+        if (session === undefined) return
+        if (session.title !== project.name) await this.renameSession(sessionId, project.name)
+        const priorError = this.sessionTitleErrors.get(sessionId)
+        this.sessionTitleErrors.delete(sessionId)
+        if (priorError && this.snapshot.error === priorError) this.patch({ error: null })
+      }).catch(error => {
+        // The workflow write already succeeded. A title failure must not retry it
+        // with a stale draft revision or turn a successful Save into a conflict.
+        if (!this.disposed) {
+          const message = `Workflow saved, but its linked session could not be renamed: ${errorMessage(error)}`
+          this.sessionTitleErrors.set(sessionId, message)
+          this.patch({ error: message })
+        }
+      })
+      this.sessionTitleWrites.set(sessionId, write)
+      return write.finally(() => {
+        if (this.sessionTitleWrites.get(sessionId) === write) this.sessionTitleWrites.delete(sessionId)
+      })
+    }))
   }
 
   private patch(patch: Partial<DirectorSnapshot>): void {

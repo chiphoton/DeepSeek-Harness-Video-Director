@@ -74,6 +74,12 @@ For a custom entry ID, transfer that section's `providerOverrides` and `minimaxH
 
 The plugin's project/asset schemas are unchanged by this migration. Preserve each project's `sessionId`; never regenerate IDs to make an unavailable history appear valid. Missing history is reported explicitly, and **New conversation** creates a new binding only at the user's request.
 
+### Linked session titles
+
+Workflow names now propagate to their linked dsh sessions after the name is persisted, including background renames, Save, undo/redo, and Discard. On startup, the client also reconciles existing session titles with effective workflow names (including persisted drafts), matching by `sessionId`. Missing sessions are skipped rather than recreated. Renames are ordered per session, and a failed title write reports a warning without retrying an already committed workflow write; retry the rename or reopen the plugin after connectivity returns.
+
+Reconciliation uses project name/link summaries and the session title catalog, followed by dsh's explicit rename API. It does not generate titles with a model or submit workflow content. Synthetic regression coverage is in `test/project-drafts.test.js`.
+
 ## Rollback
 
 Stop the candidate, restore the **matching pre-upgrade DSH home and plugin data backup**, and run DSH `0.1.2-alpha.3` with the plugin at `dsh-v0.1.2-alpha.3`. Reinstall that plugin revision's dependencies and rebuild it. For a disposable trial, discard the candidate home and data; the active installation needs no restoration.
