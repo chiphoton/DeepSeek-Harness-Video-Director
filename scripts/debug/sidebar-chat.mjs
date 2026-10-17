@@ -45,11 +45,14 @@ const bundle = await build({ stdin: { resolveDir: resolve('src/client'), loader:
   import { ProjectChatSource } from './chat-source'; import { setLanguage } from './i18n';
   const observable = value => { const listeners = new Set(); return { getSnapshot:()=>value,subscribe:fn=>{listeners.add(fn);return()=>listeners.delete(fn)},publish:next=>{value=next;listeners.forEach(fn=>fn())} } };
   const sessionId = 'synthetic-chat'; const events = observable({entries:[]}); let retire;
-  const binding = { eventSource:events, session:{...observable({running:false}),rename:async()=>({ok:true,value:{}}),beginSubmission:input=>{retire=input.onRetire;return{requestId:crypto.randomUUID(),abandon:()=>retire?.({reason:'failed'})}},prompt:async(content, mode,signal,requestId)=>{window.lastSubmission={content,mode,requestId};retire?.({reason:'observed'});return{ok:true,value:{accepted:true}}} } };
-  const modelState = observable({current:{provider:'fixture',model:'synthetic'},routable:true,groups:[{id:'fixture',name:'Local QA',models:[{id:'synthetic',name:'Simulated transport'}]}],failures:[],status:'ready',error:null});
-  const ctx = { connection:{rpc:{call:async(_,endpoint,input)=> (await fetch('/rpc',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({endpoint,input})})).json()}},
-    sessions:{list:observable({current:sessionId,byId:{[sessionId]:{id:sessionId}}}),binding:()=>binding,open:()=>{},create:async()=>sessionId},
-    modelDirectories:{directoryFor:()=>({store:modelState,load:async()=>{},select:async()=>{}})} };
+  const inbox = observable({'next-turn':[],'next-step':[]});
+  const binding = { eventSource:events, session:{...observable({running:false}),projections:{faceOf:()=>inbox},rename:async()=>({ok:true,value:{}}),beginSubmission:input=>{retire=input.onRetire;return{requestId:crypto.randomUUID(),abandon:()=>retire?.({reason:'failed'})}},prompt:async(content, mode,signal,requestId)=>{window.lastSubmission={content,mode,requestId};retire?.({reason:'observed'});return{ok:true,value:{accepted:true}}} } };
+  const retain = () => ({binding,ready:Promise.resolve(binding),release:()=>{}});
+  const modelState = observable({current:{provider:'fixture',model:'synthetic'},routable:true,groups:[{id:'fixture',name:'Local QA',models:[{id:'synthetic',name:'Simulated transport'}]}],failures:[],status:'ready',error:null,pending:null});
+  const ctx = { connection:{rpc:{call:async(_,method,{endpoint,payload:input})=> (await fetch('/rpc',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({endpoint,input})})).json()}},
+    sessions:{list:observable({byId:{[sessionId]:{id:sessionId,retainedBy:{}}}}),retain,using:async(id,options,callback)=>{const reference=retain();try{return await callback(reference)}finally{reference.release()}},refresh:async()=>{},create:async()=>sessionId},
+    uiWorkspace:{openSession:()=>{}},
+    modelDirectories:{directoryFor:()=>({store:modelState,load:async()=>modelState.getSnapshot(),select:async()=>({ok:true,value:{}})})} };
   const director = new DirectorController(ctx); await director.start(); director.open();
   const chat = new ProjectChatSource(ctx,director); setLanguage('en');
   createRoot(document.getElementById('root')).render(<DirectorOverlay director={director} chat={chat}/>);

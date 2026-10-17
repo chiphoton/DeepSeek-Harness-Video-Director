@@ -36,43 +36,44 @@ test('connection edits, discovery, and scoped unload work through the Host RPC',
 test('Harness RPC, asset routes and native settings remain connected after moving storage', async t => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'video-director-harness-test-')))
   const routes = new Map()
-  const channels = new Map()
   const disposers = []
-  let schema
+  const listeners = new Map()
   let document = { providerOverrides: {} }
   const settings = {
-    installSection(_owner, namespace, sectionSchema, _defaults, hooks) {
-      assert.equal(namespace, 'video-director')
-      schema = sectionSchema
-      hooks.setSource(() => document)
-    },
-    async mutate(_namespace, operations) {
+    async mutate(namespace, operations) {
+      assert.equal(namespace, 'director-custom-entry')
       const next = structuredClone(document)
       for (const operation of operations) {
         const [field, id, key] = operation.path
         next[field][id] ??= {}
         next[field][id][key] = operation.value
       }
-      document = schema(next)
+      document = { providerOverrides: Config({ providerOverrides: next.providerOverrides }).providerOverrides.get() }
+      listeners.get('loader/volatile-update')?.()
     },
   }
   const ctx = {
     connection: {
-      fetch: { register: route => { routes.set(route.path, route) } },
-      rpc: { handle: (channel, rpc) => { channels.set(channel, rpc) } },
+      fetch: { register: route => { assert.equal(route.requestBody, 'buffered'); routes.set(route.path, route); return () => routes.delete(route.path) } },
     },
     get() {},
-    inject(names, callback) { if (names.includes('settings')) callback({ settings }) },
-    on(event, callback) { assert.equal(event, 'dispose'); disposers.push(callback) },
+    effect(fn) { const dispose = fn(); if (dispose) disposers.push(dispose) },
+    fiber: { entry: { options: { id: 'director-custom-entry' } } },
+    inject(names, callback) { if (names.includes('settings')) callback({ settings, effect: fn => { disposers.push(fn()) } }) },
+    on(event, callback) { if (event === 'dispose') disposers.push(callback); else listeners.set(event, callback) },
     logger: { info() {} },
   }
   t.after(async () => { await Promise.all(disposers.map(dispose => dispose())); await rm(root, { recursive: true, force: true }) })
-  await apply(ctx, Config({ dataDir: join(root, 'initial'), providers: [
+  await apply(ctx, { ...Config({ dataDir: join(root, 'initial'), providers: [
     { id: 'codex-plan', label: 'Codex Plan', kind: 'codex-plan' },
-  ] }))
-  assert.deepEqual([...channels.keys()], ['/video-director'])
+  ] }), providerOverrides: { get: () => document.providerOverrides } })
+  assert.ok(routes.has('/api/video-director'))
   const rpc = async (endpoint, input = {}) => {
-    const result = await channels.get('/video-director')(endpoint, input)
+    const response = await routes.get('/api/video-director').fetch(new Request('http://localhost/api/video-director', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'client-request', rpcId: 'fixture', method: 'video-director', payload: { endpoint, payload: input } }),
+    }))
+    const { result } = await response.json()
     assert.equal(result.ok, true, JSON.stringify(result))
     return result.value
   }

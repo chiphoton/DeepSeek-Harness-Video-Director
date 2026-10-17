@@ -1,4 +1,5 @@
 import type { DirectorController } from './controller'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { ChatAttachmentRegistry, type ChatAttachment } from './chat-attachments'
 import type {
   ChatModelDirectory,
@@ -9,6 +10,7 @@ import type {
   ClientContext,
   ObservableSource,
   SessionBinding,
+  SessionReference,
 } from './types'
 
 /** Delimiters make canvas context removable from the transcript projection. */
@@ -42,6 +44,7 @@ const EMPTY_MODEL_DIRECTORY: ChatModelDirectoryState = {
   failures: [],
   status: 'idle',
   error: null,
+  pending: null,
 }
 
 type ChatImageMediaType = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
@@ -182,8 +185,8 @@ function surfaceState(events: readonly SessionEventRecord[]): SurfaceState {
       surface.push(seq)
       continue
     }
-    const start = numberValue(op.start)
-    const end = numberValue(op.end)
+    const start = numberValue(op.startSeq)
+    const end = numberValue(op.endSeq)
     if (start === undefined || end === undefined) {
       surface.push(seq)
       continue
@@ -218,7 +221,8 @@ function failureMessage(value: unknown): string | null {
   return value.error === value ? null : failureMessage(value.error)
 }
 
-function sessionError(snapshot: JsonRecord): string | null {
+function sessionError(snapshot: unknown): string | null {
+  if (!isRecord(snapshot)) return null
   return failureMessage(snapshot.openError)
     ?? failureMessage(snapshot.promptError)
     ?? failureMessage(snapshot.lastAgentError)
@@ -233,9 +237,11 @@ function toolResultData(data: unknown): {
   const message = messageAt(data)
   const source = sourceOf(message)
   const block = messageContent(message).find(candidate => isRecord(candidate) && candidate.type === 'tool-result')
-  const callId = stringValue(source?.callId)
+  const callId = (isRecord(message) ? stringValue(message.toolCallId) : undefined)
+    ?? stringValue(source?.callId)
     ?? (isRecord(block) ? stringValue(block.toolCallId) : undefined)
   const isError = (isRecord(data) && data.error !== undefined)
+    || (isRecord(message) && message.isError === true)
     || (isRecord(block) && block.isError === true)
   return { message, callId, isError }
 }
@@ -255,14 +261,16 @@ export function embedDirectorContext(text: string, context: string): string {
 
 function foldMessages(
   eventEntries: readonly unknown[],
-  sessionSnapshot: JsonRecord,
+  snapshot: unknown,
+  inboxValue: unknown,
 ): ProjectChatMessage[] {
+  const sessionSnapshot = isRecord(snapshot) ? snapshot : {}
   const events = eventEntries.flatMap(entry => {
     const event = eventRecord(entry)
     return event === undefined ? [] : [event]
   })
   const surface = surfaceState(events)
-  const finalSteps = new Set<string>()
+  const finalSteps = new Map<string, number>()
   const toolNames = new Map<string, string>()
   const completedCallIds = new Set<string>()
   const durableRpcIds = new Set<string>()
@@ -272,7 +280,7 @@ function foldMessages(
     const seq = eventSeq(event, index)
     if (event.type === 'assistant/message' && surface.active.has(seq)) {
       const step = eventStep(event.data)
-      if (step !== undefined) finalSteps.add(step)
+      if (step !== undefined) finalSteps.set(step, seq)
     }
     if (event.type === 'tool/call' && isRecord(event.data)) {
       const callId = stringValue(event.data.callId)
@@ -370,16 +378,14 @@ function foldMessages(
 
     let step: string | undefined
     let delta = ''
-    if (event.type === 'assistant/chunk' && isRecord(event.data) && isRecord(event.data.chunk)) {
-      step = eventStep(event.data)
+    if (event.type === 'assistant/live-chunk' && isRecord(event.data) && isRecord(event.data.chunk)) {
+      step = stringValue(event.data.attemptId)
       if (event.data.chunk.type === 'text-delta') delta = stringValue(event.data.chunk.text) ?? ''
-    } else if (event.type === 'chunkrow/text-chunks' && isRecord(event.data)) {
-      step = eventStep(event.data)
-      if (Array.isArray(event.data.texts)) {
-        delta = event.data.texts.filter((part): part is string => typeof part === 'string').join('')
-      }
     }
-    if (step === undefined || delta === '' || finalSteps.has(step)
+    // A normal settlement leaves live chunks in the native event window until
+    // step/end. Hide that prefix without suppressing a later retry's attempt.
+    const finalSeq = finalSteps.get(eventStep(event.data) ?? '')
+    if (step === undefined || delta === '' || (finalSeq !== undefined && seq < finalSeq)
       || isReplaced(seq, surface.replacements)) continue
     const previous = streamRows.get(step)
     if (previous === undefined) {
@@ -399,15 +405,17 @@ function foldMessages(
   }
 
   const queueRpcIds = new Set<string>()
-  const queue = Array.isArray(sessionSnapshot.queue) ? sessionSnapshot.queue : []
+  const inbox = isRecord(inboxValue) ? inboxValue : {}
+  const queue = ['next-turn', 'next-step'].flatMap(key => Array.isArray(inbox[key]) ? inbox[key] : [])
   for (const item of queue) {
-    if (!isRecord(item) || item.placement === 'context') continue
-    const rpcId = stringValue(item.rpcId)
+    if (sourceOf(item)?.kind !== 'user') continue
+    const rpcId = stringValue(sourceOf(item)?.rpcId)
+    if (rpcId !== undefined && (durableRpcIds.has(rpcId) || queueRpcIds.has(rpcId))) continue
     if (rpcId !== undefined) queueRpcIds.add(rpcId)
-    const text = stripDirectorContext(stringValue(item.text) ?? stringValue(item.preview) ?? '')
+    const text = stripDirectorContext(contentText(item))
     if (text === '') continue
     messages.push({
-      id: `queue:${stringValue(item.id) ?? messages.length}`,
+      id: `queue:${idOf(item, String(messages.length))}`,
       role: 'user',
       kind: 'user',
       status: 'pending',
@@ -460,6 +468,9 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
   private snapshot = emptySnapshot()
   private readonly listeners = new Set<() => void>()
   private binding: SessionBinding | undefined
+  private reference: SessionReference | undefined
+  private inbox: ObservableSource<unknown> | undefined
+  private opening = false
   private modelDirectory: ChatModelDirectory | undefined
   private projectId: string | null = null
   private sessionId: string | null = null
@@ -469,6 +480,7 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
   private disposeSessions: (() => void) | undefined
   private disposeSession: (() => void) | undefined
   private disposeEvents: (() => void) | undefined
+  private disposeInbox: (() => void) | undefined
   private disposeModels: (() => void) | undefined
   private readonly sending = new Map<string, number>()
   private readonly localErrors = new Map<string, string>()
@@ -546,18 +558,26 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
     this.rebuild()
 
     const previews = images.map(file => ({ file, previewUrl: URL.createObjectURL(file) }))
+    let sendReference: SessionReference | undefined
     let finishRetirement: ((retirement: { reason: 'observed' | 'failed' }) => void) | undefined
     const retirement = previews.length === 0
       ? undefined
       : new Promise<{ reason: 'observed' | 'failed' }>((resolve) => { finishRetirement = resolve })
     let submission: ReturnType<SessionBinding['session']['beginSubmission']> | undefined
+    const abandon = () => submission?.abandon()
+    controller.signal.addEventListener('abort', abandon, { once: true })
     try {
+      // Switching projects releases the view, but must not retire an in-flight
+      // submission or its object URLs before the native queue observes it.
+      sendReference = this.ctx.sessions.retain(sessionId as SessionId, { source: 'videoDirector', signal: controller.signal })
+      await sendReference.ready
+      controller.signal.throwIfAborted()
       submission = binding.session.beginSubmission({
         mode: 'queue',
         text: payload,
-        images: previews.map(({ file, previewUrl }) => ({
-          previewUrl,
-          ...(file.name === '' ? {} : { name: file.name }),
+        attachments: previews.map(({ file, previewUrl }) => ({
+          type: 'image',
+          value: { previewUrl, ...(file.name === '' ? {} : { name: file.name }) },
         })),
         onRetire: (settlement) => {
           for (const preview of previews) URL.revokeObjectURL(preview.previewUrl)
@@ -588,6 +608,8 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
       }
       throw error
     } finally {
+      controller.signal.removeEventListener('abort', abandon)
+      sendReference?.release()
       this.promptControllers.delete(controller)
       const remaining = (this.sending.get(sessionId) ?? 1) - 1
       if (remaining <= 0) this.sending.delete(sessionId)
@@ -600,7 +622,8 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
     const sessionId = this.sessionId
     if (sessionId === null || this.modelDirectory === undefined) return
     try {
-      await this.modelDirectory.select(selection)
+      const result = await this.modelDirectory.select(selection)
+      if (!result.ok) throw new Error(result.error.message)
       this.localErrors.delete(sessionId)
     } catch (error) {
       this.localErrors.set(sessionId, error instanceof Error ? error.message : String(error))
@@ -630,6 +653,7 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
     this.disposed = true
     this.detachBinding()
     this.detachModelDirectory()
+    this.releaseReference()
     for (const registry of this.attachmentRegistries.values()) registry.dispose()
     this.attachmentRegistries.clear()
     this.disposeDirector?.()
@@ -648,12 +672,12 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
     const sessionId = project?.sessionId ?? null
     if (projectId === this.projectId && sessionId === this.sessionId) {
       if (sessionId !== null && this.binding === undefined) this.followBinding()
-      if (sessionId !== null && this.modelDirectory === undefined) this.followModelDirectory()
       return
     }
 
     this.detachBinding()
     this.detachModelDirectory()
+    this.releaseReference()
     this.projectId = projectId
     this.sessionId = sessionId
     this.unboundError = null
@@ -668,18 +692,14 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
       models: EMPTY_MODEL_DIRECTORY,
     })
     if (sessionId === null) return
-    if (this.ctx.sessions.list.getSnapshot().current !== sessionId) {
-      this.ctx.sessions.open(sessionId)
-    }
-    this.followModelDirectory()
     this.followBinding()
   }
 
   private readonly followModelDirectory = (): void => {
-    if (this.disposed || this.sessionId === null || this.modelDirectory !== undefined) return
+    if (this.disposed || this.sessionId === null || this.binding === undefined || this.modelDirectory !== undefined) return
     try {
       const sessionId = this.sessionId
-      const directory = this.ctx.modelDirectories.directoryFor(sessionId)
+      const directory = this.ctx.modelDirectories.directoryFor(sessionId as SessionId)
       this.modelDirectory = directory
       this.disposeModels = directory.store.subscribe(this.rebuild)
       void directory.load().catch((error: unknown) => {
@@ -694,19 +714,35 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
   }
 
   private readonly followBinding = (): void => {
-    if (this.disposed || this.sessionId === null) return
-    const next = this.ctx.sessions.binding(this.sessionId)
-    if (next === this.binding) {
-      if (next !== undefined) this.rebuild()
-      return
+    if (this.disposed || this.sessionId === null || this.reference !== undefined || this.opening) return
+    // A catalog row does not own a generation. Retain publishes the row's
+    // ownership synchronously, so guard against reentrant list notifications.
+    const sessionId = this.sessionId
+    if (this.ctx.sessions.list.getSnapshot().byId[sessionId as SessionId] === undefined) return
+    this.opening = true
+    try {
+      const reference = this.ctx.sessions.retain(sessionId as SessionId, { source: 'videoDirector' })
+      this.reference = reference
+      void reference.ready.then(binding => {
+        if (this.disposed || this.reference !== reference || this.sessionId !== sessionId) return
+        this.binding = binding
+        this.disposeSession = binding.session.subscribe(this.rebuild)
+        this.disposeEvents = binding.eventSource.subscribe(this.rebuild)
+        this.inbox = binding.session.projections.faceOf('inbox')
+        this.disposeInbox = this.inbox.subscribe(this.rebuild)
+        this.followModelDirectory()
+        this.rebuild()
+      }).catch((error: unknown) => {
+        if (this.disposed || this.reference !== reference || this.sessionId !== sessionId) return
+        this.localErrors.set(sessionId, error instanceof Error ? error.message : String(error))
+        this.rebuild()
+      })
+    } catch (error) {
+      this.localErrors.set(sessionId, error instanceof Error ? error.message : String(error))
+      this.rebuild()
+    } finally {
+      this.opening = false
     }
-    this.detachBinding()
-    this.binding = next
-    if (next !== undefined) {
-      this.disposeSession = next.session.subscribe(this.rebuild)
-      this.disposeEvents = next.eventSource.subscribe(this.rebuild)
-    }
-    this.rebuild()
   }
 
   private readonly rebuild = (): void => {
@@ -738,7 +774,7 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
     this.publish({
       projectId: this.projectId,
       sessionId,
-      messages: foldMessages(binding.eventSource.getSnapshot().entries, nativeSnapshot),
+      messages: foldMessages(binding.eventSource.getSnapshot().entries, nativeSnapshot, this.inbox?.getSnapshot()),
       running: nativeSnapshot.running === true,
       sending: (this.sending.get(sessionId) ?? 0) > 0,
       error: this.localErrors.get(sessionId) ?? visibleNativeError,
@@ -756,9 +792,18 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
   private detachBinding(): void {
     this.disposeSession?.()
     this.disposeEvents?.()
+    this.disposeInbox?.()
     this.disposeSession = undefined
     this.disposeEvents = undefined
+    this.disposeInbox = undefined
+    this.inbox = undefined
     this.binding = undefined
+  }
+
+  private releaseReference(): void {
+    // Clear after release: release itself notifies the catalog synchronously.
+    this.reference?.release()
+    this.reference = undefined
   }
 
   private detachModelDirectory(): void {

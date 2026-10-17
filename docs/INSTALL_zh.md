@@ -2,6 +2,8 @@
 
 [English](INSTALL.md) | [简体中文](INSTALL_zh.md)
 
+DSH 版本要求：本分支适配 `0.2.1-rc.2`，旧版 Host 对应的插件保留在 `dsh-v0.1.2-alpha.3` 标签。已有安装请先按[迁移指南](dsh-0.2.1-rc.2-migration.md)处理。
+
 术语：Video Director 画布节点称为 **vd-node**，**comfyui-workflow** 内的节点称为 **comfyui-node**。安装在 ComfyUI 服务端的 Python 扩展称为 **ComfyUI custom-node package**；本仓库 `custom_nodes/` 保存 Video Director JSON 定义。本文能力集合称为**安装预设（installation preset）**，与 `--profile` 选择的 **DSH profile** 不同。详见[术语约定](TERMINOLOGY_zh.md)。
 
 本手册用于安装 **DeepSeek-Harness Video-Director** 实际使用的运行时依赖。它面向自动化 agent 编写，但每条命令仍须服从操作者的授权与本机安全策略。内容已于 **2026-09-05** 根据仓库内置 Graph 和上游来源完成核验。

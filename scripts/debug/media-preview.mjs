@@ -51,7 +51,9 @@ const bundle = await build({ stdin: { resolveDir: resolve('src/client'), loader:
   window.metrics = {notifications:0,commits:0,renderMs:0,rpcs:0,longTasks:[]};
   if (PerformanceObserver.supportedEntryTypes.includes('longtask')) new PerformanceObserver(list => window.metrics.longTasks.push(...list.getEntries().map(e=>e.duration))).observe({entryTypes:['longtask']});
   let tick = 0;
-  const director = new DirectorController({sessions:{list:{getSnapshot:()=>({current:'synthetic',byId:{synthetic:{}},ids:['synthetic']})}},connection:{rpc:{call:async (_, endpoint, input) => {
+  const director = new DirectorController({sessions:{list:{getSnapshot:()=>({current:'synthetic',byId:{synthetic:{retainedBy:{}}},ids:['synthetic']})}},connection:{rpc:{call:async (_, method, envelope) => {
+    // Keep the optional committed alpha baseline usable for comparisons.
+    const {endpoint,payload:input} = method==='video-director' ? envelope : {endpoint:method,payload:envelope};
     window.metrics.rpcs++;
     if(endpoint==='jobs/list' && runs[0].status==='running') { jobs.at(-1).updatedAt = new Date().toISOString(); jobs.at(-1).progress = (++tick % 100) / 100; }
     if(endpoint==='vd-runs/cancel') { runs[0].status='cancelled'; runs[0].completedAt=new Date().toISOString(); jobs.at(-1).status='cancelled'; jobs.at(-1).completedAt=runs[0].completedAt; projects[0].status='ready'; }

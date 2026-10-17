@@ -1,4 +1,6 @@
 import { createDefinedVdNode } from './canvas-commands'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type { SessionReference } from './types'
 import { prepareNodeRequest, withDefaultRegisteredImageWorkflow } from './node-request'
 import { JobHistoryCache } from './job-history'
 import { vdNodeResultPayload, storedVdNodeResult, nodeOutputPayload, hasReusableNodeOutput, combinedSinkPayload, clearedSinkData, suppressedPreviewData, resumedPreviewData, recomputeSinkPayloads } from './node-results'
@@ -30,7 +32,6 @@ import type {
   ProviderDescriptor,
   RemoteFailure,
   RemoteResult,
-  SessionBinding,
   SketchDocument,
   VideoProject,
   ComfyWorkflowDescriptor,
@@ -63,7 +64,6 @@ import { planVdRun, validateTriggerNodeConnections } from './workflow-runner'
 import { ProjectDraftCache } from './project-drafts'
 import { batchSourceItems, matchBatchItems, batchRange, caseSeed, materializeBatchCase, collectBatchArtifacts, MAX_BATCH_CASES } from './batch'
 
-const CHANNEL = '/video-director'
 const JOB_POLL_MS = 1_400
 const JOB_RECONNECT_MIN_MS = 500
 const JOB_RECONNECT_MAX_MS = 15_000
@@ -731,6 +731,9 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
   private projectGeneration = 0
   private transitionVersion = 0
   private disposed = false
+  private readonly sessionLifetime = new AbortController()
+  private readonly sessionTitleWrites = new Map<SessionId, Promise<void>>()
+  private readonly sessionTitleErrors = new Map<SessionId, string>()
   private readonly jobTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private hostObservationTimer?: ReturnType<typeof setTimeout>
   private runRefresh: Promise<void> | null = null
@@ -756,6 +759,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
           throw error
         })
         this.draftRevisions.set(projectId, summary?.draftRevision ?? (this.draftRevisions.get(projectId) ?? 0))
+        if (summary) await this.syncSessionTitles([summary])
         return { draftRevision: summary?.draftRevision }
       },
       error => { if (!this.disposed) this.patch({ conflict: (error as { code?: string }).code === 'video-director/draft-conflict', error: `Could not cache workflow changes: ${errorMessage(error)}` }) },
@@ -797,9 +801,12 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
           void this.refreshProviderModels(provider.id)
         }
       }
-      const currentSession = this.ctx.sessions.list.getSnapshot().current
-      const selected = projects.projects.find(project => project.sessionId === currentSession) ?? projects.projects[0]
+      const catalog = this.ctx.sessions.list.getSnapshot().byId
+      const selected = projects.projects.find(project => (catalog[project.sessionId as SessionId]?.retainedBy.mainView ?? 0) > 0) ?? projects.projects[0]
+      await this.syncSessionTitles(projects.projects)
+      const titleError = this.snapshot.error
       if (selected !== undefined) await this.loadProject(selected.id, false)
+      if (titleError && !this.snapshot.error) this.patch({ error: titleError })
       void this.drafts.flush().catch(error => this.patch({ error: errorMessage(error) }))
     } catch (error) {
       this.patch({ phase: 'error', error: errorMessage(error) })
@@ -816,6 +823,8 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
 
   dispose = (): void => {
     this.disposed = true
+    this.sessionLifetime.abort()
+    this.transitionVersion += 1
     this.jobHistory.dispose()
     this.drafts.dispose()
     for (const timer of this.jobTimers.values()) clearTimeout(timer)
@@ -838,8 +847,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
     this.patch({ phase: 'loading', error: null, conflict: false })
     try {
       const sessionId = await this.ctx.sessions.create()
-      const binding = this.requireSessionBinding(sessionId)
-      await this.renameSession(binding, name)
+      await this.renameSession(sessionId, name)
       const { project, projectFolders } = await this.rpc<{ project: VideoProject; projectFolders?: ProjectFolderLayout }>('projects/create', {
         name, sessionId, unsaved: true, ...(location ? { parentId: location.parentId, expectedFolderRevision: location.expectedRevision } : {}),
       })
@@ -853,7 +861,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
       this.resetHistory()
       this.editVersion = 0
       this.projectGeneration += 1
-      this.ctx.sessions.open(project.sessionId)
+      this.ctx.uiWorkspace.openSession(project.sessionId as SessionId)
       this.patch({ project, projects, ...(projectFolders ? { projectFolders } : {}), dirty: project.hasSavedVersion === false, saving: false, phase: 'ready' })
     } catch (error) {
       if (transition === this.transitionVersion) this.patch({ phase: 'error', error: errorMessage(error) })
@@ -1111,8 +1119,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
     const project = this.requireProject()
     const projectId = project.id
     const sessionId = await this.ctx.sessions.create()
-    const binding = this.requireSessionBinding(sessionId)
-    await this.renameSession(binding, project.name)
+    await this.renameSession(sessionId, project.name)
     const persisted = (await this.rpc<{ project: VideoProject }>('projects/session', {
       projectId,
       sessionId,
@@ -1141,7 +1148,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
     const projects = this.snapshot.projects.map(summary => summary.id === projectId
       ? { ...visible, nodeCount: visible.graph.nodes.length }
       : summary)
-    this.ctx.sessions.open(sessionId)
+    this.ctx.uiWorkspace.openSession(sessionId)
     this.patch({ project: visible, projects, error: null })
   }
 
@@ -1219,11 +1226,19 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
   }
 
   async renameProjectById(projectId: string, name: string): Promise<void> {
-    if (projectId === this.snapshot.project?.id) { this.renameProject(name); return }
+    name = name.trim()
+    if (!name) return
+    if (projectId === this.snapshot.project?.id) {
+      const unchanged = name === this.snapshot.project.name
+      this.renameProject(name)
+      await this.drafts.flush(projectId)
+      if (unchanged) await this.syncSessionTitles(this.snapshot.projects.filter(project => project.id === projectId))
+      return
+    }
     await this.drafts.flush(projectId)
     const { project: saved } = await this.rpc<{ project: VideoProject }>('projects/get', { projectId })
     const project = { ...saved, ...saved.draft }
-    if (project.name === name) return
+    if (project.name === name) { await this.syncSessionTitles([project]); return }
     const draft = this.historyState({ ...project, name })
     const unsaved = saved.hasSavedVersion === false || !sameJson(draft, this.historyState(saved))
     this.draftRevisions.set(projectId, saved.draftRevision ?? 0)
@@ -1296,13 +1311,17 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
       const result = await this.rpc<{ project: VideoProject | null; projects: ProjectSummary[] }>('projects/discard', { projectId, expectedDraftRevision: this.draftRevisions.get(projectId) ?? this.snapshot.projects.find(row => row.id === projectId)?.draftRevision ?? 0 })
       this.drafts.forget(projectId)
       this.patch({ projects: result.projects, phase: 'ready' })
-      if (!current) return
+      if (!current) {
+        if (result.project) await this.syncSessionTitles([result.project])
+        return
+      }
       this.resetHistory()
       this.baseProject = null
       this.savedState = null
       this.patch({ project: null, dirty: false, canvasResetVersion: this.snapshot.canvasResetVersion + 1 })
       const nextId = result.project?.id ?? result.projects[0]?.id
       if (nextId !== undefined) await this.loadProject(nextId, result.project === null)
+      if (result.project) await this.syncSessionTitles([result.project])
     } catch (error) {
       this.patch({ phase: 'ready', error: errorMessage(error) })
       throw error
@@ -2751,8 +2770,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
       if (transition !== this.transitionVersion) return
       const name = typeof nameOrResolver === 'string' ? nameOrResolver : nameOrResolver(archive)
       const sessionId = await this.ctx.sessions.create()
-      const binding = this.requireSessionBinding(sessionId)
-      await this.renameSession(binding, name)
+      await this.renameSession(sessionId, name)
       const created = (await this.rpc<{ project: VideoProject }>('projects/create', { name, sessionId, unsaved: true })).project
       createdProjectId = created.id
 
@@ -2803,7 +2821,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
       this.resetHistory()
       this.editVersion = 0
       this.projectGeneration += 1
-      this.ctx.sessions.open(project.sessionId)
+      this.ctx.uiWorkspace.openSession(project.sessionId as SessionId)
       createdProjectId = undefined
       this.patch({
         project,
@@ -2825,6 +2843,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
 
   private async loadProject(projectId: string, openSession: boolean): Promise<void> {
     const transition = ++this.transitionVersion
+    let reference: SessionReference | undefined
     this.patch({ phase: 'loading', error: null, conflict: false })
     try {
       const response = await this.rpc<{ project: VideoProject }>('projects/get', { projectId })
@@ -2837,22 +2856,20 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
         this.snapshot.providers,
       )
       if (transition !== this.transitionVersion) return
-      const sessionState = this.ctx.sessions.list.getSnapshot()
-      let binding = this.ctx.sessions.binding(persistedProject.sessionId)
-      let sessionReady = sessionState.byId[persistedProject.sessionId] !== undefined && binding !== undefined
+      let sessionReady = false
       let sessionError: string | null = null
-      if (!sessionReady) {
-        try {
-          const adoptedSessionId = await this.ctx.sessions.create({ sessionId: persistedProject.sessionId })
-          if (adoptedSessionId !== persistedProject.sessionId) {
-            throw new Error(`Session adoption returned ${adoptedSessionId} instead of ${persistedProject.sessionId}.`)
-          }
-          binding = this.requireSessionBinding(persistedProject.sessionId)
-          await this.renameSession(binding, persistedProject.name)
-          sessionReady = true
-        } catch (error) {
-          sessionError = errorMessage(error)
+      try {
+        if (this.ctx.sessions.list.getSnapshot().byId[persistedProject.sessionId as SessionId] === undefined) {
+          await this.ctx.sessions.refresh()
         }
+        if (this.ctx.sessions.list.getSnapshot().byId[persistedProject.sessionId as SessionId] === undefined) {
+          throw new Error('This project\'s DeepSeek session is unavailable. Restore its session history or start a new chat session.')
+        }
+        reference = this.ctx.sessions.retain(persistedProject.sessionId as SessionId, { source: 'videoDirector', signal: this.sessionLifetime.signal })
+        await reference.ready
+        sessionReady = true
+      } catch (error) {
+        sessionError = errorMessage(error)
       }
       if (transition !== this.transitionVersion) return
       this.draftRevisions.set(projectId, persistedProject.draftRevision ?? 0)
@@ -2866,8 +2883,8 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
       this.resetHistory()
       this.editVersion = 0
       this.projectGeneration += 1
-      if (sessionReady && (openSession || this.ctx.sessions.list.getSnapshot().current !== project.sessionId)) {
-        this.ctx.sessions.open(project.sessionId)
+      if (sessionReady && openSession) {
+        this.ctx.uiWorkspace.openSession(project.sessionId as SessionId)
       }
       this.patch({ project, phase: 'ready', dirty: project.hasSavedVersion === false || draft != null, saving: false, conflict: false, error: sessionError })
       if (recovered !== undefined) void this.drafts.flush(projectId).catch(error => this.patch({ error: errorMessage(error) }))
@@ -2898,6 +2915,9 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
     } catch (error) {
       if (transition === this.transitionVersion) this.patch({ phase: 'error', error: errorMessage(error) })
       throw error
+    } finally {
+      // The chat source takes its own reference when the project is published.
+      reference?.release()
     }
   }
 
@@ -2962,6 +2982,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
         saved = await this.forceSaveProject(local)
       }
       this.acceptSaved(saved, editVersion)
+      await this.syncSessionTitles([saved])
     } catch (error) {
       const conflict = ['video-director/revision-conflict', 'video-director/draft-conflict'].includes((error as Error & { code?: string }).code ?? '')
       this.patch({
@@ -3308,20 +3329,41 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
     return project
   }
 
-  private requireSessionBinding(sessionId: string): SessionBinding {
-    if (this.ctx.sessions.list.getSnapshot().byId[sessionId] === undefined) {
-      throw new Error(`Session ${sessionId} was not listed after creation.`)
-    }
-    const binding = this.ctx.sessions.binding(sessionId)
-    if (binding === undefined) {
-      throw new Error(`Session ${sessionId} had no binding after creation.`)
-    }
-    return binding
+  private async renameSession(sessionId: SessionId, title: string): Promise<void> {
+    await this.ctx.sessions.using(sessionId, { source: 'videoDirector', signal: this.sessionLifetime.signal }, async reference => {
+      const result = await reference.binding.session.rename(title)
+      if (!result.ok) throw remoteError(result.error)
+    })
   }
 
-  private async renameSession(binding: SessionBinding, title: string): Promise<void> {
-    const result = await binding.session.rename(title)
-    if (!result.ok) throw remoteError(result.error)
+  /** Synchronize only durable name/link metadata; never generate a title from chat or workflow content. */
+  private async syncSessionTitles(projects: ReadonlyArray<Pick<ProjectSummary, 'sessionId' | 'name'>>): Promise<void> {
+    await Promise.all(projects.map(project => {
+      const sessionId = project.sessionId as SessionId
+      const prior = this.sessionTitleWrites.get(sessionId) ?? Promise.resolve()
+      const write = prior.then(async () => {
+        if (this.disposed) return
+        const session = this.ctx.sessions.list.getSnapshot().byId[sessionId]
+        // Missing histories must not be recreated just to fix a title.
+        if (session === undefined) return
+        if (session.title !== project.name) await this.renameSession(sessionId, project.name)
+        const priorError = this.sessionTitleErrors.get(sessionId)
+        this.sessionTitleErrors.delete(sessionId)
+        if (priorError && this.snapshot.error === priorError) this.patch({ error: null })
+      }).catch(error => {
+        // The workflow write already succeeded. A title failure must not retry it
+        // with a stale draft revision or turn a successful Save into a conflict.
+        if (!this.disposed) {
+          const message = `Workflow saved, but its linked session could not be renamed: ${errorMessage(error)}`
+          this.sessionTitleErrors.set(sessionId, message)
+          this.patch({ error: message })
+        }
+      })
+      this.sessionTitleWrites.set(sessionId, write)
+      return write.finally(() => {
+        if (this.sessionTitleWrites.get(sessionId) === write) this.sessionTitleWrites.delete(sessionId)
+      })
+    }))
   }
 
   private patch(patch: Partial<DirectorSnapshot>): void {
@@ -3349,7 +3391,7 @@ export class DirectorController implements ObservableSource<DirectorSnapshot> {
   }
 
   private async rpc<T = unknown>(endpoint: string, payload: unknown, signal?: AbortSignal): Promise<T> {
-    const result = await this.ctx.connection.rpc.call(CHANNEL, endpoint, payload, signal) as RemoteResult<T>
+    const result = await this.ctx.connection.rpc.call('/api', 'video-director', { endpoint, payload }, signal) as RemoteResult<T>
     if (result.ok) return result.value
     throw remoteError(result.error)
   }

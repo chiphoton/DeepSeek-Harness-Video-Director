@@ -30,7 +30,7 @@
 
 - Node.js `^22.19.0` 或 `>=24.0.0`
 - pnpm `11.7.0`
-- 已构建的 DeepSeek Harness 源码仓库，或已安装的 `dsh` CLI
+- 已构建的 DeepSeek Harness `0.2.1-rc.2` 源码仓库，或同版本的 `dsh` CLI；已有安装请参考[迁移指南](dsh-0.2.1-rc.2-migration.md)
 - 本地生成时，需要单独配置 Ollama 和/或 ComfyUI
 - 使用可选的 Codex Plan 文字/图像 Provider 时，需要本机已经登录 Codex；图像 Workflow 还需要账户可使用图像生成
 - MiniMax H3 Turbo 还需要 H3 节点/模型，以及 [`ComfyUI-MiniMax-H3-Turbo`](https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo)
@@ -70,9 +70,10 @@ pnpm dsh web
 | `maxAssetBytes` | 单个上传素材解码后的最大字节数；默认且不可超过 200 MiB。 |
 | `jobConcurrency` | 本插件进程可以并行执行的 Job 数量。 |
 | `minimaxH3LicenseAccepted` | MiniMax H3 部署许可门；默认 `true`，显式设为 `false` 时保持锁定。 |
+| `providerOverrides` | 通过 DSH Settings 持久化的 Volatile Provider 配置；API Key 字段标记为 Secret。 |
 | `providers` | 命名的 Ollama、OpenAI 兼容、Codex Plan 连接，以及逻辑 ComfyUI Backend。 |
 
-200 MiB 硬上限为 Harness 的 300 MiB Custom Channel 请求上限预留了空间：二进制素材编码为 Base64 后约膨胀至原大小的 4/3，外层 JSON 也会产生额外开销。
+200 MiB 硬上限为 Harness 的 300 MiB Connection HTTP 请求上限预留了空间：二进制素材编码为 Base64 后约膨胀至原大小的 4/3，外层 JSON 也会产生额外开销。
 
 凭据应放在 Harness 托管配置或环境变量中。示例 Patch 从 `OPENAI_API_KEY` 读取密钥，当前选择 `gpt-5.6-terra` 与 `gpt-image-2`；请按兼容接口实际提供的能力调整模型 id。也可以在右侧**设置 → 连接**中覆盖 Provider 配置；密钥通过 DSH 原生 Settings 保存且不会回显到浏览器。ComfyUI 只需输入 `127.0.0.1:8188`，Host 会自动补成 HTTP URL，REST/MCP 细节不会写进工程或画布节点。Video Project 只保存 Provider id、Workflow/Node 引用与参数，不保存 Token。
 
@@ -80,7 +81,7 @@ Codex Plan Provider 使用官方 [`@openai/codex-sdk`](https://developers.openai
 
 Host 会从 Ollama `/api/tags` 自动刷新模型，并且在设置和文字 Workflow 节点中只列出清单里真实可用的模型。Ollama 文字节点会在 **Advanced** 中提供 System Prompt、Context Length 与 Thinking；所选模型未声明 Thinking 能力时该选项会禁用，发现到的模型上下文长度会限制可选覆盖值。ComfyUI 模型枚举来自 `/object_info`，但只有注册 comfyui-workflow 或 vd-node 定义明确开放的精确 Graph 输入才会成为下拉参数；ComfyUI-backed vd-node 仍然先选择命名 comfyui-workflow，Checkpoint、UNET、CLIP、VAE、LoRA 等文件只在该 comfyui-workflow 的参数中选择。原始 `object_info` 与凭据都不会发送到浏览器。
 
-Host Cordis 插件负责 `ProjectStore`、`ComfyWorkflowStore`、`VdNodeRegistry`、`ProviderRuntime`、`JobManager`、`/video-director` RPC 与素材响应。浏览器侧负责 Project/Session 切换、带 Revision 的显式保存、通用 Node 渲染、画布、Graph 规划、Provider 检查与 Job 轮询。画布修改只保留在本地，用户点击**保存**后才写入工程；切换或新建工程前必须保存，或确认放弃修改。运行不要求先保存：客户端在点击 Run 时冻结一次 Graph，按拓扑顺序调度远程 Node，并在每个依赖阶段就绪时向 Host 发送该 Node 的不可变执行快照。Job 只持久化状态、Graph Run 分组、批次坐标与安全元数据，不把执行快照写回工程 Graph；运行期间继续编辑不会被旧快照回滚，晚到的旧 Job 也不能覆盖更新的 Run。每个 Project 保存独立 Harness `sessionId`，因此切换工程时对话上下文也随之切换。
+Host Cordis 插件负责 `ProjectStore`、`ComfyWorkflowStore`、`VdNodeRegistry`、`ProviderRuntime`、`JobManager`、`POST /api/video-director` RPC 与素材响应。浏览器侧负责 Project/Session 切换、带 Revision 的显式保存、通用 Node 渲染、画布、Graph 规划、Provider 检查与 Job 轮询。画布修改只保留在本地，用户点击**保存**后才写入工程；切换或新建工程前必须保存，或确认放弃修改。运行不要求先保存：客户端在点击 Run 时冻结一次 Graph，按拓扑顺序调度远程 Node，并在每个依赖阶段就绪时向 Host 发送该 Node 的不可变执行快照。Job 只持久化状态、Graph Run 分组、批次坐标与安全元数据，不把执行快照写回工程 Graph；运行期间继续编辑不会被旧快照回滚，晚到的旧 Job 也不能覆盖更新的 Run。每个 Project 保存独立 Harness `sessionId`，因此切换工程时对话上下文也随之切换。
 
 | Provider Kind | 当前操作 | 说明 |
 |---|---|---|
@@ -248,4 +249,4 @@ pnpm run check
 主要参考：[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)、[DirectorX](https://github.com/LaplaceYoung/dsh-directorx)、[Tongflow](https://github.com/tong-io/tongflow)、[MiniMax-H3-Codex-Drama](https://github.com/chiphoton/MiniMax-H3-Codex-Drama)、[comfyui-mcp 0.49.3](https://github.com/artokun/comfyui-mcp/tree/v0.49.3) 与 [ComfyUI](https://github.com/Comfy-Org/ComfyUI)。
 
 
-画布同步来源与 Harness 适配见 [同步记录](canvas-sync.md)。新增工程示例选择器、中英文界面和存储切换。`src/director-host.js` 通过现有 `/video-director` 认证通道提供 `examples/list`、`examples/get` 和 `storage/{info,open,choose,change,reset}`；迁移前等待已接受写入完成，生成和工作流运行时拒绝迁移。原始 `dataDir` 中的 `.video-director-storage.json` 记录重启位置，素材路由跟随当前目录。对话和连接密钥由 Harness 管理。
+画布同步来源与 Harness 适配见 [同步记录](canvas-sync.md)。新增工程示例选择器、中英文界面和存储切换。`src/director-host.js` 通过 `/api/video-director` 认证 RPC 路由提供 `examples/list`、`examples/get` 和 `storage/{info,open,choose,change,reset}`；迁移前等待已接受写入完成，生成和工作流运行时拒绝迁移。原始 `dataDir` 中的 `.video-director-storage.json` 记录重启位置，素材路由跟随当前目录。对话和连接密钥由 Harness 管理。

@@ -67,9 +67,17 @@ test('stored MP4 and WebM properties are served through Harness routes after res
   const start = async () => {
     routes = new Map()
     await apply({
-      connection: { fetch: { register: route => routes.set(route.path, route) }, rpc: { handle: (_, handler) => { rpc = handler } } },
-      get() {}, inject() {}, on: (_, dispose) => disposers.push(dispose), logger: { info() {} },
+      connection: { fetch: { register: route => { routes.set(route.path, route); return () => routes.delete(route.path) } } },
+      effect(fn) { const dispose = fn(); if (dispose) disposers.push(dispose) },
+      get() {}, inject() {}, on: (event, dispose) => { if (event === 'dispose') disposers.push(dispose) }, logger: { info() {} },
     }, Config({ dataDir: join(root, 'data') }))
+    rpc = async (endpoint, payload) => {
+      const response = await routes.get('/api/video-director').fetch(new Request('http://localhost/api/video-director', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'client-request', rpcId: 'fixture', method: 'video-director', payload: { endpoint, payload } }),
+      }))
+      return (await response.json()).result
+    }
   }
   await start()
   const { value: { project } } = await rpc('projects/create', { name: 'Video fixture', sessionId: 'fixture' })

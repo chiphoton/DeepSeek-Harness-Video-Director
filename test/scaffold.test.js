@@ -21,8 +21,8 @@ test('caps decoded assets below the custom-channel request ceiling', () => {
 })
 
 test('accepts the MiniMax H3 license by default while allowing explicit opt-out', () => {
-  assert.equal(Config({}).minimaxH3LicenseAccepted, true)
-  assert.equal(Config({ minimaxH3LicenseAccepted: false }).minimaxH3LicenseAccepted, false)
+  assert.equal(Config({}).minimaxH3LicenseAccepted.get(), true)
+  assert.equal(Config({ minimaxH3LicenseAccepted: false }).minimaxH3LicenseAccepted.get(), false)
 })
 
 test('declares the Harness bundle patch', async () => {

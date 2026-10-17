@@ -8,6 +8,7 @@ import test from 'node:test'
 import { build } from 'esbuild'
 import { testHost } from './fixtures/director-host.js'
 import { ProjectStore } from '../src/project-store.js'
+import { sessionContext } from './fixtures/client-sessions.js'
 
 const bundle = await build({ stdin: {
   resolveDir: fileURLToPath(new URL('../src/client/', import.meta.url)),
@@ -30,13 +31,16 @@ async function fixture(t) {
     create: async (options = {}) => {
       const id = options.sessionId ?? randomUUID()
       sessions.byId[id] = { id }
-      bindings.set(id, { session: { getSnapshot: () => ({}), rename: async () => ({ ok: true, value: {} }) } })
+      bindings.set(id, { session: { getSnapshot: () => ({}), rename: async title => {
+        sessions.byId[id].title = title
+        return { ok: true, value: { title } }
+      } } })
       return id
     },
     binding: id => bindings.get(id),
     open: id => { sessions.current = id },
   } }
-  controller = new DirectorController(context)
+  controller = new DirectorController(sessionContext(context))
   await controller.start()
   t.after(async () => {
     await controller.flushDrafts()
@@ -45,7 +49,7 @@ async function fixture(t) {
     await rm(root, { recursive: true, force: true })
   })
   return {
-    root, context, calls,
+    root, context, calls, sessions,
     get controller() { return controller },
     get host() { return host },
     async restart() {
@@ -53,12 +57,129 @@ async function fixture(t) {
       controller.dispose()
       await host.close()
       host = await testHost(root)
-      controller = new DirectorController(context)
+      controller = new DirectorController(sessionContext(context))
       await controller.start()
       return controller
     },
   }
 }
+
+test('renaming the active workflow updates its linked session title', async t => {
+  const app = await fixture(t)
+  await app.controller.createProject('Original workflow')
+  const { id, sessionId } = app.controller.getSnapshot().project
+  await app.controller.renameProjectById(id, 'Renamed workflow')
+  await app.controller.flushDrafts()
+  assert.equal(app.sessions.byId[sessionId].title, 'Renamed workflow')
+})
+
+test('renaming a background workflow updates only its linked session', async t => {
+  const app = await fixture(t)
+  await app.controller.createProject('Background workflow')
+  const { id, sessionId } = app.controller.getSnapshot().project
+  await app.controller.createProject('Active workflow')
+  const activeSessionId = app.controller.getSnapshot().project.sessionId
+  await app.controller.renameProjectById(id, 'Renamed background')
+  assert.equal(app.sessions.byId[sessionId].title, 'Renamed background')
+  assert.equal(app.sessions.byId[activeSessionId].title, 'Active workflow')
+  assert.equal(app.sessions.current, activeSessionId)
+})
+
+test('undo, redo, Save and background Discard keep the linked title consistent', async t => {
+  const app = await fixture(t)
+  const c = app.controller
+  await c.createProject('Saved name')
+  await c.saveProject()
+  const { id, sessionId } = c.getSnapshot().project
+  await c.renameProjectById(id, 'Draft name')
+  c.undo()
+  await c.flushDrafts()
+  assert.equal(app.sessions.byId[sessionId].title, 'Saved name')
+  c.redo()
+  await c.flushDrafts()
+  assert.equal(app.sessions.byId[sessionId].title, 'Draft name')
+  await c.createProject('Other workflow')
+  await c.discardChanges(id)
+  assert.equal(app.sessions.byId[sessionId].title, 'Saved name')
+  await c.selectProject(id)
+  c.renameProject('Saved immediately')
+  await c.saveProject()
+  assert.equal(app.sessions.byId[sessionId].title, 'Saved immediately')
+  await c.renameProjectById(id, 'Discard current')
+  await c.discardChanges()
+  assert.equal(app.sessions.byId[sessionId].title, 'Saved immediately')
+})
+
+test('startup repairs old titles from effective draft names without opening their sessions', async t => {
+  const app = await fixture(t)
+  await app.controller.createProject('Saved title')
+  const { id, sessionId } = app.controller.getSnapshot().project
+  await app.controller.renameProjectById(id, 'Recovered draft title')
+  await app.controller.createProject('Current workflow')
+  const currentSession = app.sessions.current
+  app.sessions.byId[sessionId].title = 'Stale title'
+  const before = app.calls.length
+  await app.restart()
+  assert.equal(app.sessions.byId[sessionId].title, 'Recovered draft title')
+  assert.equal(app.sessions.current, currentSession)
+  assert.equal(app.calls.slice(before).filter(call => call === 'projects/get').length, 1,
+    'repair uses project summaries, without loading background workflows')
+})
+
+test('a delayed rename cannot overwrite a newer workflow name', async t => {
+  const app = await fixture(t)
+  const c = app.controller
+  await c.createProject('Original')
+  const { id, sessionId } = c.getSnapshot().project
+  const binding = app.context.sessions.binding(sessionId).session
+  const rename = binding.rename
+  let entered, release
+  const started = new Promise(resolve => { entered = resolve })
+  const gate = new Promise(resolve => { release = resolve })
+  binding.rename = async title => {
+    if (title === 'First') { entered(); await gate }
+    return rename(title)
+  }
+  const first = c.renameProjectById(id, 'First')
+  await started
+  const second = c.renameProjectById(id, 'Second')
+  release()
+  await Promise.all([first, second])
+  assert.equal(app.sessions.byId[sessionId].title, 'Second')
+  assert.equal((await app.host.store.getProject(id)).draft.name, 'Second')
+})
+
+test('rename failure preserves the durable draft and can be retried without a draft conflict', async t => {
+  const app = await fixture(t)
+  const c = app.controller
+  await c.createProject('Original')
+  const { id, sessionId } = c.getSnapshot().project
+  const binding = app.context.sessions.binding(sessionId).session
+  const rename = binding.rename
+  binding.rename = async () => { throw new Error('Synthetic rename outage') }
+  await c.renameProjectById(id, 'Keep this name')
+  assert.equal((await app.host.store.getProject(id)).draft.name, 'Keep this name')
+  assert.match(c.getSnapshot().error, /linked session could not be renamed/)
+  assert.equal(c.getSnapshot().conflict, false)
+  const writes = app.calls.filter(call => call === 'projects/draft').length
+  binding.rename = rename
+  await c.renameProjectById(id, 'Keep this name')
+  assert.equal(app.sessions.byId[sessionId].title, 'Keep this name')
+  assert.equal(app.calls.filter(call => call === 'projects/draft').length, writes)
+  assert.equal(c.getSnapshot().conflict, false)
+  assert.equal(c.getSnapshot().error, null)
+})
+
+test('missing linked sessions are not recreated during title repair', async t => {
+  const app = await fixture(t)
+  await app.controller.createProject('Missing history')
+  const { sessionId } = app.controller.getSnapshot().project
+  delete app.sessions.byId[sessionId]
+  await app.restart()
+  assert.equal(app.sessions.byId[sessionId], undefined)
+  assert.equal(Object.keys(app.sessions.byId).length, 0)
+  assert.match(app.controller.getSnapshot().error, /session is unavailable/)
+})
 
 test('drafts preserve multiple workflows, names and canvas positions through switching and Host restart', async t => {
   const app = await fixture(t)
