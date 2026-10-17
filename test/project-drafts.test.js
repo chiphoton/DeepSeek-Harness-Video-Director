@@ -8,6 +8,7 @@ import test from 'node:test'
 import { build } from 'esbuild'
 import { testHost } from './fixtures/director-host.js'
 import { ProjectStore } from '../src/project-store.js'
+import { sessionContext } from './fixtures/client-sessions.js'
 
 const bundle = await build({ stdin: {
   resolveDir: fileURLToPath(new URL('../src/client/', import.meta.url)),
@@ -36,7 +37,7 @@ async function fixture(t) {
     binding: id => bindings.get(id),
     open: id => { sessions.current = id },
   } }
-  controller = new DirectorController(context)
+  controller = new DirectorController(sessionContext(context))
   await controller.start()
   t.after(async () => {
     await controller.flushDrafts()
@@ -53,7 +54,7 @@ async function fixture(t) {
       controller.dispose()
       await host.close()
       host = await testHost(root)
-      controller = new DirectorController(context)
+      controller = new DirectorController(sessionContext(context))
       await controller.start()
       return controller
     },

@@ -70,17 +70,19 @@ export class ProviderSettings {
   constructor(base, onChange) {
     this.base = {
       providers: clone(base.providers ?? []),
-      providerOverrides: {},
+      providerOverrides: clone(base.providerOverrides ?? {}),
       minimaxH3LicenseAccepted: base.minimaxH3LicenseAccepted !== false,
     }
     this.current = () => this.base
     this.writer = undefined
+    this.namespace = PROVIDER_SETTINGS_NAMESPACE
     this.onChange = onChange
   }
 
-  attach(writer, source) {
+  attach(writer, source, namespace = PROVIDER_SETTINGS_NAMESPACE) {
     this.writer = writer
     this.current = source
+    this.namespace = namespace
     this.refresh()
   }
 
@@ -124,7 +126,7 @@ export class ProviderSettings {
     }
     if (clearApiKey) ops.push({ op: 'unset', path: ['providerOverrides', providerId, 'apiKey'] })
     if (ops.length > 0) {
-      await this.writer.mutate(PROVIDER_SETTINGS_NAMESPACE, ops)
+      await this.writer.mutate(this.namespace, ops)
       this.refresh()
     }
     return this.resolved()

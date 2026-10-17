@@ -14,6 +14,7 @@ import { record } from '../src/validation.js'
 import { ComfyWorkflowStore } from '../src/workflow-store.js'
 import { WorkflowScheduler } from '../src/workflow-scheduler.js'
 import { RunQueue } from '../src/run-queue.js'
+import { sessionContext } from './fixtures/client-sessions.js'
 
 const controllers = new Set()
 test.after(() => { for (const controller of controllers) controller.dispose() })
@@ -32,7 +33,7 @@ async function DirectorController() {
   })
   const source = Buffer.from(result.outputFiles[0].text + '\n//# sourceURL=controller-tests.js').toString('base64')
   const Base = (await import(`data:text/javascript;base64,${source}`)).DirectorController
-  controllerClass = class extends Base { constructor(ctx) { super(ctx); controllers.add(this) } }
+  controllerClass = class extends Base { constructor(ctx) { super(sessionContext(ctx)); controllers.add(this) } }
   return controllerClass
 }
 
@@ -52,7 +53,7 @@ function projectFixture(sessionId) {
   }
 }
 
-test('loading a project adopts its missing Session identity before opening it', async () => {
+test('loading a project refreshes its catalog and retains the existing Session without creating another', async () => {
   const Controller = await DirectorController()
   const sessionId = '00000000-0000-4000-8000-000000000042'
   const project = projectFixture(sessionId)
@@ -66,9 +67,9 @@ test('loading a project adopts its missing Session identity before opening it', 
       getSnapshot: () => list,
       subscribe: () => () => {},
     },
-    async create(options = {}) {
-      createCalls.push(options)
-      const id = options.sessionId
+    async create(options = {}) { createCalls.push(options); throw new Error('must not create') },
+    async refresh() {
+      const id = sessionId
       list.ids.push(id)
       list.byId[id] = { id }
       bindings.set(id, {
@@ -80,7 +81,6 @@ test('loading a project adopts its missing Session identity before opening it', 
           },
         },
       })
-      return id
     },
     binding: id => bindings.get(id),
     open(id) {
@@ -108,12 +108,12 @@ test('loading a project adopts its missing Session identity before opening it', 
   await controller.start()
 
   assert.equal(controller.getSnapshot().project?.id, project.id)
-  assert.deepEqual(createCalls, [{ sessionId }])
-  assert.deepEqual(renameCalls, [project.name])
-  assert.deepEqual(openCalls, [sessionId])
+  assert.deepEqual(createCalls, [])
+  assert.deepEqual(renameCalls, [])
+  assert.deepEqual(openCalls, [], 'startup must not replace the native navigation selection')
 })
 
-test('a failed Session adoption leaves the Video Project and canvas usable for chat recovery', async () => {
+test('a failed Session refresh leaves the Video Project and canvas usable for chat recovery', async () => {
   const Controller = await DirectorController()
   const sessionId = '00000000-0000-4000-8000-000000000042'
   const project = projectFixture(sessionId)
@@ -126,6 +126,7 @@ test('a failed Session adoption leaves the Video Project and canvas usable for c
         subscribe: () => () => {},
       },
       create: async () => { throw failure },
+      refresh: async () => { throw failure },
       binding: () => undefined,
       open: id => { openCalls.push(id) },
     },

@@ -5,7 +5,7 @@ Source: `MiniMax-H3-Codex-Drama/plugins/canvas/`, commit `e861d4416cff31e9c03ddf
 | Source update | Harness integration |
 |---|---|
 | English/Chinese interface and remembered language | Ported across canvas, nodes, settings, previews, sketch/mask editors and chat controls. Uses `dsh-video-director.language`; the native Harness document language is unchanged. |
-| Keyboard-accessible project/examples picker | Ported with `examples/list` and `examples/get` on the existing `/video-director` RPC channel. Existing `all-in-one` and new `canvas-demo` archives open as independent editable copies after saving current edits. |
+| Keyboard-accessible project/examples picker | Ported with `examples/list` and `examples/get` through Video Director RPC (now `POST /api/video-director`; see the [rc.2 migration](dsh-0.2.1-rc.2-migration.md)). Existing `all-in-one` and new `canvas-demo` archives open as independent editable copies after saving current edits. |
 | Open, change and reset the data folder | Ported with native host folder controls, staged copies, persistent location, backups, active-work guards, and write draining. `src/director-host.js` switches stores and keeps registered asset routes current. |
 | Codex CLI model discovery and offline cache | Ported pagination, hidden-model filtering, catalog defaults, refresh, a five-minute generation cache, and explicit errors for unavailable selections. |
 | Image-aware model selection | Image nodes and runs requiring image references exclude catalog entries reporting text-only input. Saved explicit models are retained until the user changes them. |

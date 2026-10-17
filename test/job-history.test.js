@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { controllerFixture } from './fixtures/client-sessions.js'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -10,7 +11,8 @@ import { createDirectorRpc } from '../src/rpc.js'
 import { compareJobHistory, groupJobHistory, pageJobHistory } from '../src/job-history.js'
 
 const bundle = await build({ entryPoints: ['src/client/controller.ts'], bundle: true, format: 'esm', platform: 'browser', write: false })
-const { DirectorController } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text + '\n//# sourceURL=job-history-tests.js').toString('base64')}`)
+const { DirectorController: Controller } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text + '\n//# sourceURL=job-history-tests.js').toString('base64')}`)
+const DirectorController = controllerFixture(Controller)
 
 function memoryFixture(t, count = 27) {
   const rows = Array.from({ length: count }, (_, i) => {

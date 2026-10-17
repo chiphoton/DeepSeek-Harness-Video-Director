@@ -4,7 +4,7 @@ import { DirectorController } from './controller'
 import type { ClientContext } from './types'
 
 /** Cordis services used by the browser half of Video Director. */
-export const inject = ['slots', 'sessions', 'connection', 'modelDirectories']
+export const inject = ['slots', 'sessions', 'connection', 'modelDirectories', 'uiWorkspace']
 
 /**
  * Register an additive launcher and a frame-wide studio surface. The plugin

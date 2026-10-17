@@ -2,6 +2,8 @@
 
 [English](INSTALL.md) | [简体中文](INSTALL_zh.md)
 
+DSH compatibility: this branch requires `0.2.1-rc.2`; the `dsh-v0.1.2-alpha.3` plugin tag preserves support for the older host. Follow the [migration guide](dsh-0.2.1-rc.2-migration.md) for an existing installation.
+
 Terminology: **vd-nodes** belong to the Video Director canvas; **comfyui-nodes** belong to a **comfyui-workflow**. Python extensions installed on the ComfyUI server are **ComfyUI custom-node packages**. The repository's `custom_nodes/` contains Video Director JSON definitions. A capability set here is an **installation preset**, distinct from a **DSH profile** selected with `--profile`. See the [terminology guide](TERMINOLOGY.md).
 
 This runbook installs the runtime dependencies used by **DeepSeek-Harness Video-Director**. It is written for an automation agent, but every command remains subject to the operator's approval and local security policy. It was verified against the repository's built-in graphs and upstream sources on **2026-09-05**.

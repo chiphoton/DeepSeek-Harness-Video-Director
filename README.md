@@ -48,6 +48,8 @@ We call canvas elements **vd-nodes** and the overall canvas graph a **vd-workflo
 
 ### 1. Install into DSH and run
 
+This branch targets **DSH `0.2.1-rc.2`**. For DSH `0.1.2-alpha.3`, use the plugin tag `dsh-v0.1.2-alpha.3`. Read the [migration and rollback guide](docs/dsh-0.2.1-rc.2-migration.md) before upgrading an existing profile.
+
 Requirements: Git, Node.js `^22.19.0` or `>=24`, pnpm `11.7.0`, and an installed `dsh` CLI. For a single-machine, fully local deployment, **NVIDIA DGX Spark is the recommended environment**, but it is not required; the exact hardware requirement depends on the installation preset and model precision you select. Run the following from the directory where you want to keep the plugin:
 
 ```bash

@@ -31,7 +31,7 @@ Audio/video previews open a Media Editor for trimming, video cropping, and frame
 
 - Node.js `^22.19.0` or `>=24.0.0`
 - pnpm `11.7.0`
-- A built DeepSeek Harness checkout or installed `dsh` CLI
+- A built DeepSeek Harness `0.2.1-rc.2` checkout or installed `dsh` CLI at that version; see the [migration guide](dsh-0.2.1-rc.2-migration.md)
 - For local generation, a separately configured Ollama and/or ComfyUI installation
 - For the optional Codex Plan text/image provider, a local Codex sign-in; image workflows additionally require image generation on the account
 - For H3 Turbo, the required H3 nodes/models plus [`ComfyUI-MiniMax-H3-Turbo`](https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo)
@@ -73,9 +73,10 @@ pnpm dsh web
 | `maxAssetBytes` | Maximum decoded size of one uploaded asset; defaults to and cannot exceed 200 MiB. |
 | `jobConcurrency` | Maximum jobs executed by this plugin process. |
 | `minimaxH3LicenseAccepted` | MiniMax H3 deployment gate; defaults to `true`, while an explicit `false` keeps H3 locked. |
+| `providerOverrides` | Volatile provider settings persisted through DSH Settings; API keys are secret fields. |
 | `providers` | Named Ollama, OpenAI-compatible, Codex Plan, and logical ComfyUI backends. |
 
-The 200 MiB hard limit leaves room below Harness's 300 MiB custom-channel request cap: binary uploads expand to roughly 4/3 of their original size when encoded as base64, with additional JSON envelope overhead.
+The 200 MiB hard limit leaves room below Harness's 300 MiB Connection HTTP request cap: binary uploads expand to roughly 4/3 of their original size when encoded as base64, with additional JSON envelope overhead.
 
 Keep credentials in Harness-managed configuration or environment variables. The sample patch reads `OPENAI_API_KEY` and currently selects `gpt-5.6-terra` plus `gpt-image-2`; change those ids to capabilities actually offered by your compatible endpoint. Provider overrides can also be edited in the right-side **Settings → Connections** drawer; secrets are stored through native DSH settings and are never echoed back to the browser. For ComfyUI, entering `127.0.0.1:8188` is enough—the Host normalizes it to an HTTP URL, and REST/MCP details stay out of projects and canvas nodes. A Video Project stores only provider ids and workflow/node references with their values.
 
@@ -83,7 +84,7 @@ The Codex Plan provider uses the official [`@openai/codex-sdk`](https://develope
 
 The Host refreshes Ollama models from `/api/tags` and renders only the available inventory entries in Settings and text-workflow nodes. Ollama text nodes expose System Prompt, Context Length, and Thinking under **Advanced**; Thinking is disabled when the selected model does not report that capability, and the discovered model context length bounds the optional override. The Host refreshes ComfyUI model enums from `/object_info`, but exposes a choice only when a registered comfyui-workflow or vd-node definition explicitly declares that exact graph input as configurable. ComfyUI-backed vd-nodes therefore continue to select a named comfyui-workflow first; checkpoint, UNET, CLIP, VAE, or LoRA files appear only in that comfyui-workflow's parameter selectors. Raw `object_info` and credentials never reach the browser.
 
-The Host Cordis plugin owns `ProjectStore`, `ComfyWorkflowStore`, `VdNodeRegistry`, `ProviderRuntime`, `JobManager`, the `/video-director` RPC namespace, and authenticated asset responses. The browser half owns project/session switching, explicit save with optimistic revision checks, generic node rendering, canvas state, graph planning, provider checks, and job polling. Canvas edits remain local until **Save** is pressed; switching or creating a project requires saving or confirming discard. Running does not require a save: clicking Run freezes the graph once, topologically schedules its remote nodes, and sends an immutable per-node execution snapshot to the Host as each dependency stage becomes ready. Jobs persist status, graph-run grouping, batch coordinates, and safe provenance only, never the execution snapshot into the saved graph. Later canvas edits are not replayed or reverted, and a late older job cannot replace a newer run. Each project persists its own Harness `sessionId`, so opening a different project opens its conversation context as well.
+The Host Cordis plugin owns `ProjectStore`, `ComfyWorkflowStore`, `VdNodeRegistry`, `ProviderRuntime`, `JobManager`, the authenticated `POST /api/video-director` RPC envelope, and authenticated asset responses. The browser half owns project/session switching, explicit save with optimistic revision checks, generic node rendering, canvas state, graph planning, provider checks, and job polling. Canvas edits remain local until **Save** is pressed; switching or creating a project requires saving or confirming discard. Running does not require a save: clicking Run freezes the graph once, topologically schedules its remote nodes, and sends an immutable per-node execution snapshot to the Host as each dependency stage becomes ready. Jobs persist status, graph-run grouping, batch coordinates, and safe provenance only, never the execution snapshot into the saved graph. Later canvas edits are not replayed or reverted, and a late older job cannot replace a newer run. Each project persists its own Harness `sessionId`, so opening a different project opens its conversation context as well.
 
 | Provider kind | Current operations | Notes |
 |---|---|---|

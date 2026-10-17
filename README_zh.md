@@ -48,6 +48,8 @@ DeepSeek-Harness Video-Director 是一个为 [DeepSeek Harness](https://github.c
 
 ### 1. 一键安装到 DSH 并运行
 
+本分支适配 **DSH `0.2.1-rc.2`**。DSH `0.1.2-alpha.3` 请使用插件标签 `dsh-v0.1.2-alpha.3`。升级已有 Profile 前，请先阅读[迁移与回滚指南](docs/dsh-0.2.1-rc.2-migration.md)。
+
 需要 Git、Node.js `^22.19.0` 或 `>=24`、pnpm `11.7.0`，以及已经安装的 `dsh` CLI。对于单机 Fully-Local 部署，**推荐使用 NVIDIA DGX Spark**，但它不是硬性要求；实际硬件门槛取决于所选 Workflow Profile 与模型精度。在准备存放插件的目录中执行：
 
 ```bash

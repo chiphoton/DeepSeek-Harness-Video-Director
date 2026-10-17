@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
+import { controllerFixture } from './fixtures/client-sessions.js'
 import test from 'node:test'
 import { build } from 'esbuild'
 
 const bundle = await build({ entryPoints: ['src/client/controller.ts'], bundle: true, format: 'esm', platform: 'browser', write: false })
-const { DirectorController } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text + '\n//# sourceURL=run-observation-tests.js').toString('base64')}`)
+const { DirectorController: Controller } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text + '\n//# sourceURL=run-observation-tests.js').toString('base64')}`)
+const DirectorController = controllerFixture(Controller)
 
 function fixture(t) {
   const calls = []

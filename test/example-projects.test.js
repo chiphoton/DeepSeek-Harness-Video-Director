@@ -8,6 +8,7 @@ import { build } from 'esbuild'
 import { ExampleProjects } from '../src/example-projects.js'
 import { testHost } from './fixtures/director-host.js'
 import { randomUUID } from 'node:crypto'
+import { sessionContext } from './fixtures/client-sessions.js'
 
 test('examples are discovered from the plugin folder and cannot read arbitrary files or symlinks', async t => {
   const root = await mkdtemp(join(tmpdir(), 'canvas-examples-'))
@@ -56,7 +57,7 @@ test('opening an example caches current edits and creates independent unsaved co
     binding: id => bindings.get(id),
     open: id => { sessions.current = id },
   } }
-  const controller = new DirectorController(ctx)
+  const controller = new DirectorController(sessionContext(ctx))
   t.after(async () => { controller.dispose(); await app.close(); await rm(root, { recursive: true, force: true }) })
   await controller.start()
   await controller.createProject('canvas-demo')

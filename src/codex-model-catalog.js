@@ -49,7 +49,7 @@ export async function fetchCodexModels({ signal, executable = codexExecutable(),
     send({ id, method, params })
   })
   try {
-    await request('initialize', { clientInfo: { name: 'dsh_video_director', title: 'Video Director', version: '0.1.2' } })
+    await request('initialize', { clientInfo: { name: 'dsh_video_director', title: 'Video Director', version: '0.2.1-rc.2' } })
     send({ method: 'initialized', params: {} })
     const models = []
     const cursors = new Set()

@@ -1,5 +1,17 @@
 import type { Edge, Node, Viewport } from '@xyflow/react'
 import type { ComponentType } from 'react'
+import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { ModelDirectory, ModelDirectoryResolver, ModelDirectoryState } from '@deepseek-ai/dsh-client-ui-model-selection/client'
+import type { UiWorkspace } from '@deepseek-ai/dsh-client-ui-workspace/client'
+import type {} from '@deepseek-ai/dsh-client-ui-session/client'
+
+export type { SessionBinding, SessionReference } from '@deepseek-ai/dsh-api-session-controller/client'
+
+declare module '@deepseek-ai/dsh-api-session-controller/client' {
+  interface SessionReferenceSourceMap {
+    videoDirector: true
+  }
+}
 
 // Source vocabulary: ComfyWorkflow* belongs to the ComfyUI execution graph;
 // DirectorNode/DirectorGraph and Vd* belong to Video Director. See docs/TERMINOLOGY.md.
@@ -600,29 +612,10 @@ export type RuntimeHook<T> = <S>(selector: (snapshot: T) => S) => S
 export interface RemoteFailure {
   code: string
   message: string
-  details: Record<string, unknown>
+  details: object
 }
 
 export type RemoteResult<T> = { ok: true; value: T } | { ok: false; error: RemoteFailure }
-
-export interface SessionBinding {
-  session: ObservableSource<Record<string, unknown>> & {
-    beginSubmission(input: {
-      mode: 'queue' | 'steer'
-      text: string
-      images: Array<{ previewUrl: string; name?: string; width?: number; height?: number }>
-      onRetire?: (retirement: { reason: 'observed'; attachments: unknown[] } | { reason: 'failed' }) => void
-    }): { requestId: string; abandon(): void }
-    prompt(content: Array<
-      | { type: 'text'; text: string }
-      | { type: 'image'; mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'; data: string; name?: string }
-    >, mode: 'queue' | 'steer', signal?: AbortSignal, requestId?: string): Promise<RemoteResult<{ accepted: true }>>
-    rename(title: string): Promise<RemoteResult<{ title: string; seq: number }>>
-  }
-  eventSource: ObservableSource<{
-    entries: Array<{ type: string; event: Record<string, unknown> }>
-  }>
-}
 
 export interface ChatModelSelection {
   provider: string
@@ -630,29 +623,8 @@ export interface ChatModelSelection {
   reasoningEffort?: string
 }
 
-export interface ChatModelDirectoryState {
-  current: ChatModelSelection | null
-  routable: boolean | null
-  groups: Array<{
-    id: string
-    name: string
-    models: Array<{
-      id: string
-      name: string
-      description?: string
-      reasoning?: { defaultEffort?: string }
-    }>
-  }>
-  failures: Array<{ id: string; name: string; message: string }>
-  status: 'idle' | 'loading' | 'ready' | 'selecting' | 'error'
-  error: string | null
-}
-
-export interface ChatModelDirectory {
-  store: ObservableSource<ChatModelDirectoryState>
-  load(): Promise<ChatModelDirectoryState>
-  select(selection: ChatModelSelection): Promise<void>
-}
+export type ChatModelDirectoryState = ModelDirectoryState
+export type ChatModelDirectory = Pick<ModelDirectory, 'store' | 'load' | 'select'>
 
 export interface ClientContext {
   effect(factory: () => void | (() => void | Promise<void>), label?: string): () => void
@@ -668,15 +640,9 @@ export interface ClientContext {
       call(channel: string, endpoint: string, payload: unknown, signal?: AbortSignal): Promise<RemoteResult<unknown>>
     }
   }
-  sessions: {
-    list: ObservableSource<{ current?: string; byId: Record<string, { id: string; title?: string }> }>
-    create(options?: Record<string, unknown>): Promise<string>
-    open(sessionId: string): void
-    binding(sessionId: string): SessionBinding | undefined
-  }
-  modelDirectories: {
-    directoryFor(sessionId: string): ChatModelDirectory
-  }
+  sessions: Pick<ISessions, 'list' | 'create' | 'retain' | 'using' | 'refresh'>
+  uiWorkspace: Pick<UiWorkspace, 'openSession'>
+  modelDirectories: Pick<ModelDirectoryResolver, 'directoryFor'>
 }
 
 export interface ChatMessage {

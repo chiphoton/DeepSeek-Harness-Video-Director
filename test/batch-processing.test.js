@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { sessionContext } from './fixtures/client-sessions.js'
 import { randomUUID } from 'node:crypto'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -61,7 +62,7 @@ async function fixture(t, nodes, edges, options = {}) {
   }
   const rpc = createDirectorRpc({ store, workflows, nodes: registry, jobs: manager, registerAsset: async () => {}, providers: { publicCatalog: () => [] } })
   const context = { sessions: { list: { getSnapshot: () => ({ current: 'session', byId: { session: {} } }), subscribe: () => () => {} }, binding: () => ({ session: { getSnapshot: () => ({}), rename: async () => ({ ok: true, value: {} }) } }), open() {} }, connection: { rpc: { call: (_channel, endpoint, payload) => rpc(endpoint, payload) } } }
-  controller = new api.DirectorController(context); await controller.start()
+  controller = new api.DirectorController(sessionContext(context)); await controller.start()
   t.after(() => controller.dispose())
   return { controller, store, project, starts, jobs, root, rpc, context }
 }
@@ -307,7 +308,7 @@ test('cancelling a restored batch closes its active child summaries', async t =>
   const runs = await store.listVdRuns(project.id)
   for (const run of runs) await store.saveVdRun(project.id, { ...run, status: 'running', completedAt: undefined })
   controller.dispose()
-  const reopened = new api.DirectorController(context)
+  const reopened = new api.DirectorController(sessionContext(context))
   t.after(() => reopened.dispose())
   await reopened.start()
   await reopened.cancelVdRun(id)

@@ -5,6 +5,7 @@ import test from 'node:test'
 import { build } from 'esbuild'
 import { JSDOM } from 'jsdom'
 import { groupJobHistory, pageJobHistory } from '../src/job-history.js'
+import { controllerFixture } from './fixtures/client-sessions.js'
 
 const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost/' })
 test.after(() => dom.window.close())
@@ -41,13 +42,14 @@ const compiled = { exports: {} }
 const require = createRequire(import.meta.url)
 new Function('require', 'module', 'exports', bundle.outputFiles[0].text)(id => id.endsWith('.css') ? {} : require(id), compiled, compiled.exports)
 const ui = compiled.exports
+const DirectorController = controllerFixture(ui.DirectorController)
 
 test('scrolling adds ten cards, retries failed pages, and reopens the drawer from controller memory', async t => {
   const runs = Array.from({ length: 24 }, (_, i) => ({ id: `r-${i}`, projectId: 'a', status: 'completed',
     startedAt: '2026-09-27T07:00:00Z', executionStartedAt: '2026-09-27T08:00:00Z', completedAt: '2026-09-27T08:01:02Z' }))
   const groups = groupJobHistory(runs, [])
   let fail = false, pageCalls = 0
-  const director = new ui.DirectorController({ connection: { rpc: { call: async (_, endpoint, payload) => {
+  const director = new DirectorController({ connection: { rpc: { call: async (_, endpoint, payload) => {
     if (endpoint === 'jobs/history') {
       pageCalls++
       if (fail && payload.before) throw new Error('Page unavailable')

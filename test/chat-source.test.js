@@ -58,6 +58,7 @@ test('project chat shares the Session model directory and sends native image pro
   const binding = {
     session: {
       ...sessionSnapshot,
+      projections: { faceOf: () => observable(undefined) },
       beginSubmission(input) {
         submissionInput = input
         retirement = input.onRetire
@@ -97,18 +98,22 @@ test('project chat shares the Session model directory and sends native image pro
     async select(selection) {
       selectedModel = selection
       models.publish({ ...models.getSnapshot(), current: selection })
+      return { ok: true, value: undefined }
     },
   }
-  const sessionsList = observable({ current: sessionId, byId: { [sessionId]: { id: sessionId } } })
+  const sessionsList = observable({ byId: { [sessionId]: { id: sessionId } } })
   const source = new ChatSource({
     sessions: {
       list: sessionsList,
-      binding: id => id === sessionId ? binding : undefined,
-      open() {},
+      retain(id) {
+        assert.equal(id, sessionId)
+        return { binding, ready: Promise.resolve(binding), release() {} }
+      },
       async create() { throw new Error('not expected') },
     },
     modelDirectories: { directoryFor: id => id === sessionId ? directory : undefined },
   }, director)
+  await Promise.resolve()
 
   assert.equal(source.getSnapshot().models.current.model, 'deepseek-v4-flash')
   await source.selectModel({ provider: 'deepseek-official', model: 'deepseek-v4-pro' })
@@ -118,9 +123,10 @@ test('project chat shares the Session model directory and sends native image pro
   const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'frame.png', { type: 'image/png' })
   await source.send('Describe this frame', [image])
 
-  assert.equal(submissionInput.images.length, 1)
-  assert.equal(submissionInput.images[0].name, 'frame.png')
-  assert.match(submissionInput.images[0].previewUrl, /^blob:/)
+  assert.equal(submissionInput.attachments.length, 1)
+  assert.equal(submissionInput.attachments[0].type, 'image')
+  assert.equal(submissionInput.attachments[0].value.name, 'frame.png')
+  assert.match(submissionInput.attachments[0].value.previewUrl, /^blob:/)
   assert.equal(promptInput.mode, 'queue')
   assert.equal(promptInput.requestId, 'request-1')
   assert.deepEqual(promptInput.content[0], {
