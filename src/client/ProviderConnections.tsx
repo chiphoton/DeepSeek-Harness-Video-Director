@@ -105,6 +105,11 @@ function ProviderCard({ provider, snapshot, director }: { provider: ProviderDesc
   const error = form.error || actionError || (check?.state === 'error' ? check.message : '') || (discovery?.state === 'error' ? discovery.message : '')
   const connected = check?.state === 'ok' || discovery?.state === 'ready'
   const status = busy ? t('Checking…') : error ? t('Connection error') : connected ? t('Connected') : provider.configured ? t('Not checked') : t('Not configured')
+  const discoverHint = codex
+    ? t('Sign in with codex login in a terminal, then select Refresh.')
+    : provider.kind === 'openai-compatible' && !provider.configured && provider.requiresApiKey
+      ? t('Enter the Base URL and API key, then select Refresh.')
+      : t('Refresh to discover models')
   const saveOnBlur = (): void => { void form.flush().catch(() => {}) }
   const runAction = async (next: 'refresh' | 'unload'): Promise<void> => {
     if (action) return
@@ -181,7 +186,7 @@ function ProviderCard({ provider, snapshot, director }: { provider: ProviderDesc
         </ul>
         {!matching.length ? <p>{t('No matching models')}</p> : null}
         {matching.length > visible ? <button type="button" onClick={() => setVisible(count => count + 30)}>{t('Show more')}</button> : null}
-      </div> : <p className="vd-provider-model-empty">{discovery?.state === 'loading' ? t('Loading models…') : connected ? t('No models available') : t('Refresh to discover models')}</p>}
+      </div> : <p className="vd-provider-model-empty">{discovery?.state === 'loading' ? t('Loading models…') : connected ? t('No models available') : discoverHint}</p>}
       </div>
     </div>
     {error ? <div className="vd-provider-feedback is-error" role="alert"><span>{error}</span>{form.error ? <button type="button" onClick={saveOnBlur}>{t('Retry')}</button> : null}</div>

@@ -1,7 +1,14 @@
 import { ChatReferences } from './chat-references.js'
-import { createCanvasAgent } from './canvas-agent.js'
+import { WorkspaceLibrary } from './workspace-library.js'
+import { ResultViews, responseBudget } from './bounded-results.js'
+import { atomicJson, readJson, fault } from './workspace-files.js'
+import { join } from 'node:path'
+import { QualityLoop } from './quality-loop.js'
+import { operations, describeOperation, operationRequest, ViewCommands } from './workspace-operations.js'
+import { createCanvasAgent, isPublicCanvasDefinition, normalizeCanvasArgs } from './canvas-agent.js'
 import { DirectorInputError, finiteNumber, jsonValue, record, string, uuid } from './validation.js'
 import { editMedia } from './media-editor.js'
+import { videoContactSheet } from './video-contact-sheet.js'
 import { WorkflowScheduler } from './workflow-scheduler.js'
 import { compareJobHistory, groupJobHistory, pageJobHistory } from './job-history.js'
 
@@ -534,7 +541,34 @@ export function createDirectorRpc(options) {
     } })
   if (jobs) jobs.workflowScheduler = scheduler
   const references = new ChatReferences(store, registerAsset)
-  const canvas = createCanvasAgent({ store, references, nodes, workflows, call: async (...args) => {
+  const library = new WorkspaceLibrary(store)
+  const quality = new QualityLoop({ store, library, call: async (...args) => {
+    const result = await rpc(...args)
+    if (!result.ok) throw Object.assign(new Error(result.error.message), result.error)
+    return result.value
+  } })
+  if (jobs) jobs.qualityLoop = quality
+  const views = new ResultViews()
+  const connectedViews = new ViewCommands()
+  const scopeFor = async input => {
+    const project = await store.getProject(uuid(input.projectId, 'projectId'))
+    if (project.sessionId !== input.sessionId) throw new DirectorInputError('Tool can only access the workflow linked to its owning chat session')
+    const access = await readJson(join(store.projectsDir, project.id, 'agent-access.json'), { allowContent: false })
+    return { project, scope: { projectId: project.id, sessionId: project.sessionId, draftRevision: project.draftRevision, allowContent: access.allowContent === true } }
+  }
+  const sensitiveCanvas = input => {
+    if (['text', 'job', 'jobs', 'image', 'transcribe', 'media', 'run'].includes(input.command)) return true
+    if (input.command === 'definition') return !isPublicCanvasDefinition(nodes, input.args ?? {})
+    if (input.command === 'edges' && input.args?.includeData) return true
+    if (input.command === 'node' || input.command === 'query') {
+      const fields = input.args?.fields ?? ['id', 'title', 'kind', 'status']
+      if (!Array.isArray(fields)) throw new DirectorInputError('fields must be an array')
+      return fields.some(field => !['id', 'title', 'kind', 'status', 'type', 'nodeType', 'position'].includes(field))
+    }
+    return false
+  }
+  const agentProviderCatalog = value => ({ ...value, providers: value.providers.map(({ baseUrl, apiKey, mcpBaseUrl, ...provider }) => provider) })
+  const canvas = createCanvasAgent({ store, references, nodes, workflows, geometry: project => connectedViews.geometry(project), call: async (...args) => {
     const result = await rpc(...args)
     if (!result.ok) throw Object.assign(new Error(result.error.message), result.error)
     return result.value
@@ -543,8 +577,83 @@ export function createDirectorRpc(options) {
     try {
       const input = payload === undefined ? {} : record(payload, 'payload')
       switch (endpoint) {
+        case 'workspace/view': {
+          const { project } = await scopeFor(input)
+          return success(connectedViews.poll(project, input))
+        }
+        case 'workspace/command': {
+          const { project, scope } = await scopeFor(input)
+          const args = record(input.args ?? {}, 'args')
+          let value
+          if (input.command === 'manifest') value = { protocol: 'vd/1', operations: Object.entries(operations).map(([name, row]) => ({ name, description: row.description })),
+            tools: ['vd_canvas', 'vd_library', 'vd_quality'], view: ['select', 'frame', 'zoom', 'inspect', 'preview'],
+            limits: { automaticContext: 2048, ordinaryResponse: 8192, maximumResponse: 16384, unit: 'utf8-bytes' } }
+          else if (input.command === 'describe') value = describeOperation(args.name)
+          else if (input.command === 'read-result') return success(views.read(args, scope))
+          else if (input.command === 'view' || input.command === 'view-status') value = connectedViews.call(project, input.command === 'view' ? args.action : 'status', args)
+          else if (input.command === 'call') {
+            const allowedMetadata = ['providers.list', 'assets.properties', 'workflow.rename', 'canvas.undo']
+            if (input.protocol === 'vd/1' && !scope.allowContent && !allowedMetadata.includes(args.name)) throw fault('content-not-shared', 'Enable workflow content sharing before this operation.')
+            const request = operationRequest(project, args.name, record(args.input ?? {}, 'input'), store)
+            const result = await rpc(request.endpoint, request.payload, signal)
+            if (!result.ok) throw Object.assign(new Error(result.error.message), result.error)
+            value = args.name === 'workflow.discard' ? { discarded: true, deleted: result.value.project === null } : result.value
+            if (input.protocol === 'vd/1' && args.name.startsWith('providers.') && Array.isArray(value.providers)) value = agentProviderCatalog(value)
+          } else throw fault('invalid-operation', 'Use manifest, describe, call, view, or view-status.')
+          // Discarding a never-saved workflow removes it. Do not report that
+          // successful operation as a failed post-operation lookup.
+          const current = await store.getProject(project.id).catch(error => {
+            if (args.name === 'workflow.discard' && error.code === 'video-director/project-not-found') return project
+            throw error
+          })
+          return success(views.pack(value, { ...scope, draftRevision: current.draftRevision, sensitive: input.command === 'call' }, responseBudget(args)))
+        }
+        case 'workspace/access': {
+          const projectId = uuid(input.projectId, 'projectId')
+          await store.getProject(projectId)
+          const path = join(store.projectsDir, projectId, 'agent-access.json')
+          if (input.allowContent !== undefined) {
+            if (typeof input.allowContent !== 'boolean') throw new DirectorInputError('allowContent must be boolean')
+            await atomicJson(path, { allowContent: input.allowContent })
+          }
+          return success(await readJson(path, { allowContent: false }))
+        }
+        case 'quality/command': {
+          const { project, scope } = await scopeFor(input)
+          const args = record(input.args ?? {}, 'args')
+          if (input.command === 'read-result') return success(views.read(args, scope))
+          if (input.protocol === 'vd/1' && !scope.allowContent) throw fault('content-not-shared', 'Enable workflow content sharing before agent quality checks or provider execution.')
+          let value = await quality.command(project, input.command, args, input.protocol === 'vd/1' ? 'agent' : 'human', signal)
+          if (input.protocol === 'vd/1' && input.command === 'step' && value.state === 'running') value = {
+            id: value.id, state: value.state, currentRunId: value.currentRunId, iterations: value.iterations,
+            reservedJobs: value.reservedJobs, maxJobs: value.maxJobs, next: 'step with waitMs up to 30000; get for full plan details',
+          }
+          const current = await store.getProject(project.id)
+          return success(input.protocol === 'vd/1' ? views.pack(value, { ...scope, draftRevision: current.draftRevision, sensitive: true }, responseBudget(args)) : value)
+        }
+        case 'library/command': {
+          const { project, scope } = await scopeFor(input)
+          const args = record(input.args ?? {}, 'args')
+          if (input.command === 'read-result') return success(views.read(args, scope))
+          const result = await library.call(project, input.command, args, input.protocol === 'vd/1' ? 'agent' : 'human')
+          return success(input.protocol === 'vd/1' ? views.pack(result, scope, ['load', 'invoke'].includes(input.command) ? 16384 : responseBudget(args)) : result)
+        }
         case 'chat/references': return success(await references.call(input))
-        case 'canvas/command': return success(await (input.command === 'edit' || input.command === 'save' ? withWorkflowReferenceLock(() => canvas(input, signal)) : canvas(input, signal)))
+        case 'canvas/command': {
+          const { project, scope } = await scopeFor(input)
+          const args = normalizeCanvasArgs(input.command, record(input.args ?? {}, 'args'))
+          const commandInput = { ...input, args }
+          if (input.command === 'read-result') return success(views.read(args, scope))
+          const sensitive = sensitiveCanvas(commandInput)
+          if (input.protocol === 'vd/1' && sensitive && !scope.allowContent) throw fault('content-not-shared', 'Workflow content sharing is disabled. Enable it in the sidebar context settings before reading text/media or running providers.')
+          let value = input.command === 'query' ? views.query(project, args)
+            : await (['edit', 'undo', 'save'].includes(input.command) || (['layout', 'recipe'].includes(input.command) && args.apply === true)
+              ? withWorkflowReferenceLock(() => canvas(commandInput, signal)) : canvas(commandInput, signal))
+          if (input.protocol === 'vd/1' && input.command === 'providers') value = agentProviderCatalog(value)
+          if (input.protocol !== 'vd/1' || input.command === 'image') return success(value)
+          const current = await store.getProject(project.id)
+          return success(views.pack(value, { ...scope, draftRevision: current.draftRevision, sensitive }, responseBudget(args)))
+        }
         case 'health':
           return success({ version: 3, providers: providers.publicCatalog().length, workflows: workflows.list().length, nodes: nodes.list().length })
         case 'projects/list':
@@ -569,6 +678,9 @@ export function createDirectorRpc(options) {
           return success(await withWorkflowReferenceLock(() => store.discardDraft(uuid(input.projectId, 'projectId'), input.expectedDraftRevision)))
         case 'vd-runs/submit':
           return success(await withWorkflowReferenceLock(async () => {
+            const activePlan = (await quality.list(input.projectId)).find(plan => !['accepted', 'stopped'].includes(plan.state))
+            if ((activePlan || input.qualityPlanId) && (!activePlan || activePlan.id !== input.qualityPlanId || activePlan.state !== 'submitting' || input.runIds?.length !== 1 || input.runIds[0] !== activePlan.currentRunId)) throw fault('plan-active', 'Use the active quality plan to schedule runs within its allowance, or stop that plan first.')
+            if (input.expectedDraftRevision !== undefined && (await store.getProject(input.projectId)).draftRevision !== input.expectedDraftRevision) throw fault('draft-conflict', 'Canvas changed before the run was submitted.')
             for (const workflowId of comfyWorkflowReferences(input.snapshot)) workflows.get(workflowId)
             for (const reference of vdNodeDefinitionReferences(input.snapshot)) nodes.get(reference.type, reference.version)
             return scheduler.submit(input)
@@ -686,6 +798,8 @@ export function createDirectorRpc(options) {
         }
         case 'media/edit':
           return success(await editMedia(store, input, signal, registerAsset))
+        case 'media/contact-sheet':
+          return success(await videoContactSheet(store, input, signal, registerAsset))
         case 'assets/properties':
           return success(await store.videoProperties(uuid(input.assetId, 'assetId'), signal))
         case 'assets/list':
@@ -798,9 +912,11 @@ export function createDirectorRpc(options) {
           const snapshotRun = input.snapshot === undefined ? undefined : runSnapshotEnvelope(input)
           if (snapshotRun !== undefined) await store.getProject(snapshotRun.projectId)
           const executionInput = snapshotRun?.request ?? input
+          const executionProjectId = snapshotRun?.projectId ?? executionInput.projectId
+          if (!hostExecution && executionProjectId && (await quality.list(executionProjectId)).some(plan => !['accepted', 'stopped'].includes(plan.state))) throw fault('plan-active', 'Run through the active quality plan or stop it before starting individual jobs.')
           if (executionInput.workflowRunId !== undefined && !hostExecution) throw new DirectorInputError('Refresh Video Director. Submit the complete workflow through vd-runs/submit.')
-          const { expectedOutputTypes: _untrustedExpectedOutputTypes, ...requestInput } = executionInput
-          let request = requestInput
+          const { expectedOutputTypes: _untrustedExpectedOutputTypes, qualityPlanId: _qualityPlanId, ...requestInput } = executionInput
+          let request = { ...requestInput, ...(hostExecution && _qualityPlanId ? { qualityPlanId: _qualityPlanId } : {}) }
           // A validated snapshot is authoritative for this one execution. The
           // saved graph remains the last explicit project save and must not
           // overwrite an unsaved node or its newer field values.
@@ -918,8 +1034,10 @@ export function createDirectorRpc(options) {
               if (binding.assetId !== undefined) return binding
               return resolveMediaBinding(binding, mediaInputs)
             })
+            const duration = request.duration ?? registeredWorkflow?.defaults?.duration
             request = {
               ...request,
+              ...(duration === undefined ? {} : { duration }),
               workflow: resolved.workflow,
               workflowId: resolved.workflowId,
               workflowName: resolved.workflowName,

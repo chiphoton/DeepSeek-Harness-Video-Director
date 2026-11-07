@@ -64,6 +64,37 @@ async function fixture(t) {
   }
 }
 
+test('open canvas polling and restart preserve quality inputs while retaining synthetic outputs in history', async t => {
+  const app = await fixture(t)
+  await app.controller.createProject('Synthetic quality canvas')
+  app.host.providers.run = async () => ({ kind: 'text', providerId: 'openai', text: 'Synthetic output only' })
+  await app.controller.workspace('canvas', 'edit', { expectedDraftRevision: 0, edits: [
+    { op: 'add', id: 'text', kind: 'load-text', data: { text: 'Initial synthetic input' } },
+    { op: 'add', id: 'run', kind: 'prompt-enhancer', data: { providerId: 'openai', prompt: 'Synthetic prompt' } },
+    { op: 'connect', source: 'text', target: 'run' },
+  ] })
+  const plan = await app.controller.workspace('quality', 'create', { brief: 'Synthetic controller iteration', criteria: [{ id: 'text', type: 'text-includes', nodeId: 'text', text: 'Accepted' }] })
+  const first = await app.controller.workspace('quality', 'step', { id: plan.id, waitMs: 3000 })
+  assert.equal(first.state, 'needs-revision')
+  await app.controller.refreshVdRuns()
+  await app.controller.flushDrafts()
+  const projectId = app.controller.getSnapshot().project.id
+  assert.equal((await app.host.store.getProject(projectId)).draftRevision, plan.draftRevision)
+  assert.equal(app.controller.getSnapshot().project.graph.nodes.length, 2)
+  assert.equal(app.controller.getSnapshot().jobs[0].qualityPlanId, plan.id)
+  assert.equal(app.controller.getSnapshot().jobs[0].result.text, 'Synthetic output only')
+  await app.controller.workspace('quality', 'revise', { id: plan.id, edits: [{ op: 'update', id: 'text', data: { text: 'Accepted synthetic input' } }] })
+  const accepted = await app.controller.workspace('quality', 'step', { id: plan.id, waitMs: 3000 })
+  assert.equal(accepted.state, 'accepted')
+  await app.controller.refreshVdRuns(); await app.controller.flushDrafts()
+  await app.restart()
+  await app.controller.flushDrafts()
+  assert.equal((await app.host.store.getProject(projectId)).draftRevision, accepted.draftRevision)
+  const graph = app.controller.getSnapshot().project.graph
+  assert.equal(graph.nodes.length, 2)
+  assert.equal(graph.nodes.find(node => node.id === 'run').data.result, undefined)
+})
+
 test('renaming the active workflow updates its linked session title', async t => {
   const app = await fixture(t)
   await app.controller.createProject('Original workflow')
@@ -241,7 +272,11 @@ test('Discard restores the latest explicit Save, preserves records, and clears u
   controller.renameProject('Temporary name')
   await controller.discardChanges()
   assert.ok(controller.getSnapshot().project.draftRevision > saved.draftRevision)
-  assert.deepEqual({ ...controller.getSnapshot().project, draftRevision: saved.draftRevision }, saved)
+  // Discard preserves the durable history pointer, even when the browser's
+  // earlier saved view predates the last coalesced draft receipt.
+  const { operationHead: _head, ...discardedState } = controller.getSnapshot().project
+  const { operationHead: _savedHead, ...savedState } = saved
+  assert.deepEqual({ ...discardedState, draftRevision: saved.draftRevision }, savedState)
   assert.equal(controller.getSnapshot().dirty, false)
   assert.equal(controller.getSnapshot().canUndo, false)
   assert.equal(controller.getSnapshot().canRedo, false)

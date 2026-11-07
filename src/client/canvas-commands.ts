@@ -1,6 +1,30 @@
 import { resolveConnectionPorts } from './ports'
 import { recomputeSinkPayloads } from './node-results'
-import type { DirectorNode, DirectorNodeData, ProjectDraft, VdNodeDefinitionDescriptor, ComfyWorkflowDescriptor } from './types'
+import type { AssetRef, DirectorNode, DirectorNodeData, ProjectDraft, VdNodeDefinitionDescriptor, ComfyWorkflowDescriptor } from './types'
+
+export const basicCanvasNodes = [
+  { kind: 'load-text', title: 'Text Input' },
+  { kind: 'load-image', title: 'Image Input' },
+  { kind: 'load-audio', title: 'Audio Input' },
+  { kind: 'load-video', title: 'Video Input' },
+  { kind: 'load-sketch', title: 'Sketch Input' },
+  { kind: 'prompt-enhancer', title: 'Prompt Enhancer' },
+  { kind: 'image-generation', title: 'Image Processing' },
+  { kind: 'video-generation', title: 'MiniMax H3 Video', workflowSelection: 'switchable' },
+] as const
+
+export function defaultVideoWorkflow(workflows: ComfyWorkflowDescriptor[]): ComfyWorkflowDescriptor | undefined {
+  return workflows.find(workflow => workflow.id === 'builtin-minimax-h3-video-turbo')
+    ?? workflows.find(workflow => workflow.kind === 'video-generation')
+}
+
+export function registeredWorkflowDefaults(workflow: ComfyWorkflowDescriptor | undefined): Partial<DirectorNodeData> {
+  return workflow === undefined ? {} : {
+    workflowId: workflow.id, modelFamily: workflow.modelFamily,
+    workflowValues: Object.fromEntries(workflow.parameters.map(field => [field.id, field.default])),
+    ...workflow.defaults,
+  }
+}
 
 /** Shared node construction for the editor and Host canvas tools. */
 export function createDefinedVdNode(definition: VdNodeDefinitionDescriptor, workflows: ComfyWorkflowDescriptor[], position = { x: 0, y: 0 }): DirectorNode {
@@ -9,8 +33,7 @@ export function createDefinedVdNode(definition: VdNodeDefinitionDescriptor, work
   if (definition.behavior === 'workflow') {
     const workflow = workflows.find(item => item.id === definition.workflowId)
     if (!workflow || !definition.operation) throw new Error('Node definition is missing its workflow implementation')
-    Object.assign(data, { kind: definition.operation, prompt: '', providerId: 'comfyui', workflowId: workflow.id,
-      workflowValues: Object.fromEntries(workflow.parameters.map(field => [field.id, field.default])), modelFamily: workflow.modelFamily, ...workflow.defaults })
+    Object.assign(data, { kind: definition.operation, prompt: '', providerId: 'comfyui', ...registeredWorkflowDefaults(workflow) })
   } else if (definition.behavior === 'media') {
     Object.assign(data, { providerId: 'ffmpeg', mediaOptions: Object.fromEntries(definition.fields.filter(field => typeof field.default === 'number').map(field => [field.id, field.default])) })
   } else if (definition.behavior === 'trigger') {
@@ -20,6 +43,16 @@ export function createDefinedVdNode(definition: VdNodeDefinitionDescriptor, work
   } else if (definition.behavior === 'save') data.outputName = ''
   else if (definition.behavior === 'batch-input') data.batch = { source: 'text', text: '', startIndex: 1, sort: 'input', recursive: true, errorPolicy: 'stop' }
   return { id: crypto.randomUUID(), type: 'director', position, data }
+}
+
+export function inputAssetPatch(asset: AssetRef): Partial<DirectorNodeData> {
+  return {
+    asset, mediaKind: asset.kind, assets: undefined, maskAsset: undefined, sketchDocument: undefined,
+    trim: asset.kind === 'audio' || asset.kind === 'video' ? { start: 0 } : undefined,
+    mediaEditId: undefined, mediaEditedFromJobId: undefined,
+    result: undefined, status: 'idle', phase: undefined, progress: undefined,
+    jobId: undefined, error: undefined, runStartedAt: undefined, runCompletedAt: undefined,
+  }
 }
 
 export type VdCanvasEdit = { op: string; [key: string]: any }
@@ -61,14 +94,26 @@ export function editVdCanvas(draft: ProjectDraft, edits: VdCanvasEdit[], definit
       case 'add': {
         let node: DirectorNode
         const point = position(edit.position ?? { x: graph.nodes.length * 40, y: graph.nodes.length * 40 })
+        if (edit.workflowId !== undefined && (edit.type !== undefined || edit.kind !== 'video-generation')) {
+          throw new Error('Use workflowId with kind "video-generation" to add a switchable workflow node')
+        }
         const definition = definitions.find(item => item.type === edit.type && (!edit.version || edit.version === item.version))
         if (edit.type && !definition) throw new Error(`Unknown node definition: ${edit.type}`)
         if (definition) node = createDefinedVdNode(definition, workflows, point)
         else {
-          if (!['load-text', 'load-image', 'load-audio', 'load-video', 'load-sketch', 'prompt-enhancer', 'image-generation'].includes(edit.kind)) throw new Error('Choose a node type from catalog or a supported built-in kind')
-          const mediaKind = edit.kind.startsWith('load-') ? edit.kind.slice(5) : undefined
-          node = { id: crypto.randomUUID(), type: 'director', position: point, data: { kind: edit.kind, title: mediaKind ?? edit.kind, status: 'idle',
-            ...(mediaKind ? { mediaKind, ...(mediaKind === 'text' ? { text: '' } : {}) } : { prompt: '', providerId: edit.kind === 'prompt-enhancer' ? String(draft.settings.defaultTextProvider ?? 'ollama') : String(draft.settings.defaultImageProvider ?? 'openai') }) } }
+          const basic = basicCanvasNodes.find(node => node.kind === edit.kind)
+          if (!basic) throw new Error('Choose a node type or kind from the catalog')
+          if (basic.kind === 'video-generation') {
+            const workflow = edit.workflowId === undefined ? defaultVideoWorkflow(workflows)
+              : workflows.find(item => item.id === edit.workflowId && item.kind === basic.kind)
+            if (edit.workflowId !== undefined && !workflow) throw new Error('Unknown video workflow ID; use a video preset from the workflow registry')
+            node = { id: crypto.randomUUID(), type: 'director', position: point, data: { kind: basic.kind, title: basic.title,
+              status: 'idle', prompt: '', providerId: String(draft.settings.defaultVideoProvider ?? 'comfyui'), ...registeredWorkflowDefaults(workflow) } }
+          } else {
+            const mediaKind = edit.kind.startsWith('load-') ? edit.kind.slice(5) : undefined
+            node = { id: crypto.randomUUID(), type: 'director', position: point, data: { kind: edit.kind, title: mediaKind ?? edit.kind, status: 'idle',
+              ...(mediaKind ? { mediaKind, ...(mediaKind === 'text' ? { text: '' } : {}) } : { prompt: '', providerId: edit.kind === 'prompt-enhancer' ? String(draft.settings.defaultTextProvider ?? 'ollama') : String(draft.settings.defaultImageProvider ?? 'openai') }) } }
+          }
         }
         if (edit.id !== undefined) {
           if (typeof edit.id !== 'string' || !/^[\w-]{1,128}$/.test(edit.id)) throw new Error('Invalid node id')
@@ -83,6 +128,14 @@ export function editVdCanvas(draft: ProjectDraft, edits: VdCanvasEdit[], definit
         const node = requireNode(edit.id)
         const patch = dataPatch(edit.data)
         node.data = { ...node.data, ...patch }
+        break
+      }
+      case 'attach': {
+        const node = requireNode(edit.id)
+        if (node.data.kind !== edit.inputKind) throw new Error(`Attach this reference to a ${edit.inputKind} node.`)
+        const patch = dataPatch(edit.data)
+        const replacement = patch.asset && patch.asset.id !== node.data.asset?.id ? inputAssetPatch(patch.asset) : {}
+        node.data = { ...node.data, ...replacement, ...patch }
         break
       }
       case 'move': requireNode(edit.id).position = position(edit.position); break

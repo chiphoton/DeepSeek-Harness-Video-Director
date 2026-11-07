@@ -92,6 +92,7 @@ export function ArtifactPreviewDialog(props: {
   artifact: PreviewArtifact
   initialPropertiesOpen?: boolean
   initialEdit?: boolean
+  onAddToChat?(asset: AssetRef): Promise<void>
   onAssetEdited?(asset: AssetRef): void
   onClose(): void
 }): ReactNode {
@@ -107,6 +108,8 @@ export function ArtifactPreviewDialog(props: {
   const [copied, setCopied] = useState(false)
   const [properties, setProperties] = useState<ImageProperties | null>(null)
   const [propertyError, setPropertyError] = useState<string | null>(null)
+  const [addingToChat, setAddingToChat] = useState(false)
+  const [chatError, setChatError] = useState<string | null>(null)
   const [naturalSize, setNaturalSize] = useState<{ width: number; height: number } | null>(null)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const [propertiesOpen, setPropertiesOpen] = useState(false)
@@ -285,6 +288,10 @@ export function ArtifactPreviewDialog(props: {
             <span>{artifact.kind}</span>
           </div>
           <div className="vd-artifact-dialog-actions">
+            {asset && props.onAddToChat && (artifact.kind === 'image' || artifact.kind === 'video') ? <button type="button" disabled={addingToChat} onClick={() => {
+              setAddingToChat(true); setChatError(null)
+              void props.onAddToChat!(asset).catch(error => setChatError(String(error instanceof Error ? error.message : error))).finally(() => setAddingToChat(false))
+            }}>{t(addingToChat ? 'Preparing…' : artifact.kind === 'video' ? 'Add frames to chat' : 'Add to chat')}</button> : null}
             {asset && !asset.url.startsWith('blob:') && (artifact.kind === 'audio' || artifact.kind === 'video') ? <button type="button" onClick={openEditor}>{t('Edit')}</button> : null}
             {asset !== undefined && (artifact.kind === 'image' || artifact.kind === 'video' || artifact.kind === 'audio') ? (
               <button type="button" onClick={() => setPropertiesOpen(true)}>{t('Metadata')}</button>
@@ -297,6 +304,7 @@ export function ArtifactPreviewDialog(props: {
             </button>
           </div>
         </header>
+        {chatError && <p className="vd-chat-attachment-error" role="alert">{chatError}</p>}
         {artifact.kind === 'image' && artifact.asset !== undefined ? (
           <>
             <div className="vd-artifact-image-info" aria-label={t("Image properties")}>

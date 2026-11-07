@@ -19,6 +19,7 @@ if (settingsFixture) {
   host.providers.codexPlan.check = () => {}
 }
 const project = await host.store.createProject({ name: 'Synthetic sidebar studio', sessionId: 'synthetic-chat' })
+await host.rpc('library/command', { projectId: project.id, sessionId: project.sessionId, command: 'create', args: { name: 'storyboard-review', description: 'Check shot order and visual continuity.', content: 'Inspect only requested nodes. Suggest small revisions and inspect each change.' } })
 await host.store.cacheDraft(project.id, { name: project.name, settings: project.settings, graph: { nodes: [
   { id: 'script', type: 'director', position: { x: 60, y: 70 }, data: { kind: 'load-text', title: 'Opening scene', text: 'A paper boat crosses a blue pond.', status: 'idle' } },
   { id: 'image', type: 'director', position: { x: 440, y: 70 }, data: { kind: 'load-image', title: 'Storyboard frame', mediaKind: 'image', status: 'idle' } },
@@ -49,13 +50,22 @@ const bundle = await build({ stdin: { resolveDir: resolve('src/client'), loader:
   const binding = { eventSource:events, session:{...observable({running:false}),projections:{faceOf:()=>inbox},rename:async()=>({ok:true,value:{}}),beginSubmission:input=>{retire=input.onRetire;return{requestId:crypto.randomUUID(),abandon:()=>retire?.({reason:'failed'})}},prompt:async(content, mode,signal,requestId)=>{window.lastSubmission={content,mode,requestId};retire?.({reason:'observed'});return{ok:true,value:{accepted:true}}} } };
   const retain = () => ({binding,ready:Promise.resolve(binding),release:()=>{}});
   const modelState = observable({current:{provider:'fixture',model:'synthetic'},routable:true,groups:[{id:'fixture',name:'Local QA',models:[{id:'synthetic',name:'Simulated transport'}]}],failures:[],status:'ready',error:null,pending:null});
+  const settingsState = observable({open:false,activeId:undefined});
+  const settingsStore = {...settingsState, actions:{openSection:section=>settingsState.publish({open:true,activeId:section}),close:()=>settingsState.publish({open:false})}};
   const ctx = { connection:{rpc:{call:async(_,method,{endpoint,payload:input})=> (await fetch('/rpc',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({endpoint,input})})).json()}},
+    slots:{entries:name=>name==='sidebar.settings'?[{store:{create:()=>settingsStore}}]:[]},
     sessions:{list:observable({byId:{[sessionId]:{id:sessionId,retainedBy:{}}}}),retain,using:async(id,options,callback)=>{const reference=retain();try{return await callback(reference)}finally{reference.release()}},refresh:async()=>{},create:async()=>sessionId},
     uiWorkspace:{openSession:()=>{}},
     modelDirectories:{directoryFor:()=>({store:modelState,load:async()=>modelState.getSnapshot(),select:async()=>({ok:true,value:{}})})} };
   const director = new DirectorController(ctx); await director.start(); director.open();
   const chat = new ProjectChatSource(ctx,director); setLanguage('en');
-  createRoot(document.getElementById('root')).render(<DirectorOverlay director={director} chat={chat}/>);
+  function Fixture() {
+    const settings=React.useSyncExternalStore(settingsState.subscribe,settingsState.getSnapshot);
+    return <><DirectorOverlay director={director} chat={chat}/>{settings.open && <div role="dialog" aria-label="Synthetic dsh model settings" style={{position:'fixed',inset:100,background:'white',padding:30}}>
+      <h2>Synthetic dsh model settings</h2><button onClick={()=>{modelState.publish({...modelState.getSnapshot(),groups:[{id:'fixture',name:'Local QA',models:[{id:'synthetic',name:'Simulated transport'},{id:'new-model',name:'New synthetic model'}]}]});settingsStore.actions.close()}}>Save synthetic model and return</button>
+    </div>}</>;
+  }
+  createRoot(document.getElementById('root')).render(<Fixture/>);
   window.director=director;window.chat=chat;
 ` }, bundle: true, platform: 'browser', format: 'esm', write: false, jsx: 'automatic', loader: { '.css': 'text' }, define: { 'process.env.NODE_ENV': '"development"' } })
 const server = createServer(async (req, res) => {

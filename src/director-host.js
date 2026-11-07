@@ -13,6 +13,7 @@ import { DirectorInputError, record } from './validation.js'
 import { chooseDataFolder, copyCanvasData, folderOpenLabel, loadStorageLocation, openDataFolder, saveStorageLocation, storageError } from './storage.js'
 
 async function activeWorkReason(runtime) {
+  if (runtime.quality?.watched.size) return 'Finish or stop quality plans before changing storage.'
   if (runtime.jobs.running > 0 || runtime.jobs.queue.length > 0) return 'Wait for generation jobs to finish or cancel them before changing storage.'
   for (const project of await runtime.store.listProjects()) {
     if ((await runtime.store.listVdRuns(project.id)).some(run => run.status === 'queued' || run.status === 'running')) {
@@ -43,20 +44,24 @@ export async function createDirectorHost(config, options = {}) {
     const store = new ProjectStore(dataDir, config.maxAssetBytes)
     await store.init()
     const codexModels = new CodexModelCatalog({ cachePath: join(store.root, 'codex-models.json'), fetchModels: options.fetchCodexModels })
+    let jobs
     try {
       await codexModels.init()
       const workflows = new ComfyWorkflowStore(store.root)
       await workflows.init()
       const nodes = new VdNodeRegistry(workflows)
       const providers = new ProviderRuntime({ ...options.providerOptions, store, registerAsset, tools: options.tools, ...providerSettings.resolved(), codexModels })
-      const jobs = new JobManager(store, providers, { concurrency: config.jobConcurrency })
+      jobs = new JobManager(store, providers, { concurrency: config.jobConcurrency })
       await jobs.recover()
       const rpc = createDirectorRpc({ store, providers, jobs, registerAsset, workflows, nodes, providerSettings })
       await jobs.workflowScheduler.recover()
+      await jobs.qualityLoop.recover()
       for (const asset of store.listAssets()) await registerAsset(asset)
-      return { store, providers, jobs, workflows, nodes, codexModels, rpc }
+      return { store, providers, jobs, workflows, nodes, codexModels, rpc, quality: jobs.qualityLoop }
     } catch (error) {
       await codexModels.close()
+      await jobs?.qualityLoop?.close()
+      await jobs?.workflowScheduler?.close()
       throw error
     }
   }
@@ -85,9 +90,12 @@ export async function createDirectorHost(config, options = {}) {
         await saveStorageLocation(location.settingsPath, dataDir)
       } catch (error) {
         await next?.codexModels.close()
+        await next?.quality.close()
+        await next?.jobs.workflowScheduler.close()
         throw storageError(`Data was copied to ${dataDir}, but Video Director could not activate it. The original folder is still in use. ${error.message}`)
       }
       await runtime.codexModels.close()
+      await runtime.quality.close()
       await runtime.jobs.workflowScheduler.close()
       runtime = next
       // Settings may have changed through Harness while the copy was in progress.
@@ -148,6 +156,7 @@ export async function createDirectorHost(config, options = {}) {
       closing = true
       await movePromise?.catch(() => {})
       await runtime.codexModels.close()
+      await runtime.quality.close()
       await Promise.allSettled([...inFlight])
       await runtime.jobs.workflowScheduler.close()
     },

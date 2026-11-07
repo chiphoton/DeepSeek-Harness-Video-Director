@@ -5,12 +5,13 @@ import { allProjectGalleries, filterGallery } from './gallery-artifacts'
 import { CloseIcon } from './icons'
 import { t, useLanguage } from './i18n'
 import { useModalScrollLock } from './modal-scroll-lock'
-import type { GalleryProject, VideoProject } from './types'
+import type { AssetRef, GalleryProject, VideoProject } from './types'
 
-export function ArtifactGallery({ project, loadProjects, onClose }: {
+export function ArtifactGallery({ project, loadProjects, onClose, onAddToChat }: {
   project: VideoProject | null
   loadProjects(signal: AbortSignal): Promise<GalleryProject[]>
   onClose(): void
+  onAddToChat?(asset: AssetRef): Promise<void>
 }) {
   useLanguage()
   useModalScrollLock()
@@ -153,7 +154,8 @@ export function ArtifactGallery({ project, loadProjects, onClose }: {
           </div>
         </section>
       </div>
-      {openArtifact === null ? null : <ArtifactPreviewDialog artifact={openArtifact} onAssetEdited={() => setRefresh(value => value + 1)} onClose={() => {
+      {openArtifact === null ? null : <ArtifactPreviewDialog artifact={openArtifact} onAssetEdited={() => setRefresh(value => value + 1)}
+        onAddToChat={openArtifact.asset?.projectId === project?.id ? onAddToChat : undefined} onClose={() => {
         setOpenArtifact(null)
         artifactTrigger.current?.focus()
       }} />}

@@ -1,7 +1,10 @@
 import { downloadBlob } from './job-artifacts'
-import { ChatPromptEditor, type ChatPromptEditorHandle } from './ChatPromptEditor'
+import type { ChatPromptEditorHandle } from './ChatPromptEditor'
+import { ChatSkillComposer } from './ChatSkillComposer'
+import { SkillsDialog, WorkspaceHistory, ContextInspector } from './WorkspacePanel'
 import { ChatAttachmentPreview } from './ChatAttachmentPreview'
-import { CHAT_NODE_MIME, chatDroppedFiles, updateChatAliases, type ChatAttachment } from './chat-attachments'
+import { ChatTranscript } from './ChatTranscript'
+import { CHAT_NODE_MIME, chatDroppedFiles, draftChatReferences, updateChatAliases, type ChatAttachment } from './chat-attachments'
 import { JobDrawer } from './JobDrawer'
 export { JobDrawer } from './JobDrawer'
 import { batchFrozenWarnings } from './batch'
@@ -88,6 +91,7 @@ import type {
   DirectorNodeData,
   DirectorSnapshot,
   VdRun,
+  VdNodeResult,
   MediaKind,
   VdNodeDefinitionDescriptor,
   VdPortDescriptor,
@@ -502,17 +506,19 @@ const AUDIO_EXTENSIONS = new Set(['flac', 'mp3', 'mp4', 'mpeg', 'mpga', 'm4a', '
 
 interface ChatInputPreferences {
   enterInsertsNewline: boolean
+  automaticSkills: boolean
   speechProviderId: string
   speechModel: string
 }
 
 function loadChatInputPreferences(): ChatInputPreferences {
-  const fallback = { enterInsertsNewline: false, speechProviderId: '', speechModel: DEFAULT_SPEECH_MODEL }
+  const fallback = { enterInsertsNewline: false, automaticSkills: true, speechProviderId: '', speechModel: DEFAULT_SPEECH_MODEL }
   try {
     const parsed = JSON.parse(window.localStorage.getItem(CHAT_INPUT_PREFERENCES_KEY) ?? 'null') as Partial<ChatInputPreferences> | null
     if (parsed === null || typeof parsed !== 'object') return fallback
     return {
       enterInsertsNewline: parsed.enterInsertsNewline === true,
+      automaticSkills: parsed.automaticSkills !== false,
       speechProviderId: typeof parsed.speechProviderId === 'string' ? parsed.speechProviderId : '',
       speechModel: typeof parsed.speechModel === 'string' && parsed.speechModel.trim() !== '' ? parsed.speechModel : DEFAULT_SPEECH_MODEL,
     }
@@ -539,6 +545,7 @@ function ChatPanel({
   collapsed,
   referenceRequest,
   onHighlightNode,
+  onModelSettings,
 }: {
   chat: ProjectChatSource
   director: DirectorController
@@ -547,18 +554,24 @@ function ChatPanel({
   collapsed: boolean
   referenceRequest: { nodeId: string; nonce: number } | null
   onHighlightNode(id: string | null): void
+  onModelSettings(): Promise<void>
 }) {
   useLanguage()
   const snapshot = useSource(chat)
+  const [skillsOpen, setSkillsOpen] = useState(false)
+  const [skillsRevision, setSkillsRevision] = useState(0)
   const [text, setText] = useState('')
   const registry = chat.attachments()
   const attachments = useSource(registry)
-  const previousAttachments = useRef(attachments)
+  const composerReferences = useMemo(() => draftChatReferences(attachments), [attachments])
+  const previousAttachments = useRef(composerReferences)
   useEffect(() => {
     const previous = previousAttachments.current
-    previousAttachments.current = attachments
-    setText(value => updateChatAliases(value, previous, attachments))
-  }, [attachments])
+    previousAttachments.current = composerReferences
+    // Delivery clears the draft separately. Only edits to the draft should rewrite its tokens.
+    const sentImages = new Set(attachments.filter(item => item.kind === 'image' && item.sent).map(item => item.id))
+    setText(value => updateChatAliases(value, previous.filter(item => !sentImages.has(item.id)), composerReferences))
+  }, [attachments, composerReferences])
   const canvas = useSource(director)
   const nodes = canvas.project?.graph.nodes ?? []
   const [preview, setPreview] = useState<ChatAttachment | null>(null)
@@ -571,7 +584,9 @@ function ChatPanel({
   const [draggingReferences, setDraggingReferences] = useState(false)
   const [inputMenuOpen, setInputMenuOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [speechSettingsOpen, setSpeechSettingsOpen] = useState(false)
   const [preferences, setPreferences] = useState(loadChatInputPreferences)
+  const composerFooter = useRef<HTMLDivElement>(null)
   const [speechBaseUrl, setSpeechBaseUrl] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [apiKeyVisible, setApiKeyVisible] = useState(false)
@@ -622,6 +637,8 @@ function ChatPanel({
     setPreview(null)
     setInputMenuOpen(false)
     setNodeMenuOpen(false)
+    setSkillsOpen(false)
+    setSettingsOpen(false)
   }, [snapshot.sessionId])
 
   const modelChoices = snapshot.models.groups.flatMap(group => group.models.map(model => ({
@@ -634,6 +651,7 @@ function ChatPanel({
     ? ''
     : `${snapshot.models.current.provider}\u0000${snapshot.models.current.model}`
   const currentModelKnown = modelChoices.some(choice => choice.key === currentModelValue)
+  const modelLoadError = snapshot.models.error ?? snapshot.models.failures?.[0]?.message
   const speechProviders = providers.filter(provider => provider.kind === 'openai-compatible')
   const effectiveSpeechProviderId = speechProviders.some(provider => provider.id === preferences.speechProviderId)
     ? preferences.speechProviderId
@@ -657,11 +675,28 @@ function ChatPanel({
   useEffect(() => director.watchVdRuns(), [director])
   useEffect(() => { if (!inputMenuOpen) { setNodeMenuOpen(false); onHighlightNode(null) } }, [inputMenuOpen, onHighlightNode])
   useEffect(() => () => onHighlightNode(null), [onHighlightNode])
+  useEffect(() => {
+    if (!inputMenuOpen && !settingsOpen) return
+    const dismissOutside = (event: PointerEvent): void => {
+      if (event.target instanceof Node && composerFooter.current?.contains(event.target)) return
+      setInputMenuOpen(false)
+      setSettingsOpen(false)
+    }
+    document.addEventListener('pointerdown', dismissOutside)
+    return () => document.removeEventListener('pointerdown', dismissOutside)
+  }, [inputMenuOpen, settingsOpen])
+  const openSkills = (): void => {
+    setInputMenuOpen(false)
+    setSettingsOpen(false)
+    setSkillsOpen(true)
+  }
   const addFiles = async (files: Iterable<File>, directory = false): Promise<void> => {
+    // The file input is reset as soon as this handler returns to the caller.
+    const selected = Array.from(files)
     setAttachmentError(null)
     try {
-      if (directory) await registry.addFolder([...files])
-      else for (const file of files) await registry.addFile(file)
+      if (directory) await registry.addFolder(selected)
+      else for (const file of selected) await registry.addFile(file)
     } catch (error) { showAttachmentError(error) }
   }
   const addNode = async (nodeId: string): Promise<void> => {
@@ -685,9 +720,9 @@ function ChatPanel({
     const value = text.trim()
     if ((value === '' && !attachments.some(item => !item.sent)) || snapshot.sending || transcribing || uploadingAttachments) return
     setUploadingAttachments(true); setAttachmentError(null)
-    try { await chat.sendAttachments(value); setText(current => current === text ? '' : current) }
+    try { await chat.sendAttachments(value, preferences.automaticSkills); setText(current => current === text ? '' : current) }
     catch (error) { showAttachmentError(error) }
-    finally { setUploadingAttachments(false) }
+    finally { setUploadingAttachments(false); setSkillsRevision(value => value + 1) }
   }
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.nativeEvent.isComposing || event.key !== 'Enter') return
@@ -703,6 +738,7 @@ function ChatPanel({
     if (selectedSpeechProvider === undefined || model === '' || (selectedSpeechProvider.requiresApiKey && !selectedSpeechProvider.apiKeySet)) {
       setInputMenuOpen(false)
       setSettingsOpen(true)
+      setSpeechSettingsOpen(true)
       setSettingsMessage(selectedSpeechProvider === undefined
         ? t("请先配置一个 OpenAI-compatible Provider。")
         : model === ''
@@ -875,28 +911,29 @@ function ChatPanel({
         <strong>{projectName}</strong>
       </div>
       <div className="vd-messages" aria-live="polite">
+        {canvas.project && <WorkspaceHistory key={canvas.project.id} director={director} projectId={canvas.project.id} onHighlightNode={onHighlightNode} />}
         {snapshot.messages.length === 0 ? (
           <div className="vd-chat-placeholder">
             <span aria-hidden>⌁</span>
             <p>{t("Plan, build and refine this workflow. The agent queries canvas details as needed.")}</p>
           </div>
-        ) : snapshot.messages.map(message => (
-          <article key={message.id} className={`vd-message vd-message-${message.role}`}>
-            <header>{message.role === 'user' ? t("你") : 'DeepSeek'}</header>
-            <div>{message.text}</div>
-          </article>
-        ))}
+        ) : <ChatTranscript messages={snapshot.messages} sessionId={snapshot.sessionId} readImage={chat.readImage} models={snapshot.models} />}
         {snapshot.running ? <div className="vd-thinking"><span /><span /><span /></div> : null}
         <div ref={bottomRef} />
       </div>
       {snapshot.error !== null ? (
         <button type="button" className="vd-chat-error" onClick={chat.clearError}>{snapshot.error}</button>
       ) : null}
-      <div className="vd-chat-composer">
-        {attachments.length > 0 ? <section className="vd-chat-references" aria-label={t('Chat attachments')}>
-          <header><strong>{t('References')}</strong><span>{attachments.length}</span></header>
+      <div className="vd-chat-composer" onFocus={event => {
+        if (!composerFooter.current?.contains(event.target)) {
+          setInputMenuOpen(false)
+          setSettingsOpen(false)
+        }
+      }}>
+        {composerReferences.length > 0 ? <section className="vd-chat-references" aria-label={t('Chat attachments')}>
+          <header><strong>{t('References')}</strong><span>{composerReferences.length}</span></header>
           <div className="vd-chat-attachments">
-          {attachments.map(item => <div key={item.id} className="vd-chat-attachment">
+          {composerReferences.map(item => <div key={item.id} className="vd-chat-attachment">
             <button className="vd-chat-attachment-insert" title={`${item.name} · ${t('Insert {0}', item.alias)}`} aria-label={t('Insert {0}', item.alias)} onMouseDown={event => event.preventDefault()} onClick={() => promptRef.current?.insert(item.alias)}>
               <span className="vd-chat-attachment-thumbnail">{item.kind === 'image' && item.previewUrl ? <img src={item.previewUrl} alt="" loading="lazy" /> : <span className="vd-chat-attachment-symbol" aria-hidden>{item.kind === 'audio' ? '♫' : item.kind === 'video' ? '▶' : item.kind === 'folder' ? '▤' : '◇'}</span>}</span>
               <strong>{item.alias.slice(1, -1)}</strong>
@@ -906,13 +943,22 @@ function ChatPanel({
           </div>)}
           </div>
         </section> : null}
-        <ChatPromptEditor ref={promptRef} value={text} attachments={attachments} onChange={setText} onPreview={setPreview}
-          placeholder={t('Ask about this workflow. Add media, folders or nodes…')} onKeyDown={keyDown} onFiles={files => void addFiles(files)} />
-        <span className="vd-chat-context-note">{t('Canvas summary linked · details on demand')}</span>
+        {canvas.project && <ChatSkillComposer key={`${canvas.project.id}:${snapshot.sessionId}`} ref={promptRef} director={director} projectId={canvas.project.id} sessionId={snapshot.sessionId}
+          refreshKey={`${skillsRevision}:${snapshot.messages.length}:${snapshot.running}`} disabled={snapshot.sending || uploadingAttachments}
+          automaticSkills={preferences.automaticSkills} onManage={openSkills}
+          value={text} attachments={composerReferences} onChange={setText} onPreview={setPreview}
+          placeholder={t('Ask about this workflow. Type $ to use a skill…')} onKeyDown={keyDown} onFiles={files => void addFiles(files)} />}
         {uploadingAttachments ? <span className="vd-chat-transcribing">{t('Preparing attachments…')}</span> : null}
         {transcribing ? <span className="vd-chat-transcribing"><i /> {t("正在转写音频…")}</span> : null}
         {attachmentError === null ? null : <span className="vd-chat-attachment-error">{attachmentError}</span>}
-        <div className="vd-chat-composer-footer">
+        {modelChoices.length === 0 && snapshot.models.status !== 'loading' && (
+          <span className="vd-chat-model-status" role="status">{modelLoadError ?? t('没有可用模型')}</span>
+        )}
+        <div ref={composerFooter} className="vd-chat-composer-footer" onKeyDown={event => {
+          if (event.key === 'Escape' && (inputMenuOpen || settingsOpen)) {
+            event.preventDefault(); event.stopPropagation(); setInputMenuOpen(false); setSettingsOpen(false); promptRef.current?.focus()
+          }
+        }}>
           <div className="vd-chat-composer-tools">
             <div className="vd-chat-tool-anchor">
               <button
@@ -927,7 +973,8 @@ function ChatPanel({
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
               </button>
               {inputMenuOpen ? (
-                <div className="vd-chat-add-menu" role="menu">
+                <div className="vd-chat-add-menu" role="menu" aria-label={t('Add to chat')}>
+                  <div className="vd-chat-menu-label" aria-hidden>{t('Add to chat')}</div>
                   <button type="button" role="menuitem" onClick={() => { setInputMenuOpen(false); imageInputRef.current?.click() }}>
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM4 16l4-4 3 3 2-2 7 6M15.5 9.5h.01" /></svg>
                     <span><strong>{t("图片")}</strong><small>{t("选择 PNG、JPEG、WebP 或 GIF")}</small></span>
@@ -952,8 +999,8 @@ function ChatPanel({
               <button
                 type="button"
                 className="vd-chat-icon-button"
-                aria-label={t("聊天输入设置")}
-                title={t("聊天输入设置")}
+                aria-label={t('Chat settings')}
+                title={t('Chat settings')}
                 aria-expanded={settingsOpen}
                 onClick={() => {
                   setSettingsOpen(open => {
@@ -973,27 +1020,38 @@ function ChatPanel({
                 </svg>
               </button>
               {settingsOpen ? (
-                <div className="vd-chat-settings-popover" role="dialog" aria-label={t("聊天输入设置")}>
-                  <header><strong>{t("聊天输入设置")}</strong><button type="button" className="vd-close-icon-button" aria-label={t("关闭设置")} onClick={() => setSettingsOpen(false)}><CloseIcon /></button></header>
-                  <button
-                    type="button"
-                    className="vd-chat-new-session"
-                    disabled={newSessionBusy}
-                    onClick={() => { void startNewSession() }}
-                  >
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14M4 4h16v16H4z" /></svg>
-                    <span><strong>{newSessionBusy ? t("正在创建新会话…") : t("新会话")}</strong><small>{t("保留当前画布，清空聊天上下文")}</small></span>
-                  </button>
+                <div className="vd-chat-settings-popover" role="dialog" aria-label={t('Chat settings')}>
+                  <header><strong>{t('Chat settings')}</strong><button type="button" className="vd-close-icon-button" aria-label={t("关闭设置")} onClick={() => setSettingsOpen(false)}><CloseIcon /></button></header>
+                  <div className="vd-chat-settings-actions">
+                    <button type="button" className="vd-chat-settings-action" onClick={openSkills}>
+                      <span aria-hidden>$</span><span><strong>{t('Manage skills')}</strong><small>{t('Create, edit and select chat skills')}</small></span>
+                    </button>
+                    <button type="button" className="vd-chat-settings-action" onClick={() => {
+                      setSettingsOpen(false)
+                      void onModelSettings().then(() => requestAnimationFrame(() => promptRef.current?.focus())).catch(showAttachmentError)
+                    }}>
+                      <SettingsIcon /><span><strong>{t('Model settings')}</strong><small>{t('Configure models in dsh')}</small></span>
+                    </button>
+                    <button type="button" className="vd-chat-settings-action" disabled={newSessionBusy} onClick={() => { void startNewSession() }}>
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14M4 4h16v16H4z" /></svg>
+                      <span><strong>{newSessionBusy ? t("正在创建新会话…") : t("新会话")}</strong><small>{t("保留当前画布，清空聊天上下文")}</small></span>
+                    </button>
+                  </div>
                   <label className="vd-chat-setting-toggle">
+                    <span><strong>{t('Auto skills')}</strong><small>{t('Choose built-in skills from your request')}</small></span>
+                    <input type="checkbox" aria-label={t('Auto skills')} checked={preferences.automaticSkills}
+                      onChange={event => updatePreferences({ automaticSkills: event.target.checked })} />
+                  </label>
+                  <label className="vd-chat-setting-toggle">
+                    <span><strong>{t("Enter 换行")}</strong><small>{t("开启后使用 Alt + Enter 发送")}</small></span>
                     <input
                       type="checkbox"
                       checked={preferences.enterInsertsNewline}
                       onChange={event => updatePreferences({ enterInsertsNewline: event.target.checked })}
                     />
-                    <span><strong>{t("Enter 换行")}</strong><small>{t("开启后使用 Alt + Enter 发送")}</small></span>
                   </label>
-                  <div className="vd-chat-settings-section">
-                    <strong>{t("语音转写")}</strong>
+                  <details className="vd-chat-settings-section" open={speechSettingsOpen} onToggle={event => setSpeechSettingsOpen(event.currentTarget.open)}>
+                    <summary>{t("语音转写")}</summary>
                     <label><span>{t("Provider")}</span>
                       <select
                         value={effectiveSpeechProviderId}
@@ -1053,15 +1111,23 @@ function ChatPanel({
                       {settingsBusy ? t("保存中…") : t("保存语音设置")}
                     </button>
                     {settingsMessage !== null ? <span className="vd-chat-settings-message">{settingsMessage}</span> : null}
-                  </div>
+                  </details>
+                  {canvas.project && <div className="vd-chat-access-settings"><ContextInspector director={director} projectId={canvas.project.id} /></div>}
                 </div>
               ) : null}
             </div>
-            <select
+            {modelChoices.length === 0 ? (
+              <button
+                type="button"
+                className="vd-chat-model-retry"
+                disabled={snapshot.models.status === 'loading'}
+                onClick={() => { void chat.refreshModels().catch(swallow) }}
+              >{snapshot.models.status === 'loading' ? t('加载模型中…') : t('Retry models')}</button>
+            ) : <select
               aria-label={t("聊天模型")}
-              title={snapshot.models.error ?? t("切换当前工程会话模型")}
+              title={modelLoadError ?? t("切换当前工程会话模型")}
               value={currentModelValue}
-              disabled={snapshot.models.status === 'loading' || snapshot.models.status === 'selecting' || modelChoices.length === 0}
+              disabled={snapshot.models.status === 'selecting'}
               onChange={event => {
                 const choice = modelChoices.find(candidate => candidate.key === event.target.value)
                 if (choice === undefined) return
@@ -1074,12 +1140,10 @@ function ChatPanel({
                 }).catch(swallow)
               }}
             >
-              {snapshot.models.status === 'loading' ? <option value="">{t("加载模型中…")}</option> : null}
-              {snapshot.models.status !== 'loading' && snapshot.models.current === null ? <option value="">{t("选择模型")}</option> : null}
+              {snapshot.models.current === null ? <option value="">{t("选择模型")}</option> : null}
               {!currentModelKnown && snapshot.models.current !== null ? (
                 <option value={currentModelValue}>{snapshot.models.current.provider}/{snapshot.models.current.model}</option>
               ) : null}
-              {modelChoices.length === 0 && snapshot.models.status !== 'loading' ? <option value="">{t("没有可用模型")}</option> : null}
               {snapshot.models.groups.map(group => (
                 <optgroup key={group.id} label={group.name}>
                   {group.models.map(model => (
@@ -1087,7 +1151,7 @@ function ChatPanel({
                   ))}
                 </optgroup>
               ))}
-            </select>
+            </select>}
           </div>
           <div className="vd-chat-submit-tools">
             <button
@@ -1100,7 +1164,16 @@ function ChatPanel({
             >
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a4 4 0 0 0 4-4V6a4 4 0 0 0-8 0v5a4 4 0 0 0 4 4Zm-7-4a7 7 0 0 0 14 0M12 18v4M8 22h8" /></svg>
             </button>
-            <button
+            {snapshot.running || snapshot.stopping ? <button
+              type="button"
+              className="vd-chat-send vd-chat-stop"
+              aria-label={t(snapshot.stopping ? 'Stopping…' : 'Stop generating')}
+              title={t(snapshot.stopping ? 'Stopping…' : 'Stop generating')}
+              disabled={snapshot.stopping}
+              onClick={() => { void chat.stop() }}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
+            </button> : <button
               type="button"
               className="vd-chat-send"
               aria-label={snapshot.sending ? t("发送中") : t("发送")}
@@ -1109,7 +1182,7 @@ function ChatPanel({
               onClick={() => { void send() }}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 18-8-8 18-2-8-8-2Zm8 2 4-4" /></svg>
-            </button>
+            </button>}
           </div>
         </div>
         <input
@@ -1138,6 +1211,8 @@ function ChatPanel({
         <input ref={folderInputRef} type="file" multiple hidden {...{ webkitdirectory: '' }} onChange={event => { if (event.target.files) void addFiles(event.target.files, true); event.target.value = '' }} />
         {preview ? <ChatAttachmentPreview key={preview.id} item={preview} nodes={nodes} onClose={() => setPreview(null)} /> : null}
       </div>
+      {skillsOpen && canvas.project && <SkillsDialog key={`${canvas.project.id}:${snapshot.sessionId}`} director={director} projectId={canvas.project.id}
+        onChange={() => setSkillsRevision(value => value + 1)} onClose={() => { setSkillsOpen(false); promptRef.current?.focus() }} />}
     </aside>
   )
 }
@@ -1814,6 +1889,7 @@ function CanvasStage({
   selectedNodeIds,
   onSelectedNodeIdsChange,
   onReferenceNode,
+  onAddArtifactToChat,
 }: {
   snapshot: DirectorSnapshot
   director: DirectorController
@@ -1822,6 +1898,7 @@ function CanvasStage({
   selectedNodeIds: ReadonlySet<string>
   onSelectedNodeIdsChange(ids: Set<string>): void
   onReferenceNode(id: string): void
+  onAddArtifactToChat(asset: AssetRef): Promise<void>
 }) {
   useLanguage()
   const project = snapshot.project
@@ -1858,6 +1935,62 @@ function CanvasStage({
     | null
   >(null)
   const nodeTypes = useMemo(() => ({ director: DirectorNodeView }), [])
+  useEffect(() => {
+    if (!project || !instance) return
+    const viewId = crypto.randomUUID()
+    let closed = false
+    let timer: ReturnType<typeof setTimeout>
+    let acknowledgements: { id: string; error?: string }[] = []
+    let sentGeometry = ''
+    let geometrySentAt = 0
+    const applied = new Map<string, { id: string; error?: string }>()
+    const poll = async (): Promise<void> => {
+      try {
+        const current = director.getSnapshot().project
+        if (current?.id !== project.id) return
+        const geometry = { draftRevision: current.draftRevision ?? 0, nodes: current.graph.nodes.flatMap(({ id }) => {
+          const internal = instance.getInternalNode(id)
+          const { width, height } = internal?.measured ?? {}
+          if (width === undefined || height === undefined) return []
+          const handles = internal?.internals.handleBounds
+          const offsets = (rows: { id?: string | null; y: number; height: number }[] | null | undefined, fallback: string): [string, number][] => (rows ?? []).map(handle => [handle.id ?? fallback, handle.y + handle.height / 2])
+          return [{ id, width, height, inputs: offsets(handles?.target, 'in'), outputs: offsets(handles?.source, 'out') }]
+        }) }
+        const serialized = JSON.stringify(geometry)
+        const report = serialized !== sentGeometry || Date.now() - geometrySentAt > 3000
+        const result = await director.pollView(viewId, acknowledgements, false, report ? geometry : undefined)
+        if (report) { sentGeometry = serialized; geometrySentAt = Date.now() }
+        if (closed) return
+        acknowledgements = []
+        for (const command of result.commands) {
+          let receipt = applied.get(command.id)
+          if (!receipt) {
+            receipt = { id: command.id }
+            try {
+              const current = director.getSnapshot().project
+              if (current?.id !== project.id) throw new Error('The visible workflow changed.')
+              if (command.command === 'select') onSelectedNodeIdsChange(new Set(command.nodeIds))
+              else if (command.command === 'frame') await instance.fitView({ nodes: command.nodeIds.length ? command.nodeIds.map(id => ({ id })) : undefined, padding: .25, duration: 200 })
+              else if (command.command === 'zoom') await instance.zoomTo(command.zoom!, { duration: 200 })
+              else if (command.command === 'inspect') setDetailsNodeId(command.nodeIds[0])
+              else if (command.command === 'preview') {
+                const node = current.graph.nodes.find(node => node.id === command.nodeIds[0])
+                const asset = node?.data.asset ?? node?.data.assets?.[0]
+                const artifact = asset ? previewArtifactFromAsset(asset) : node?.data.result ? previewArtifactsFromResult(node.data.result as VdNodeResult)[0] : undefined
+                if (!artifact) throw new Error('This node has no previewable output.')
+                setOpenArtifact({ artifact, properties: false })
+              }
+            } catch (error) { receipt.error = String(error) }
+            applied.set(command.id, receipt)
+          }
+          acknowledgements.push(receipt)
+        }
+      } catch { /* Reconnect; command IDs prevent duplicate view actions. */ }
+      if (!closed) timer = setTimeout(() => { void poll() }, 1000)
+    }
+    void poll()
+    return () => { closed = true; clearTimeout(timer); if (director.getSnapshot().project?.id === project.id) void director.pollView(viewId, acknowledgements, true).catch(() => {}) }
+  }, [director, project?.id, project?.sessionId, instance, onSelectedNodeIdsChange])
   useEffect(() => {
     onSelectedNodeIdsChange(new Set())
     setMeasuredNodeSizes({})
@@ -2720,6 +2853,10 @@ function CanvasStage({
           artifact={openArtifact.artifact}
           initialPropertiesOpen={openArtifact.properties}
           initialEdit={openArtifact.edit}
+          onAddToChat={openArtifact.artifact.asset?.projectId === project.id ? async asset => {
+            await onAddArtifactToChat(asset)
+            setOpenArtifact(null)
+          } : undefined}
           onClose={() => setOpenArtifact(null)}
         />
       )}
@@ -2833,6 +2970,11 @@ export function DirectorOverlay({ director, chat }: DirectorInjectedProps) {
   const language = useLanguage()
   const snapshot = useSource(director)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [nativeSettingsOpen, setNativeSettingsOpen] = useState(false)
+  const openModelSettings = useCallback(async () => {
+    setNativeSettingsOpen(true)
+    try { await chat.openModelSettings() } finally { setNativeSettingsOpen(false) }
+  }, [chat])
   const [jobsOpen, setJobsOpen] = useState(false)
   const [galleryOpen, setGalleryOpen] = useState(false)
   const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(() => new Set())
@@ -2849,6 +2991,12 @@ export function DirectorOverlay({ director, chat }: DirectorInjectedProps) {
     setChatPanelOpen(true); setNarrowChatPanelOpen(true)
     setReferenceRequest({ nodeId, nonce: Date.now() })
   }, [])
+  const addArtifactToChat = useCallback(async (asset: AssetRef) => {
+    const image = await director.chatImageFromAsset(asset)
+    await chat.attachments().addImageAsset(image)
+    setGalleryOpen(false)
+    setChatPanelOpen(true); setNarrowChatPanelOpen(true)
+  }, [director, chat])
   const highlightNode = useCallback((id: string | null) => {
     workspaceRef.current?.querySelectorAll<HTMLElement>('[data-chat-node-id]').forEach(element => element.classList.toggle('vd-chat-node-highlight', element.dataset.chatNodeId === id))
   }, [])
@@ -2888,7 +3036,7 @@ export function DirectorOverlay({ director, chat }: DirectorInjectedProps) {
   return (
     <MediaEditingContext.Provider value={director.editMedia}>
       <style>{`${xyflowStyles}\n${styles}`}</style>
-      <div className="vd-shell" lang={language === 'zh' ? 'zh-CN' : 'en'} role="dialog" aria-modal="true" aria-label="Video Director">
+      <div className={`vd-shell${nativeSettingsOpen ? ' is-native-settings-open' : ''}`} lang={language === 'zh' ? 'zh-CN' : 'en'} role="dialog" aria-modal={!nativeSettingsOpen} aria-hidden={nativeSettingsOpen} aria-label="Video Director">
         <TopBar
           snapshot={snapshot}
           director={director}
@@ -2898,7 +3046,7 @@ export function DirectorOverlay({ director, chat }: DirectorInjectedProps) {
           onGallery={() => setGalleryOpen(true)}
         />
         {jobsOpen ? <JobDrawer snapshot={snapshot} director={director} onClose={() => setJobsOpen(false)} /> : null}
-        {galleryOpen ? <ArtifactGallery project={snapshot.project} loadProjects={director.loadGallery} onClose={() => setGalleryOpen(false)} /> : null}
+        {galleryOpen ? <ArtifactGallery project={snapshot.project} loadProjects={director.loadGallery} onAddToChat={addArtifactToChat} onClose={() => setGalleryOpen(false)} /> : null}
         {snapshot.error !== null ? (
           <div className={`vd-global-error ${snapshot.conflict ? 'is-conflict' : ''}`}>
             <strong>{snapshot.conflict ? t("工程发生保存冲突") : t("Video Director 错误")}</strong>
@@ -2927,6 +3075,7 @@ export function DirectorOverlay({ director, chat }: DirectorInjectedProps) {
               collapsed={chatPanelCollapsed}
               referenceRequest={referenceRequest}
               onHighlightNode={highlightNode}
+              onModelSettings={openModelSettings}
             />
             <div
               className="vd-chat-resizer"
@@ -2973,6 +3122,7 @@ export function DirectorOverlay({ director, chat }: DirectorInjectedProps) {
               selectedNodeIds={selectedNodeIds}
               onSelectedNodeIdsChange={setSelectedNodeIds}
               onReferenceNode={referenceNode}
+              onAddArtifactToChat={addArtifactToChat}
             />
             <button
               type="button"

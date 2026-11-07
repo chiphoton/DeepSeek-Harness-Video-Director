@@ -70,7 +70,10 @@
   "dependencies": {
     "@deepseek-ai/schemastery": "~3.18.5",
     "@openai/codex-sdk": "^0.152.1",
-    "@xyflow/react": "12.11.5"
+    "@xyflow/react": "12.11.5",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1",
+    "yaml": "2.9.1"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.5",

@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 import { apply, Config, name } from '../index.js'
+import { ProviderRuntime } from '../src/providers.js'
 
 const MAX_ASSET_BYTES = 200 * 1024 * 1024
 
@@ -23,6 +24,24 @@ test('caps decoded assets below the custom-channel request ceiling', () => {
 test('accepts the MiniMax H3 license by default while allowing explicit opt-out', () => {
   assert.equal(Config({}).minimaxH3LicenseAccepted.get(), true)
   assert.equal(Config({ minimaxH3LicenseAccepted: false }).minimaxH3LicenseAccepted.get(), false)
+})
+
+test('loads built-in connections with local endpoints and blank account setup cards', async () => {
+  const runtime = new ProviderRuntime({
+    store: {},
+    providers: Config({}).providers,
+    fetchImpl: async () => assert.fail('Unconfigured API provider must not send a request'),
+  })
+  const [ollama, comfyui, openai, codex] = runtime.publicCatalog()
+  assert.deepEqual([ollama.id, comfyui.id, openai.id, codex.id], ['ollama', 'comfyui', 'openai', 'codex-plan'])
+  assert.equal(ollama.baseUrl, 'http://127.0.0.1:11434')
+  assert.equal(comfyui.baseUrl, 'http://127.0.0.1:8188')
+  assert.equal(openai.baseUrl, undefined)
+  assert.equal(openai.apiKeySet, false)
+  assert.equal(openai.configured, false)
+  assert.deepEqual(codex.availableModels, [])
+  await assert.rejects(runtime.models('openai'), /Base URL/)
+  assert.deepEqual(Config({ providers: [] }).providers, [])
 })
 
 test('declares the Harness bundle patch', async () => {

@@ -1,16 +1,20 @@
 import z from '@deepseek-ai/schemastery'
 import { clientRequestSchema } from '@deepseek-ai/dsh-client-connection'
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createDirectorHost } from './director-host.js'
 import { canvasTool } from './canvas-agent.js'
+import { libraryTool } from './library-agent.js'
+import { qualityTool } from './quality-agent.js'
+import { workspaceTool } from './workspace-agent.js'
 import { PROVIDER_SETTINGS_NAMESPACE } from './provider-settings.js'
 
 export const name = 'video-director'
 export const inject = ['connection']
 
 const MAX_ASSET_BYTES = 200 * 1024 * 1024
+const DIRECTOR_WORKSPACE = 'Video-Director'
 
 function skillMarkdownBody(content) {
   if (!content.startsWith('---\n')) return content.trim()
@@ -50,11 +54,38 @@ export const Config = z.object({
   jobConcurrency: z.natural().min(1).max(8).default(2),
   minimaxH3LicenseAccepted: z.boolean().default(true).volatile(),
   providerOverrides: z.dict(ProviderOverrideSchema).default({}).volatile(),
-  providers: z.array(ProviderSchema).default([]),
+  providers: z.array(ProviderSchema).default([
+    { id: 'ollama', label: 'Ollama', kind: 'ollama', baseUrl: 'http://127.0.0.1:11434', model: 'qwen3-vl' },
+    {
+      id: 'comfyui',
+      label: 'ComfyUI',
+      kind: 'comfyui',
+      baseUrl: 'http://127.0.0.1:8188',
+      mcpTool: 'mcp__comfyui__call_tool',
+      mcpBaseUrl: 'http://127.0.0.1:8188',
+    },
+    { id: 'openai', label: 'OpenAI Compatible', kind: 'openai-compatible', requiresApiKey: true },
+    { id: 'codex-plan', label: 'Codex Coding Plan', kind: 'codex-plan', timeoutMs: 600_000 },
+  ]),
 })
 
 export async function apply(ctx, config) {
   let host
+  let sessionWorkspace
+  ctx.inject(['workspaceRegistry', 'dshHomePath'], (workspaceCtx) => {
+    workspaceCtx.effect(() => {
+      const path = workspaceCtx.dshHomePath('workspaces', DIRECTOR_WORKSPACE)
+      const pending = mkdir(path, { recursive: true, mode: 0o700 })
+        .then(() => workspaceCtx.workspaceRegistry.create(path, DIRECTOR_WORKSPACE))
+        .then(workspace => workspace.id)
+        .catch(error => {
+          workspaceCtx.logger.warn('video-director: could not initialize its DSH workspace', error)
+          return undefined
+        })
+      sessionWorkspace = pending
+      return () => { if (sessionWorkspace === pending) sessionWorkspace = undefined }
+    })
+  })
   const assetRoutes = new Set()
   const registerAsset = async (asset) => {
     if (assetRoutes.has(asset.id)) return
@@ -81,7 +112,9 @@ export async function apply(ctx, config) {
     minimaxH3LicenseAccepted: config.minimaxH3LicenseAccepted.get(),
   })
   host = await createDirectorHost({ ...config, ...settingsSnapshot() }, { registerAsset, tools: ctx.get('tools') })
-  ctx.inject(['tools'], toolsCtx => { toolsCtx.tools.register(canvasTool(host, toolsCtx)) })
+  ctx.inject(['tools'], toolsCtx => {
+    for (const tool of [canvasTool(host, toolsCtx), libraryTool(host), qualityTool(host), workspaceTool(host)]) toolsCtx.tools.register(tool)
+  })
   const { providerSettings } = host
   providerSettings.attach(undefined, settingsSnapshot)
   ctx.on('loader/volatile-update', () => providerSettings.refresh())
@@ -113,6 +146,10 @@ export async function apply(ctx, config) {
       }
       const { rpcId, payload } = parsed.data
       const result = await host.rpc(payload.endpoint, payload.payload, request.signal)
+      if (payload.endpoint === 'projects/list' && result.ok) {
+        const workspaceId = await sessionWorkspace
+        if (workspaceId !== undefined) result.value.workspaceId = workspaceId
+      }
       return Response.json({ type: 'server-response', rpcId, result })
     },
   }))

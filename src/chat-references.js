@@ -64,7 +64,16 @@ export class ChatReferences {
         if (!Object.hasOwn(labels, kind)) throw new DirectorInputError('Unsupported attachment kind')
         const name = string(input.name, 'name', { min: 1, max: 240 })
         const entry = { id, kind, name, projectId: input.projectId, alias: '', ready: kind === 'node' }
-        if (kind === 'node') {
+        if (input.assetId !== undefined) {
+          const asset = this.store.asset(uuid(input.assetId, 'assetId'))
+          if (kind !== 'image' || asset.projectId !== input.projectId || !['image', 'sketch'].includes(asset.kind) || asset.size > 8 * 1024 * 1024) {
+            throw new DirectorInputError('Choose an image up to 8 MiB owned by this workflow.')
+          }
+          entry.name = asset.name
+          entry.asset = asset
+          entry.files = [{ name: asset.name, path: asset.name, mimeType: asset.mimeType, size: asset.size, assetId: asset.id, uploaded: true }]
+          entry.ready = true
+        } else if (kind === 'node') {
           entry.nodeId = string(input.nodeId, 'nodeId', { min: 1, max: 256 })
           const project = await this.store.getProject(input.projectId)
           if (!(project.draft?.graph ?? project.graph).nodes.some(node => node.id === entry.nodeId)) throw new DirectorInputError('Node no longer exists')

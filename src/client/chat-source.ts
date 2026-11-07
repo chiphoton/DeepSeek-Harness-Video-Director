@@ -1,6 +1,7 @@
 import type { DirectorController } from './controller'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { ChatAttachmentRegistry, type ChatAttachment } from './chat-attachments'
+import { skillNames } from './chat-skills'
 import type {
   ChatModelDirectory,
   ChatModelDirectoryState,
@@ -20,12 +21,21 @@ export const DIRECTOR_CONTEXT_END = '</dsh-video-director-context>'
 export type ProjectChatMessageKind = 'user' | 'assistant' | 'tool-call' | 'tool-result'
 export type ProjectChatMessageStatus = 'pending' | 'streaming' | 'complete' | 'error'
 
+export type ChatMessageImage = { name?: string; number?: number } & (
+  { attachmentId: string; previewUrl?: never } | { previewUrl: string; attachmentId?: never }
+)
+
+type ReplyModel = Pick<ChatModelSelection, 'provider' | 'model'>
+
 /** A compact transcript row derived only from the currently bound DSH Session. */
 export interface ProjectChatMessage extends ChatMessage {
   kind: ProjectChatMessageKind
   status: ProjectChatMessageStatus
   callId?: string
   toolName?: string
+  toolCommand?: string
+  images?: ChatMessageImage[]
+  model?: ReplyModel
 }
 
 /** Read model consumed by the Video Director's project-scoped chat panel. */
@@ -33,6 +43,7 @@ export interface ProjectChatSnapshot extends Omit<ChatSnapshot, 'messages'> {
   projectId: string | null
   messages: ProjectChatMessage[]
   models: ChatModelDirectoryState
+  stopping: boolean
 }
 
 type JsonRecord = Record<string, unknown>
@@ -113,37 +124,43 @@ function messageContent(message: unknown): unknown[] {
   return message.content
 }
 
-function blockText(block: unknown, includeReasoning = false): string[] {
-  if (!isRecord(block)) return []
-  switch (block.type) {
-    case 'text': {
-      const text = stringValue(block.text)
-      return text === undefined ? [] : [text]
-    }
-    case 'reasoning': {
-      const text = includeReasoning ? stringValue(block.text) : undefined
-      return text === undefined ? [] : [text]
-    }
-    case 'image':
-      return ['[Image]']
-    case 'tool-result':
-      return Array.isArray(block.content)
-        ? block.content.flatMap(child => blockText(child, includeReasoning))
-        : []
-    default:
+function transcriptContent(message: unknown, includeReasoning = false): { text: string; images: ChatMessageImage[] } {
+  const images: ChatMessageImage[] = []
+  const collect = (block: unknown): string[] => {
+    if (!isRecord(block)) return []
+    if (block.type === 'tool-result') return Array.isArray(block.content) ? block.content.flatMap(collect) : []
+    if (block.type === 'image') {
+      const attachment = isRecord(block.attachment) ? block.attachment : undefined
+      const attachmentId = stringValue(attachment?.attachmentId)
+      if (attachmentId === undefined) return ['[Image]']
+      images.push({ attachmentId, name: stringValue(attachment?.name) })
       return []
+    }
+    if (block.type !== 'text' && !(includeReasoning && block.type === 'reasoning')) return []
+    const text = stringValue(block.text)
+    return text === undefined ? [] : [text]
   }
+  return { text: messageContent(message).flatMap(collect).join('\n').trim(), images }
 }
 
-function contentText(message: unknown, includeReasoning = false): string {
-  return messageContent(message)
-    .flatMap(block => blockText(block, includeReasoning))
-    .join('\n')
-    .trim()
+function pendingImages(item: JsonRecord): ChatMessageImage[] {
+  if (!Array.isArray(item.attachments)) return []
+  return item.attachments.flatMap(attachment => {
+    if (!isRecord(attachment) || attachment.type !== 'image' || !isRecord(attachment.value)) return []
+    const previewUrl = stringValue(attachment.value.previewUrl)
+    return previewUrl === undefined ? [] : [{ previewUrl, name: stringValue(attachment.value.name) }]
+  })
 }
 
 function sourceOf(message: unknown): JsonRecord | undefined {
   return isRecord(message) && isRecord(message.source) ? message.source : undefined
+}
+
+function replyModel(value: unknown): ReplyModel | undefined {
+  if (!isRecord(value)) return undefined
+  const provider = stringValue(value.provider)
+  const model = stringValue(value.model)
+  return provider && model ? { provider, model } : undefined
 }
 
 function idOf(message: unknown, fallback: string): string {
@@ -204,13 +221,13 @@ function isReplaced(seq: number, replacements: SurfaceState['replacements']): bo
   return replacements.some(range => seq >= range.start && seq <= range.end)
 }
 
-function prettyArguments(value: unknown): string {
-  if (typeof value !== 'string') return ''
-  try {
-    return JSON.stringify(JSON.parse(value), null, 2)
-  } catch {
-    return value
+function displayArguments(value: unknown): { args: string; toolCommand?: string } {
+  let parsed = value
+  if (typeof value === 'string') {
+    try { parsed = JSON.parse(value) } catch { return { args: value } }
   }
+  const toolCommand = isRecord(parsed) ? stringValue(parsed.command) : undefined
+  return { args: JSON.stringify(parsed, null, 2) ?? '', ...(toolCommand ? { toolCommand } : {}) }
 }
 
 function failureMessage(value: unknown): string | null {
@@ -259,6 +276,59 @@ export function embedDirectorContext(text: string, context: string): string {
   return `${text.trimEnd()}\n\n${DIRECTOR_CONTEXT_START}\n${context}\n${DIRECTOR_CONTEXT_END}`
 }
 
+interface ImageLabels {
+  aliases: Map<number, number>
+  thumbnails: Map<number, number>
+  local: boolean
+}
+
+/** Read the attachment manifest embedded by Director, including old global-only manifests. */
+function readImageLabels(text: string): ImageLabels | undefined {
+  const start = text.lastIndexOf(DIRECTOR_CONTEXT_START)
+  const end = text.lastIndexOf(DIRECTOR_CONTEXT_END)
+  if (start < 0 || end < start) return undefined
+  const manifest = text.slice(start + DIRECTOR_CONTEXT_START.length, end).trimEnd().split('\n').at(-1)
+  if (manifest === undefined) return undefined
+  let data: unknown
+  try { data = JSON.parse(manifest) } catch { return undefined }
+  if (!isRecord(data) || !Array.isArray(data.attachments)) return undefined
+  const aliases = new Map<number, number>()
+  const thumbnails = new Map<number, number>()
+  let local = false
+  for (const entry of data.attachments) {
+    if (!isRecord(entry) || entry.kind !== 'image') continue
+    const match = /^<Image ([1-9]\d*)>$/.exec(stringValue(entry.alias) ?? '')
+    if (!match) continue
+    const number = aliases.size + 1
+    aliases.set(Number(match[1]), number)
+    local ||= typeof entry.label === 'string'
+    const index = numberValue(entry.imageIndex)
+    if (index !== undefined && Number.isSafeInteger(index) && index > 0) thumbnails.set(index, number)
+  }
+  return aliases.size > 0 ? { aliases, thumbnails, local } : undefined
+}
+
+function localizeImageLabels(text: string, labels: ImageLabels | undefined): string {
+  if (labels === undefined) return text
+  return text.replace(/\b(Image)([ \t]+)([1-9]\d*)\b/gi, (match, word, gap, digits) => {
+    const alias = Number(digits)
+    // A reply to a locally numbered prompt may already use the correct number.
+    if (labels.local && alias <= labels.aliases.size) return match
+    const local = labels.aliases.get(alias)
+    return local === undefined ? match : `${word}${gap}${local}`
+  })
+}
+
+function displayUserMessage(text: string, images: ChatMessageImage[], labels = readImageLabels(text)): Pick<ProjectChatMessage, 'text' | 'images'> {
+  const visible = stripDirectorContext(text)
+  return {
+    text: labels?.local ? visible : localizeImageLabels(visible, labels),
+    ...(images.length === 0 ? {} : {
+      images: images.map((image, index) => ({ ...image, number: labels?.thumbnails.get(index + 1) ?? index + 1 })),
+    }),
+  }
+}
+
 function foldMessages(
   eventEntries: readonly unknown[],
   snapshot: unknown,
@@ -299,26 +369,36 @@ function foldMessages(
   }
 
   const messages: ProjectChatMessage[] = []
-  const streamRows = new Map<string, number>()
+  const streamRows = new Map<string, { index: number; labels: ImageLabels | undefined }>()
+  let imageLabels: ImageLabels | undefined
+  let requestModel: ReplyModel | undefined
   for (let index = 0; index < events.length; index += 1) {
     const event = events[index] as SessionEventRecord
     const seq = eventSeq(event, index)
     const time = numberValue(event.time)
 
+    if (event.type === 'request/header' && isRecord(event.data) && isRecord(event.data.header)) {
+      requestModel = replyModel(event.data.header.config) ?? requestModel
+    } else if (event.type === 'request/context') {
+      requestModel = replyModel(event.data) ?? requestModel
+    }
+
     if (event.type === 'user/message') {
-      if (!surface.active.has(seq)) continue
       const source = sourceOf(event.data)
       // DSH also logs plugin/skill/context injections as user-role messages.
       // The compact Director transcript intentionally keeps human prompts only.
       if (source?.kind !== 'user') continue
-      const text = stripDirectorContext(contentText(event.data))
-      if (text === '') continue
+      const { text, images } = transcriptContent(event.data)
+      imageLabels = readImageLabels(text)
+      if (!surface.active.has(seq)) continue
+      const content = displayUserMessage(text, images, imageLabels)
+      if (content.text === '' && content.images === undefined) continue
       messages.push({
         id: idOf(event.data, `user:${seq}`),
         role: 'user',
         kind: 'user',
         status: 'complete',
-        text,
+        ...content,
         ...(time === undefined ? {} : { time }),
       })
       continue
@@ -327,14 +407,17 @@ function foldMessages(
     if (event.type === 'assistant/message') {
       if (!surface.active.has(seq)) continue
       const message = messageAt(event.data)
-      const text = stripDirectorContext(contentText(message))
-      if (text === '') continue
+      const content = transcriptContent(message)
+      const text = localizeImageLabels(stripDirectorContext(content.text), imageLabels)
+      if (text === '' && content.images.length === 0) continue
       messages.push({
         id: idOf(message, `assistant:${seq}`),
         role: 'assistant',
         kind: 'assistant',
         status: 'complete',
         text,
+        ...(content.images.length ? { images: content.images } : {}),
+        model: replyModel(sourceOf(message)) ?? requestModel,
         ...(time === undefined ? {} : { time }),
       })
       continue
@@ -344,7 +427,7 @@ function foldMessages(
       if (isReplaced(seq, surface.replacements) || !isRecord(event.data)) continue
       const callId = stringValue(event.data.callId) ?? String(seq)
       const toolName = stringValue(event.data.name) ?? 'tool'
-      const args = prettyArguments(event.data.arguments)
+      const { args, toolCommand } = displayArguments(event.data.arguments)
       messages.push({
         id: `tool-call:${callId}`,
         role: 'assistant',
@@ -352,6 +435,7 @@ function foldMessages(
         status: completedCallIds.has(callId) ? 'complete' : 'streaming',
         callId,
         toolName,
+        ...(toolCommand && toolName.startsWith('vd_') ? { toolCommand } : {}),
         text: args === '' ? toolName : `${toolName}\n${args}`,
         ...(time === undefined ? {} : { time }),
       })
@@ -362,7 +446,7 @@ function foldMessages(
       if (!surface.active.has(seq)) continue
       const result = toolResultData(event.data)
       const toolName = result.callId === undefined ? undefined : toolNames.get(result.callId)
-      const body = contentText(result.message, true)
+      const { text, images } = transcriptContent(result.message, true)
       messages.push({
         id: idOf(result.message, `tool-result:${result.callId ?? seq}`),
         role: 'assistant',
@@ -370,7 +454,8 @@ function foldMessages(
         status: result.isError ? 'error' : 'complete',
         ...(result.callId === undefined ? {} : { callId: result.callId }),
         ...(toolName === undefined ? {} : { toolName }),
-        text: body === '' ? `${toolName ?? 'Tool'} finished.` : body,
+        text: text === '' && images.length === 0 ? `${toolName ?? 'Tool'} finished.` : text,
+        ...(images.length ? { images } : {}),
         ...(time === undefined ? {} : { time }),
       })
       continue
@@ -389,19 +474,24 @@ function foldMessages(
       || isReplaced(seq, surface.replacements)) continue
     const previous = streamRows.get(step)
     if (previous === undefined) {
-      streamRows.set(step, messages.length)
+      streamRows.set(step, { index: messages.length, labels: imageLabels })
       messages.push({
         id: `assistant-stream:${step}`,
         role: 'assistant',
         kind: 'assistant',
         status: 'streaming',
         text: delta,
+        model: requestModel,
         ...(time === undefined ? {} : { time }),
       })
     } else {
-      const current = messages[previous] as ProjectChatMessage
-      messages[previous] = { ...current, text: current.text + delta }
+      const current = messages[previous.index] as ProjectChatMessage
+      messages[previous.index] = { ...current, text: current.text + delta }
     }
+  }
+  for (const { index, labels } of streamRows.values()) {
+    const message = messages[index]!
+    message.text = localizeImageLabels(message.text, labels)
   }
 
   const queueRpcIds = new Set<string>()
@@ -412,14 +502,15 @@ function foldMessages(
     const rpcId = stringValue(sourceOf(item)?.rpcId)
     if (rpcId !== undefined && (durableRpcIds.has(rpcId) || queueRpcIds.has(rpcId))) continue
     if (rpcId !== undefined) queueRpcIds.add(rpcId)
-    const text = stripDirectorContext(contentText(item))
-    if (text === '') continue
+    const { text, images } = transcriptContent(item)
+    const content = displayUserMessage(text, images)
+    if (content.text === '' && content.images === undefined) continue
     messages.push({
       id: `queue:${idOf(item, String(messages.length))}`,
       role: 'user',
       kind: 'user',
       status: 'pending',
-      text,
+      ...content,
     })
   }
 
@@ -431,15 +522,15 @@ function foldMessages(
     const requestId = stringValue(item.requestId)
     if (requestId !== undefined
       && (durableRpcIds.has(requestId) || queueRpcIds.has(requestId))) continue
-    const text = stripDirectorContext(stringValue(item.text) ?? '')
-    if (text === '') continue
+    const content = displayUserMessage(stringValue(item.text) ?? '', pendingImages(item))
+    if (content.text === '' && content.images === undefined) continue
     const pendingTime = numberValue(item.time)
     messages.push({
       id: `pending:${requestId ?? messages.length}`,
       role: 'user',
       kind: 'user',
       status: 'pending',
-      text,
+      ...content,
       ...(pendingTime === undefined ? {} : { time: pendingTime }),
     })
   }
@@ -453,6 +544,7 @@ function emptySnapshot(): ProjectChatSnapshot {
     sessionId: null,
     messages: [],
     running: false,
+    stopping: false,
     sending: false,
     error: null,
     models: EMPTY_MODEL_DIRECTORY,
@@ -483,11 +575,13 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
   private disposeInbox: (() => void) | undefined
   private disposeModels: (() => void) | undefined
   private readonly sending = new Map<string, number>()
+  private readonly stopping = new Set<string>()
   private readonly localErrors = new Map<string, string>()
   private readonly ignoredNativeErrors = new Map<string, string>()
   private unboundError: string | null = null
   private modelDirectoryError: string | null = null
   private readonly promptControllers = new Set<AbortController>()
+  private finishModelSettings: (() => void) | undefined
 
   constructor(
     private readonly ctx: ClientContext,
@@ -505,6 +599,34 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
     return () => { this.listeners.delete(listener) }
   }
 
+  readImage = async (sessionId: string, attachmentId: string): Promise<Blob> => {
+    const binding = this.binding
+    if (sessionId !== this.sessionId || binding === undefined) throw new Error('The chat session changed.')
+    const result = await binding.session.readAttachment(attachmentId as Parameters<SessionBinding['session']['readAttachment']>[0])
+    if (this.binding !== binding) throw new Error('The chat session changed.')
+    if (!result.ok) throw new Error(result.error.message)
+    const { data, attachment } = result.value
+    return new Blob([Uint8Array.from(data).buffer], { type: attachment.mediaType })
+  }
+
+  /** Cancel only the running turn in the linked native session. */
+  stop = async (): Promise<void> => {
+    const sessionId = this.sessionId
+    const binding = this.binding
+    if (sessionId === null || binding === undefined || !this.snapshot.running || this.stopping.has(sessionId)) return
+    this.stopping.add(sessionId)
+    this.clearError()
+    try {
+      const result = await binding.session.cancel()
+      if (!result.ok) throw new Error(result.error.message)
+    } catch (error) {
+      this.localErrors.set(sessionId, error instanceof Error ? error.message : String(error))
+    } finally {
+      this.stopping.delete(sessionId)
+      this.rebuild()
+    }
+  }
+
   attachments(): ChatAttachmentRegistry {
     const project = this.director.getSnapshot().project
     if (!project) throw new Error('Select a workflow first')
@@ -517,22 +639,40 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
     return registry
   }
 
-  async sendAttachments(text: string): Promise<void> {
+  async sendAttachments(text: string, automaticSkills = true): Promise<void> {
     const project = this.director.getSnapshot().project
+    await this.director.prepareChatSkills(text)
+    if (this.director.getSnapshot().project?.sessionId !== project?.sessionId) throw new Error('The chat session changed while selecting skills')
     await this.director.prepareChatContext()
     const registry = this.attachments()
-    const selected = registry.getSnapshot().filter(item => !item.sent || text.includes(item.alias))
+    const selected = registry.getSnapshot().filter(item => !item.sent || (item.kind !== 'image' && text.includes(item.alias)))
     const prepared = await registry.prepare(selected)
     if (this.director.getSnapshot().project?.sessionId !== project?.sessionId) throw new Error('The chat session changed during upload')
-    // Only explicitly used/new images enter this turn; other media stays on the Host.
-    const images = prepared.filter(item => item.kind === 'image' && item.file && item.file.size <= 8 * 1024 * 1024).map(item => item.file!)
-    const references = prepared.map(({ alias, kind, name, nodeId }) => ({ alias, kind, name, nodeId }))
-    await this.send(text || references.map(item => item.alias).join(' '), images, JSON.stringify({ attachments: references }))
+    const files = await Promise.all(prepared.map(item => item.kind === 'image' ? registry.nativeImageFile(item) : undefined))
+    if (this.director.getSnapshot().project?.sessionId !== project?.sessionId) throw new Error('The chat session changed while preparing images')
+    const images: File[] = []
+    let imageNumber = 0
+    const references = prepared.map(({ alias, kind, name, nodeId }, index) => {
+      const reference = { alias, kind, name, nodeId }
+      if (kind !== 'image') return reference
+      const label = `Image ${++imageNumber}`
+      const file = files[index]
+      if (!file) return { ...reference, label }
+      images.push(file)
+      return { ...reference, label, imageIndex: images.length }
+    })
+    const attachmentContext = JSON.stringify({
+      attachments: references,
+      ...(imageNumber === 0 ? {} : {
+        imageLabels: 'Image labels restart at Image 1 in each user message. Match the inline images in this message by imageIndex (1-based). Use label in replies and the stable alias only for canvas tool arguments.',
+      }),
+    })
+    await this.send(text || references.map(item => 'label' in item ? `<${item.label}>` : item.alias).join(' '), images, attachmentContext, automaticSkills)
     await registry.markSent(prepared)
   }
 
   /** Send through DSH's optimistic submission + identified native prompt path. */
-  send = async (text: string, images: readonly File[] = [], attachmentContext = ''): Promise<void> => {
+  send = async (text: string, images: readonly File[] = [], attachmentContext = '', automaticSkills = true): Promise<void> => {
     const visibleText = text.trim()
     if (visibleText === '' && images.length === 0) return
     const project = this.director.getSnapshot().project
@@ -550,7 +690,8 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
       throw new Error(message)
     }
 
-    const payload = embedDirectorContext(visibleText, this.director.currentContext() + (attachmentContext ? `\n${attachmentContext}` : ''))
+    const context = this.director.currentContext(automaticSkills && skillNames(visibleText).length === 0)
+    const payload = embedDirectorContext(visibleText, context + (attachmentContext ? `\n${attachmentContext}` : ''))
     const controller = new AbortController()
     this.promptControllers.add(controller)
     this.sending.set(sessionId, (this.sending.get(sessionId) ?? 0) + 1)
@@ -633,6 +774,29 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
     }
   }
 
+  /** rc.2 exposes one shared settings shell store for its native entry points. */
+  openModelSettings = async (): Promise<void> => {
+    if (this.finishModelSettings) throw new Error('Model settings are already open.')
+    const entries = this.ctx.slots?.entries?.('sidebar.settings') ?? []
+    const instance = entries.find(entry => entry.store)?.store?.create() as {
+      getSnapshot?(): { open: boolean }
+      subscribe?(listener: () => void): () => void
+      actions?: { openSection?(section: string): void }
+    } | undefined
+    if (!instance?.actions?.openSection || !instance.getSnapshot || !instance.subscribe) throw new Error('dsh model settings are unavailable. Open Models from dsh settings, then return to this chat.')
+    await new Promise<void>((resolve, reject) => {
+      let unsubscribe: (() => void) | undefined
+      const finish = (): void => { unsubscribe?.(); this.finishModelSettings = undefined; resolve() }
+      this.finishModelSettings = finish
+      try {
+        instance.actions!.openSection!('models')
+        unsubscribe = instance.subscribe!(() => { if (!instance.getSnapshot!().open) finish() })
+        if (!instance.getSnapshot!().open) finish()
+      } catch (error) { unsubscribe?.(); this.finishModelSettings = undefined; reject(error) }
+    })
+    if (!this.disposed && this.binding !== undefined) await this.refreshModels()
+  }
+
   clearError = (): void => {
     if (this.sessionId === null) {
       this.unboundError = null
@@ -651,6 +815,7 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
   dispose = (): void => {
     if (this.disposed) return
     this.disposed = true
+    this.finishModelSettings?.()
     this.detachBinding()
     this.detachModelDirectory()
     this.releaseReference()
@@ -687,6 +852,7 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
       sessionId,
       messages: [],
       running: false,
+      stopping: false,
       sending: sessionId !== null && (this.sending.get(sessionId) ?? 0) > 0,
       error: sessionId === null ? null : this.localErrors.get(sessionId) ?? null,
       models: EMPTY_MODEL_DIRECTORY,
@@ -695,22 +861,30 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
     this.followBinding()
   }
 
-  private readonly followModelDirectory = (): void => {
-    if (this.disposed || this.sessionId === null || this.binding === undefined || this.modelDirectory !== undefined) return
+  refreshModels = async (): Promise<void> => {
+    const sessionId = this.sessionId
+    const binding = this.binding
+    if (this.disposed || sessionId === null) return
+    this.modelDirectoryError = null
     try {
-      const sessionId = this.sessionId
-      const directory = this.ctx.modelDirectories.directoryFor(sessionId as SessionId)
-      this.modelDirectory = directory
-      this.disposeModels = directory.store.subscribe(this.rebuild)
-      void directory.load().catch((error: unknown) => {
-        if (this.modelDirectory !== directory || this.sessionId !== sessionId) return
-        this.modelDirectoryError = error instanceof Error ? error.message : String(error)
-        if (!this.disposed) this.rebuild()
-      })
+      if (binding === undefined) throw new Error('The linked chat session is unavailable.')
+      if (this.modelDirectory === undefined) {
+        const directory = this.ctx.modelDirectories.directoryFor(sessionId as SessionId)
+        this.disposeModels = directory.store.subscribe(() => {
+          this.modelDirectoryError = null
+          this.rebuild()
+        })
+        this.modelDirectory = directory
+      }
+      await this.modelDirectory.load()
     } catch (error) {
-      this.modelDirectoryError = error instanceof Error ? error.message : String(error)
+      if (!this.disposed && this.sessionId === sessionId && this.binding === binding) {
+        this.modelDirectoryError = error instanceof Error ? error.message : String(error)
+      }
+      throw error
+    } finally {
+      if (!this.disposed && this.sessionId === sessionId && this.binding === binding) this.rebuild()
     }
-    this.rebuild()
   }
 
   private readonly followBinding = (): void => {
@@ -730,7 +904,7 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
         this.disposeEvents = binding.eventSource.subscribe(this.rebuild)
         this.inbox = binding.session.projections.faceOf('inbox')
         this.disposeInbox = this.inbox.subscribe(this.rebuild)
-        this.followModelDirectory()
+        void this.refreshModels().catch(() => { /* The model picker shows the load error. */ })
         this.rebuild()
       }).catch((error: unknown) => {
         if (this.disposed || this.reference !== reference || this.sessionId !== sessionId) return
@@ -755,6 +929,7 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
         sessionId,
         messages: [],
         running: false,
+        stopping: false,
         sending: sessionId !== null && (this.sending.get(sessionId) ?? 0) > 0,
         error: sessionId === null
           ? this.unboundError
@@ -776,6 +951,7 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
       sessionId,
       messages: foldMessages(binding.eventSource.getSnapshot().entries, nativeSnapshot, this.inbox?.getSnapshot()),
       running: nativeSnapshot.running === true,
+      stopping: this.stopping.has(sessionId),
       sending: (this.sending.get(sessionId) ?? 0) > 0,
       error: this.localErrors.get(sessionId) ?? visibleNativeError,
       models: this.modelSnapshot(),
@@ -784,9 +960,9 @@ export class ProjectChatSource implements ObservableSource<ProjectChatSnapshot> 
 
   private modelSnapshot(): ChatModelDirectoryState {
     const current = this.modelDirectory?.store.getSnapshot()
-    if (current !== undefined) return current
-    if (this.modelDirectoryError === null) return EMPTY_MODEL_DIRECTORY
-    return { ...EMPTY_MODEL_DIRECTORY, status: 'error', error: this.modelDirectoryError }
+    const snapshot = current ?? EMPTY_MODEL_DIRECTORY
+    if (this.modelDirectoryError === null || snapshot.error !== null) return snapshot
+    return { ...snapshot, status: 'error', error: this.modelDirectoryError }
   }
 
   private detachBinding(): void {
