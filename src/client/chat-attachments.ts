@@ -65,6 +65,24 @@ export class ChatAttachmentRegistry {
     this.entries = [...this.entries]; this.publish()
     return item
   }
+  async addImageAsset(asset: AssetRef): Promise<ChatAttachment> {
+    await this.load()
+    const existing = this.entries.find(item => !item.sent && item.kind === 'image' && item.asset?.id === asset.id)
+    if (existing) return existing
+    const { entry } = await this.call({ action: 'reserve', id: crypto.randomUUID(), kind: 'image', name: asset.name, assetId: asset.id })
+    const item = this.fromRemote(entry)
+    if (!this.disposed) { this.entries = [...this.entries, item]; this.publish() }
+    return item
+  }
+
+  async nativeImageFile(item: ChatAttachment): Promise<File | undefined> {
+    if (item.file) return item.file.size <= 8 * 1024 * 1024 ? item.file : undefined
+    const asset = item.asset
+    if (!asset || asset.size > 8 * 1024 * 1024) return undefined
+    const response = await fetch(`/api/video-director/assets/${encodeURIComponent(asset.id)}`, { credentials: 'same-origin' })
+    if (!response.ok) throw new Error(`Could not load “${item.name}” for chat.`)
+    return new File([await response.blob()], asset.name, { type: asset.mimeType })
+  }
   addFolder(files: File[]): Promise<ChatAttachment> {
     if (files.length > 5000) return Promise.reject(new Error('A folder can contain at most 5000 files.'))
     return this.add('folder', files[0]?.webkitRelativePath.split('/')[0] || 'Folder', { files })
@@ -114,6 +132,16 @@ export class ChatAttachmentRegistry {
     for (const item of this.entries) if (item.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(item.previewUrl)
     this.entries = []; this.listeners.clear()
   }
+}
+
+/** Image labels belong to the draft. The registry keeps the original tool aliases. */
+export function draftChatReferences(entries: ChatAttachment[]): ChatAttachment[] {
+  let imageNumber = 0
+  return entries.flatMap(item => {
+    if (item.kind !== 'image') return [item]
+    if (item.sent) return []
+    return [{ ...item, alias: `<Image ${++imageNumber}>` }]
+  })
 }
 
 /** Replace by stable identity in one pass so renumbering cannot cascade. */

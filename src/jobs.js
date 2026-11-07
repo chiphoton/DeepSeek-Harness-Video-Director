@@ -245,6 +245,11 @@ export class JobManager {
     const workflowRunMode = request.workflowRunMode === undefined
       ? undefined
       : string(request.workflowRunMode, 'workflowRunMode', { min: 3, max: 32 })
+    const qualityPlanId = request.qualityPlanId === undefined ? undefined : uuid(request.qualityPlanId, 'qualityPlanId')
+    if (qualityPlanId !== undefined) {
+      const run = workflowRunId ? await this.store.getVdRun(projectId, workflowRunId) : null
+      if (run?.qualityPlanId !== qualityPlanId) throw new DirectorInputError('job quality metadata does not match its vd-run')
+    }
     if (workflowRunMode !== undefined && !['all', 'selected', 'from-selection', 'dependencies'].includes(workflowRunMode)) {
       throw new DirectorInputError(`unsupported workflowRunMode: ${workflowRunMode}`)
     }
@@ -297,6 +302,7 @@ export class JobManager {
       ...(clientRunId === undefined ? {} : { clientRunId }),
       ...(workflowRunId === undefined ? {} : { workflowRunId }),
       ...(workflowRunMode === undefined ? {} : { workflowRunMode }),
+      ...(qualityPlanId === undefined ? {} : { qualityPlanId }),
       ...(batchIndex === undefined ? {} : { batchIndex }),
       ...(batchSize === undefined ? {} : { batchSize }),
       ...(batchRunId === undefined ? {} : { batchRunId, caseId, caseIndex }),

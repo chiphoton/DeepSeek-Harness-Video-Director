@@ -7,8 +7,13 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createServer } from 'node:http'
 import * as plugin from '../index.js'
+import { canvasTool } from '../src/canvas-agent.js'
+import { libraryTool } from '../src/library-agent.js'
+import { qualityTool } from '../src/quality-agent.js'
+import { workspaceTool } from '../src/workspace-agent.js'
+import { testHost } from '../test/fixtures/director-host.js'
 
-const { Context, ClientSessions, Session, ClientAssistantStream, ProjectChatSource, HostConnectionService, bridge, createWebConnectionRpc } = await import(pathToFileURL(process.env.VD_DSH_SURFACES))
+const { Context, Service, ClientSessions, Session, ClientAssistantStream, ProjectChatSource, HostConnectionService, bridge, createWebConnectionRpc, createSettingsShellStore, ModelDirectoryResolver, directorInject } = await import(pathToFileURL(process.env.VD_DSH_SURFACES))
 const runtimeRequire = createRequire(join(process.env.VD_DSH_RUNTIME, 'package.json'))
 const native = name => import(pathToFileURL(runtimeRequire.resolve(`@deepseek-ai/${name}`)))
 const ok = value => ({ ok: true, value })
@@ -24,7 +29,7 @@ function director(sessionId = SID) {
   return { ...observable({ project: { id: sessionId, sessionId } }), currentContext: () => '' }
 }
 async function chatFixture(t, options = {}) {
-  const session = new Session(SID, { session: { prompt: options.prompt ?? (async () => ok({ accepted: true })) } })
+  const session = new Session(SID, { session: { prompt: async () => ok({ accepted: true }), ...options } })
   const binding = { session, eventSource: session.eventSource }
   const models = { store: observable(idleModels), load: async () => idleModels, select: options.select ?? (async () => ok(undefined)) }
   let references = 0
@@ -45,6 +50,240 @@ const assistant = (seq, text, surfaceOp = 'append', turn = 0) => ({ type: 'event
   type: 'assistant/message', seq, time: seq, surfaceOp,
   data: { turn, step: 0, stream: [], message: { id: `assistant-${seq}`, role: 'assistant', content: [{ type: 'text', text }] } },
 } })
+
+test('Video Director publishes valid command schemas to the native model tool registry', async () => {
+  const { assertSupportedJsonSchema, validateJsonSchemaValue } = await native('dsh-tools')
+  for (const [createTool, command] of [[canvasTool, 'help'], [libraryTool, 'list'], [qualityTool, 'create'], [workspaceTool, 'manifest']]) {
+    const { parameters } = createTool({})
+    assertSupportedJsonSchema(parameters)
+    assert.deepEqual(validateJsonSchemaValue(parameters, { projectId: 'synthetic', command }), [])
+    assert.notEqual(validateJsonSchemaValue(parameters, { projectId: 'synthetic', action: command }).length, 0)
+  }
+  const { parameters } = canvasTool({})
+  const edit = { projectId: 'synthetic', command: 'edit', args: { expectedDraftRevision: 0, edits: [{ op: 'add', kind: 'load-text', id: 'prompt' }] } }
+  assert.deepEqual(validateJsonSchemaValue(parameters, edit), [])
+  assert.notEqual(validateJsonSchemaValue(parameters, { ...edit, args: { ...edit.args, expectedDraftRevision: '0' } }).length, 0)
+  assert.notEqual(validateJsonSchemaValue(parameters, { ...edit, args: { ...edit.args, edits: [{ kind: 'load-text' }] } }).length, 0)
+})
+
+test('native DSH accepts the built-in skill, dry run, and canvas edit results as lossless JSON', async t => {
+  const { Context: HostContext } = await native('cordis')
+  const { default: SystemPrompt } = await native('dsh-system-prompt')
+  const { default: ToolRuntime } = await native('dsh-tools')
+  const directory = await mkdtemp(join(tmpdir(), 'vd-native-canvas-'))
+  const host = await testHost(directory)
+  const ctx = new HostContext()
+  t.after(async () => { await ctx.fiber.dispose(); await host.close(); await rm(directory, { recursive: true, force: true }) })
+  await ctx.plugin(SystemPrompt)
+  await ctx.plugin(ToolRuntime)
+  ctx.tools.register(libraryTool(host))
+  ctx.tools.register(canvasTool(host, ctx))
+  const project = await host.store.createProject({ name: 'Synthetic native canvas', sessionId: SID })
+  let sequence = 0
+  const call = async (name, command, args = {}) => {
+    const result = await ctx.tools.execute({ name, callId: `synthetic-${++sequence}`, signal: new AbortController().signal,
+      arguments: { projectId: project.id, command, args }, agent: { ctx, session: { id: project.sessionId } } })
+    assert.equal(result.isError, false, JSON.stringify(result.content))
+    return result.value
+  }
+  const { items: [skill] } = await call('vd_library', 'list', { name: 'canvas-builder' })
+  await call('vd_library', 'bind', { id: skill.id, revision: skill.revision })
+  assert.match((await call('vd_library', 'load', { id: skill.id })).content, /plan-edit/)
+  assert.equal((await call('vd_canvas', 'catalog', { query: 'Text Input' })).items[0].kind, 'load-text')
+  assert.equal((await call('vd_canvas', 'definition', { type: 'load-text' })).outputs[0].handle, 'out')
+  const args = { expectedDraftRevision: 0, edits: [
+    { op: 'add', id: 'brief', kind: 'load-text', data: { text: 'A synthetic scene.' } },
+    { op: 'add', id: 'preview', type: 'core.preview' },
+    { op: 'connect', id: 'text-preview', source: 'brief', target: 'preview' },
+  ] }
+  assert.equal((await call('vd_canvas', 'plan-edit', args)).edgeCount, 1)
+  assert.equal((await call('vd_canvas', 'summary')).edgeCount, 0)
+  assert.equal((await call('vd_canvas', 'edit', args)).draftRevision, 1)
+  assert.equal((await call('vd_canvas', 'nodes')).items.length, 2)
+  assert.equal((await call('vd_canvas', 'edges')).items[0].targetHandle, 'in')
+})
+
+test('Stop cancels the linked native session and allows retry if cancellation fails', async t => {
+  const requests = []
+  let response = { ok: false, error: { code: 'session/failed', message: 'Could not stop' } }
+  const { chat, session } = await chatFixture(t, { cancel: async request => { requests.push(request); return response } })
+  session.handleRunning(true)
+  await tick()
+  await chat.stop()
+  assert.equal(chat.getSnapshot().running, true)
+  assert.equal(chat.getSnapshot().stopping, false)
+  assert.equal(chat.getSnapshot().error, 'Could not stop')
+  response = ok({ accepted: true })
+  const stopping = chat.stop()
+  assert.equal(chat.getSnapshot().stopping, true)
+  await chat.stop()
+  await stopping
+  session.handleRunning(false)
+  await tick()
+  assert.deepEqual(requests, [{ sessionId: SID }, { sessionId: SID }])
+  assert.equal(chat.getSnapshot().running, false)
+  assert.equal(chat.getSnapshot().stopping, false)
+  assert.equal(chat.getSnapshot().error, null)
+})
+
+test('sent image references stay attached to their user bubble and resolve through the owning session', async t => {
+  const requests = []
+  const red = { attachmentId: 'red-ref', name: 'red.png', mediaType: 'image/png', bytes: 3, width: 1, height: 1 }
+  const blue = { ...red, attachmentId: 'blue-ref', name: 'blue.png' }
+  const { chat, session } = await chatFixture(t, { attachment: async request => {
+    requests.push(request)
+    return ok({ attachment: red, data: 'AQID' })
+  } })
+  const message = user('image-turn', 'Describe these frames')
+  message.content.unshift(...[red, blue].map(attachment => ({ type: 'image', attachment })))
+  session.eventSource.replace([{ type: 'event', event: { type: 'user/message', seq: 2, time: 2, surfaceOp: 'append', data: message } }], false)
+  const [row] = chat.getSnapshot().messages
+  assert.equal(row.text, 'Describe these frames')
+  assert.deepEqual(row.images.map(image => image.attachmentId), ['red-ref', 'blue-ref'])
+  const blob = await chat.readImage(SID, row.images[0].attachmentId)
+  assert.equal(blob.type, 'image/png')
+  assert.equal(blob.size, 3)
+  assert.deepEqual(requests, [{ sessionId: SID, attachmentId: 'red-ref' }])
+  await assert.rejects(chat.readImage('another-session', 'red-ref'), /session changed/)
+})
+
+test('assistant and tool image blocks are preserved in the sidebar transcript', async t => {
+  const { chat, session } = await chatFixture(t)
+  const image = { type: 'image', attachment: { attachmentId: 'synthetic-image', name: 'grid.png' } }
+  const reply = assistant(3, 'Preview')
+  reply.event.data.message.content = [image]
+  session.eventSource.replace([
+    { type: 'event', event: { type: 'tool/call', seq: 1, data: { name: 'vd_canvas', callId: 'view', arguments: '{"command":"image"}' } } },
+    { type: 'event', event: { type: 'tool/result', seq: 2, data: { message: { id: 'tool-image', content: [{ type: 'tool-result', toolCallId: 'view', content: [image] }] } } } },
+    reply,
+  ], false)
+  const rows = chat.getSnapshot().messages
+  assert.deepEqual(rows.map(row => [row.kind, row.callId, row.toolCommand, row.images?.[0]?.attachmentId]), [
+    ['tool-call', 'view', 'image', undefined],
+    ['tool-result', 'view', undefined, 'synthetic-image'],
+    ['assistant', undefined, undefined, 'synthetic-image'],
+  ])
+  assert.equal(rows[1].text, '')
+  assert.equal(rows[2].text, '')
+})
+
+test('historical image labels are local to each prompt and replies keep their recorded model', async t => {
+  const { chat, session } = await chatFixture(t)
+  const prompt = (seq, first, second, local) => {
+    const attachments = [first, second].map((number, i) => ({
+      alias: `<Image ${number}>`, kind: 'image',
+      ...(local ? { label: `Image ${i + 1}`, imageIndex: i + 1 } : {}),
+    }))
+    const text = `Compare <Image ${local ? 1 : first}> and <Image ${local ? 2 : second}>.\n\n<dsh-video-director-context version="1">\n{}\n${JSON.stringify({ attachments })}\n</dsh-video-director-context>`
+    return { type: 'event', event: { type: 'user/message', seq, data: user(`user-${seq}`, text) } }
+  }
+  const first = assistant(1, 'Image 3 is red and Image 4 is blue.', 'append', 0)
+  first.event.data.message.source = { kind: 'model', provider: 'ollama', model: 'qwen-q4' }
+  const second = assistant(3, 'Image 2 is red and Image 5 is blue.', 'append', 1)
+  second.event.data.message.source = { kind: 'model', provider: 'ollama', model: 'qwen-q6' }
+  session.eventSource.replace([prompt(0, 3, 4, false), first, prompt(2, 5, 6, true), second], false)
+  const rows = chat.getSnapshot().messages
+  assert.deepEqual(rows.map(row => row.text), [
+    'Compare <Image 1> and <Image 2>.',
+    'Image 1 is red and Image 2 is blue.',
+    'Compare <Image 1> and <Image 2>.',
+    'Image 2 is red and Image 1 is blue.',
+  ])
+  assert.deepEqual(rows.filter(row => row.role === 'assistant').map(row => row.model?.model), ['qwen-q4', 'qwen-q6'])
+})
+
+test('a follow-up sends its local image labels with the new images and their stable tool aliases', async t => {
+  const { chat, selection } = await chatFixture(t)
+  let number = 1
+  const sent = []
+  Object.assign(selection, {
+    prepareChatSkills: async () => {},
+    prepareChatContext: async () => {},
+    chatReferences: async input => {
+      if (input.action === 'list') return { entries: [{ id: 'old', alias: '<Image 1>', kind: 'image', name: 'old.png', sent: true, ready: true }] }
+      if (input.action === 'reserve') return { entry: { id: input.id, alias: `<Image ${++number}>`, kind: input.kind, name: input.name, ready: true } }
+      if (input.action === 'sent') sent.push(input.id)
+    },
+  })
+  const registry = chat.attachments()
+  const first = await registry.addFile(new File(['a'], 'a.png', { type: 'image/png' }))
+  const second = await registry.addFile(new File(['b'], 'b.png', { type: 'image/png' }))
+  let payload
+  chat.send = async (text, files, context) => { payload = { text, files, context: JSON.parse(context) } }
+  await chat.sendAttachments('Compare <Image 1> and <Image 2>.')
+  assert.equal(payload.text, 'Compare <Image 1> and <Image 2>.')
+  assert.deepEqual(payload.files.map(file => file.name), ['a.png', 'b.png'])
+  assert.deepEqual(payload.context.attachments.map(({ alias, label, imageIndex }) => [alias, label, imageIndex]), [
+    ['<Image 2>', 'Image 1', 1], ['<Image 3>', 'Image 2', 2],
+  ])
+  assert.deepEqual(sent, [first.id, second.id])
+})
+
+test('Director can open a fresh native model directory and pick models added through Settings', async t => {
+  const ctx = new Context()
+  t.after(() => ctx.fiber.dispose())
+  const shell = createSettingsShellStore().create()
+  const selection = { provider: 'synthetic', model: 'new-model' }
+  let groups = []
+  let loads = 0
+  let selected
+  const events = new Map()
+  // The real gateway exposes each remote namespace as a separate Cordis service.
+  class TestRemote extends Service {
+    constructor(scope) { super(scope, 'remote') }
+    $on(name, listener) { events.set(name, listener) }
+  }
+  await ctx.plugin(TestRemote)
+  const projected = observable({ next: null })
+  const sessionRpc = {
+    async modelCatalog() {
+      loads++
+      return ok({ default: selection, groups, failures: [], routableProviders: groups.map(group => group.id) })
+    },
+    async selectModel(request) {
+      selected = request
+      projected.publish({ next: selection })
+      return ok(undefined)
+    },
+  }
+  await ctx.plugin(scope => { scope.provide('remote.session', sessionRpc) })
+  const session = new Session(SID, { session: { prompt: async () => ok({ accepted: true }) } })
+  const binding = { session: { getSnapshot: () => session.getSnapshot(), subscribe: listener => session.subscribe(listener),
+    projections: { faceOf: name => name === 'modelSelection' ? projected : session.projections.faceOf(name) } }, eventSource: session.eventSource }
+  ctx.provide('sessions', {
+    list: observable({ byId: { [SID]: { id: SID } } }),
+    retain: () => ({ binding, ready: Promise.resolve(binding), release() {} }),
+    scope: () => ctx, binding: () => binding, subagentAddress: () => undefined,
+  })
+  ctx.provide('slots', { entries: name => { assert.equal(name, 'sidebar.settings'); return [{ store: { create: () => shell } }] } })
+  ctx.provide('connection', {})
+  ctx.provide('uiWorkspace', {})
+  await ctx.plugin(ModelDirectoryResolver)
+  let chat
+  await ctx.plugin({ inject: directorInject, apply(scope) {
+    chat = new ProjectChatSource(scope, director())
+    scope.effect(() => () => chat.dispose())
+  } })
+  await tick()
+  assert.equal(chat.getSnapshot().models.error, null)
+  assert.deepEqual(chat.getSnapshot().models.groups, [])
+  const before = loads
+  const open = chat.openModelSettings()
+  assert.equal(shell.getSnapshot().activeId, 'models')
+  assert.equal(shell.getSnapshot().open, true)
+  groups = [{ id: 'synthetic', name: 'Synthetic', models: [{ id: 'new-model', name: 'New model' }] }]
+  events.get('settings/document-updated')()
+  shell.actions.close()
+  await open
+  assert.equal(loads, before + 1)
+  assert.equal(chat.getSnapshot().models.groups[0].models[0].id, 'new-model')
+  await chat.selectModel(selection)
+  assert.deepEqual(selected, { sessionId: SID, ...selection })
+  assert.equal(chat.getSnapshot().models.routable, true)
+  const reopened = chat.openModelSettings()
+  chat.dispose()
+  await reopened
+})
 
 test('real ClientSessions retains catalogued sessions, releases on switch/dispose, and never navigates', async t => {
   const ctx = new Context()
@@ -151,9 +390,11 @@ test('real assistant stream deltas display once and settle without duplicate tex
   stream.replace([])
   stream.acceptFrame({ type: 'start', attemptId: 'attempt-1', turn: 0, step: 0, startedAfterSeq: -1 })
   const delta = stream.acceptFrame({ type: 'chunk', attemptId: 'attempt-1', index: 0, time: 1, chunk: { type: 'text-delta', text: 'Live answer' } })
-  session.eventSource.replace([delta.entry], false)
+  const header = { type: 'event', event: { type: 'request/header', seq: -1, data: { header: { config: { provider: 'ollama', model: 'qwen-q6' } } } } }
+  session.eventSource.replace([header, delta.entry], false)
   assert.deepEqual(chat.getSnapshot().messages.map(row => [row.text, row.status]), [['Live answer', 'streaming']])
-  session.eventSource.replace([delta.entry, assistant(0, 'Final answer')], false)
+  assert.equal(chat.getSnapshot().messages[0].model?.model, 'qwen-q6')
+  session.eventSource.replace([header, delta.entry, assistant(0, 'Final answer')], false)
   assert.deepEqual(chat.getSnapshot().messages.map(row => [row.text, row.status]), [['Final answer', 'complete']])
   session.eventSource.settleAssistant('attempt-1')
   assert.equal(chat.getSnapshot().messages.length, 1)

@@ -87,8 +87,8 @@ pnpm dsh web
 
 - **Ollama：**默认地址为 `127.0.0.1:11434`；在 Ollama Host 安装 Qwen3.8-27B 等模型，再到 Video-Director 中选择。
 - **ComfyUI：**默认地址为 `127.0.0.1:8188`；在 ComfyUI 服务端安装目标 comfyui-workflow 所需的模型与 ComfyUI custom-node package。
-- **OpenAI Compatible：**填写服务的 Base URL 与 API Key，然后刷新以获取模型列表。
-- **Codex Coding Plan：**使用当前机器已有的 Codex 登录来运行 Prompt 与图像 Workflow。模型列表和默认推理强度从已安装的 CLI 获取，可通过“刷新”更新。“快速模式（优先处理）”默认关闭；若 Codex 不在 PATH 中，可设置 `DSH_VIDEO_DIRECTOR_CODEX_PATH`。
+- **OpenAI Compatible：**Base URL 与 API Key 默认留空。填写服务的连接信息后，点击“刷新”获取模型列表。
+- **Codex Coding Plan：**使用本机的 Codex 登录来运行 Prompt 与图像 Workflow。如需登录，在终端运行 `codex login`，然后点击“刷新”加载 CLI 的模型列表。“快速模式（优先处理）”默认关闭；若 Codex 不在 PATH 中，可设置 `DSH_VIDEO_DIRECTOR_CODEX_PATH`。
 
 连接字段在失去焦点或按 Enter 时自动保存。“刷新”检查已保存的连接并显示模型列表；生成模型仍在各个节点中选择。ComfyUI 将已安装的模型文件分为 **checkpoints**、**diffusion_models**、**loras**、**vae** 四个标签页，并支持分类内搜索。采样器、调度器及其他工作流选项仍在节点中设置。“卸载模型”仅释放对应卡片服务中已加载的 Ollama 模型，或请求 ComfyUI 清理模型与缓存，不删除模型文件。窄屏下刷新和卸载使用图标。API Key 留空会保留已保存的密钥；“清除已保存的密钥”会显式移除其设置覆盖值。
 

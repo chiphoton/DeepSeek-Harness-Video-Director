@@ -4,7 +4,11 @@ import { DirectorController } from './controller'
 import type { ClientContext } from './types'
 
 /** Cordis services used by the browser half of Video Director. */
-export const inject = ['slots', 'sessions', 'connection', 'modelDirectories', 'uiWorkspace']
+export const inject = [
+  'slots', 'sessions', 'connection', 'modelDirectories', 'uiWorkspace',
+  // A fresh model directory resolves the session remote in its caller's scope.
+  'remote', 'remote.session',
+]
 
 /**
  * Register an additive launcher and a frame-wide studio surface. The plugin

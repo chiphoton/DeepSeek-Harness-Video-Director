@@ -1214,6 +1214,7 @@ function DefinitionField(props: {
   choices?: string[]
 }): ReactNode {
   useLanguage()
+  const label = t(props.field.label)
   const stored = NODE_DATA_FIELD_IDS.has(props.field.id)
     ? props.data[props.field.id]
     : props.data.workflowValues?.[props.field.id]
@@ -1226,13 +1227,13 @@ function DefinitionField(props: {
     }
   }
   if (props.field.type === 'text' && fieldInputModeEnabled(props.data, props.field.id)) {
-    return <ParameterInputPlaceholder label={props.field.label} fieldId={props.field.id} inputPorts={props.inputPorts} />
+    return <ParameterInputPlaceholder label={label} fieldId={props.field.id} inputPorts={props.inputPorts} />
   }
   if (props.field.type === 'boolean') {
     return (
-      <label title={props.field.description || props.field.label} style={{ display: 'flex', alignItems: 'center', gap: 7, color: palette.secondary, fontSize: 10 }}>
+      <label title={props.field.description || label} style={{ display: 'flex', alignItems: 'center', gap: 7, color: palette.secondary, fontSize: 10 }}>
         <input className="nodrag" type="checkbox" checked={value === true} onChange={event => update(event.target.checked)} />
-        {props.field.label}
+        {label}
       </label>
     )
   }
@@ -1241,8 +1242,8 @@ function DefinitionField(props: {
   if (choicePresentation !== undefined) {
     const { choices } = choicePresentation
     return (
-      <label title={props.field.description || props.field.label} style={labelStyle}>
-        <span>{props.field.label}</span>
+      <label title={props.field.description || label} style={labelStyle}>
+        <span>{label}</span>
         <select className="nodrag" value={current} disabled={choicePresentation.disabled} onChange={event => update(event.target.value)} style={fieldStyle}>
           {choicePresentation.currentUnavailable ? <option value={current}>{current} {t("· workflow default（API 未返回）")}</option> : null}
           {choices.map(choice => <option key={choice} value={choice}>{choice}</option>)}
@@ -1252,8 +1253,8 @@ function DefinitionField(props: {
   }
   if (props.field.control === 'textarea') {
     return (
-      <label title={props.field.description || props.field.label} style={labelStyle}>
-        <span>{props.field.label}</span>
+      <label title={props.field.description || label} style={labelStyle}>
+        <span>{label}</span>
         <ImeSafeTextarea
           className="nodrag nowheel"
           value={String(value)}
@@ -1267,8 +1268,8 @@ function DefinitionField(props: {
     )
   }
   return (
-    <label title={props.field.description || props.field.label} style={labelStyle}>
-      <span>{props.field.label}</span>
+    <label title={props.field.description || label} style={labelStyle}>
+      <span>{label}</span>
       {props.field.type === 'number' ? props.field.control === 'slider' ? <input
         className="nodrag nowheel"
         type="range"

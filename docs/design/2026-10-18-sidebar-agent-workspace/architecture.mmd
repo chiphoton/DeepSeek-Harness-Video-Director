@@ -1,0 +1,17 @@
+flowchart TB
+  UI[Sidebar and canvas] -->|Browser adapter| CMD[VD command interface]
+  DSH[DSH agent] -->|Tool adapter| CMD
+  CMD --> GUARD[Scope, revisions, response budgets, receipts]
+  GUARD --> CANVAS[Canvas module]
+  GUARD --> LIB[Library module]
+  GUARD --> ASSETS[Assets module]
+  GUARD --> RUNS[Runs and quality module]
+  CANVAS --> STORE[(Local VD data folder)]
+  LIB --> STORE
+  ASSETS --> STORE
+  RUNS --> STORE
+  LIB -->|Pinned selected skill versions| SKILL[DSH skill adapter]
+  SKILL --> DSH
+  DSH --- OWN[DSH owns conversations, models, credentials]
+  CMD -->|View-only commands| VIEW[Connected-view adapter]
+  VIEW --> UI

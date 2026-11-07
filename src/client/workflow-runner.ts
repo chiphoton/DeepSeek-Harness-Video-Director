@@ -95,7 +95,7 @@ function runScope(
 
 export function planVdRun(
   graph: DirectorGraph,
-  options: { mode: VdRunMode; selectedNodeIds?: readonly string[] },
+  options: { mode: VdRunMode; selectedNodeIds?: readonly string[]; allowPassive?: boolean },
 ): VdRunPlan {
   const scope = runScope(graph, options.mode, options.selectedNodeIds ?? [])
   const nodesById = new Map(graph.nodes.map(node => [node.id, node]))
@@ -141,7 +141,7 @@ export function planVdRun(
     const node = nodesById.get(id)
     return node !== undefined && node.data.frozen !== true && isExecutableVdNodeKind(node.data.kind)
   })
-  if (runnableIds.length === 0 && frozenNodeIds.length === 0 && ![...scope].some(id => nodesById.get(id)?.data.kind === 'batch-output')) throw new Error('This vd-run contains no executable vd-nodes.')
+  if (!options.allowPassive && runnableIds.length === 0 && frozenNodeIds.length === 0 && ![...scope].some(id => nodesById.get(id)?.data.kind === 'batch-output')) throw new Error('This vd-run contains no executable vd-nodes.')
   const runnable = new Set(runnableIds)
   const dependencies = new Map(runnableIds.map(id => [id, new Set<string>()]))
   for (const target of runnableIds) {

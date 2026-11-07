@@ -48,6 +48,17 @@ function cleanBaseUrl(value) {
   return url.toString().replace(/\/$/u, '')
 }
 
+function hasApiKey(provider) {
+  return typeof provider.apiKey === 'string' && provider.apiKey.length > 0
+}
+
+function requireOpenAiConnection(provider) {
+  if (!provider.baseUrl) throw new DirectorInputError(`${provider.label} requires a Base URL in Settings → Connections`)
+  if (provider.requiresApiKey === true && !hasApiKey(provider)) {
+    throw new DirectorInputError(`${provider.label} requires an API key in Settings → Connections`)
+  }
+}
+
 function textParts(content) {
   if (!Array.isArray(content)) return ''
   return content
@@ -467,7 +478,7 @@ export class ProviderRuntime {
       model: provider.model,
       imageModel: provider.imageModel,
       requiresApiKey: provider.requiresApiKey === true,
-      apiKeySet: typeof provider.apiKey === 'string' && provider.apiKey.length > 0,
+      apiKeySet: hasApiKey(provider),
       capabilities: provider.kind === 'ollama'
         ? ['text', 'vision']
         : provider.kind === 'codex-plan'
@@ -476,7 +487,7 @@ export class ProviderRuntime {
           ? ['text', 'vision', 'image']
           : ['image', 'audio', 'video', 'workflow'],
       configured: provider.kind === 'openai-compatible'
-        ? provider.requiresApiKey !== true || (typeof provider.apiKey === 'string' && provider.apiKey.length > 0)
+        ? Boolean(provider.baseUrl) && (provider.requiresApiKey !== true || hasApiKey(provider))
         : provider.kind === 'ollama'
           ? typeof provider.baseUrl === 'string' && provider.baseUrl.length > 0
         : provider.kind === 'comfyui-mcp'
@@ -566,7 +577,7 @@ export class ProviderRuntime {
       return { ...ollamaModelCatalog(body.models), loadedModels: ollamaLoadedModels(runningBody.models) }
     }
     if (provider.kind === 'openai-compatible') {
-      if (provider.baseUrl === undefined) throw new Error(`${provider.label} requires an API endpoint`)
+      requireOpenAiConnection(provider)
       const response = await request(this.fetch, `${provider.baseUrl}/models`, { headers: this.#headers(provider) }, {
         signal, timeoutMs, label: `${provider.label} model discovery`,
       })
@@ -751,10 +762,7 @@ export class ProviderRuntime {
     if (provider.kind !== 'openai-compatible') {
       throw new DirectorInputError(`${provider.label} does not support OpenAI-compatible audio transcription`)
     }
-    if (provider.baseUrl === undefined) throw new Error(`${provider.label} requires an API endpoint`)
-    if (provider.requiresApiKey === true && (typeof provider.apiKey !== 'string' || provider.apiKey.length === 0)) {
-      throw new DirectorInputError(`${provider.label} requires an API key for audio transcription`)
-    }
+    requireOpenAiConnection(provider)
     const input = record(inputValue, 'audio transcription')
     const model = string(input.model, 'audio transcription model', { min: 1, max: MAX_MODEL_ID_LENGTH })
     const name = string(input.name, 'audio file name', { min: 1, max: 512 })
@@ -837,6 +845,7 @@ export class ProviderRuntime {
       requestValue.experimentalDuration = duration < 5
     }
     const provider = this.#provider(string(requestValue.providerId, 'providerId', { min: 1, max: 128 }))
+    if (provider.kind === 'openai-compatible') requireOpenAiConnection(provider)
     if ((requestValue.operation === 'prompt-enhancer' || requestValue.operation === 'text-generation') && provider.kind === 'codex-plan') {
       return this.codexPlan.runText(provider, requestValue, signal, progress)
     }
@@ -1468,7 +1477,7 @@ export class ProviderRuntime {
   }
 
   #headers(provider) {
-    return typeof provider.apiKey === 'string' && provider.apiKey.length > 0
+    return hasApiKey(provider)
       ? { Authorization: `Bearer ${provider.apiKey}` }
       : {}
   }

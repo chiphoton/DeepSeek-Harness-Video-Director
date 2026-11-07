@@ -75,7 +75,7 @@ pnpm dsh web
 
 200 MiB 硬上限为 Harness 的 300 MiB Connection HTTP 请求上限预留了空间：二进制素材编码为 Base64 后约膨胀至原大小的 4/3，外层 JSON 也会产生额外开销。
 
-凭据应放在 Harness 托管配置或环境变量中。示例 Patch 从 `OPENAI_API_KEY` 读取密钥，当前选择 `gpt-5.6-terra` 与 `gpt-image-2`；请按兼容接口实际提供的能力调整模型 id。也可以在右侧**设置 → 连接**中覆盖 Provider 配置；密钥通过 DSH 原生 Settings 保存且不会回显到浏览器。ComfyUI 只需输入 `127.0.0.1:8188`，Host 会自动补成 HTTP URL，REST/MCP 细节不会写进工程或画布节点。Video Project 只保存 Provider id、Workflow/Node 引用与参数，不保存 Token。
+Profile 未设置 `providers` 时，插件会提供内置连接。OpenAI 兼容卡片的 Base URL 与 API Key 默认留空，可在**设置 → 连接**中填写，也可在 Profile 中显式配置 Provider。请通过 Harness 托管设置保存凭据，或在 Profile 中引用环境变量。Host 不会向浏览器回显密钥。ComfyUI 只需输入 `127.0.0.1:8188`，Host 会自动补成 HTTP URL，传输设置保留在 Profile 中。Video Project 只保存 Provider id、Workflow/Node 引用与参数。
 
 Codex Plan Provider 使用官方 [`@openai/codex-sdk`](https://developers.openai.com/codex/sdk/) 和本机现有的 Codex 登录。TEXT WORKFLOW 会在隔离的只读临时目录中运行 Codex Agent 来增强 Prompt；IMAGE WORKFLOW 则调用原生图像生成 Skill，再把单张结果导入 Video Project。它不会把 ChatGPT 订阅转换成 API Key，也不会代理任意 Responses API 请求。两个 Workflow 通过已安装 Codex CLI 的 `app-server` / `model/list` 发现可用模型及其默认推理强度，需要图像输入时会过滤纯文本模型；已失效的保存模型需手动重新选择。成功的目录缓存到 `codex-models.json`，供离线使用。“快速模式（优先处理）”默认关闭，并通过 DSH 原生 Provider 设置持久化。可用 `DSH_VIDEO_DIRECTOR_CODEX_PATH` 指定 CLI 路径；默认优先使用已安装的 CLI。若事件流没有图像数据，图像 Workflow 会从当前 SDK 线程的 `generated_images/<thread-id>/` 复制原生生成结果，原文件保留。
 

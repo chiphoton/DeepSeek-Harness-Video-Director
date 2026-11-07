@@ -3,6 +3,8 @@ import { createReadStream } from 'node:fs'
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { join, resolve } from 'node:path'
+import { digest, fault } from './workspace-files.js'
+import { draftOf, changeSummary, receipt, inverseDraft, applyInverse, operationDigest } from './canvas-history.js'
 import { MAX_BATCH_CASES, validateBatchCase, caseIdentity } from './batch-cases.js'
 import { readVideoProperties } from './video-properties.js'
 import { ProjectFolders } from './project-folders.js'
@@ -116,6 +118,7 @@ function normalizedProject(value, expectedId) {
     updatedAt: string(input.updatedAt, 'project.updatedAt', { min: 20, max: 40 }),
   }
   if (input.hasSavedVersion === false) normalized.hasSavedVersion = false
+  if (input.operationHead !== undefined) normalized.operationHead = uuid(input.operationHead, 'operationHead')
   if (input.draft !== undefined) {
     const draft = record(input.draft, 'project.draft')
     const validated = normalizedProject({ ...normalized, ...draft, id, draft: undefined }, id)
@@ -294,7 +297,7 @@ export class ProjectStore {
       const current = await this.getProject(id)
       this.#checkDraftRevision(current, expectedDraftRevision)
       const project = normalizedProject({ ...current, draftRevision: current.draftRevision + 1, draft: draft === null ? undefined : record(draft, 'draft') }, id)
-      await this.#writeProject(project)
+      await this.#recordDraft(current, project, { kind: 'browser' })
       return projectSummary(project)
     })
   }
@@ -309,19 +312,81 @@ export class ProjectStore {
   }
 
   /** Compare and mutate under the same project lock as browser draft writes. */
-  async mutateDraft(projectId, expectedDraftRevision, mutate) {
+  async mutateDraft(projectId, expectedDraftRevision, mutate, operation = {}) {
     const id = uuid(projectId, 'projectId')
     return this.#withProjectWrite(id, async () => {
       const current = await this.getProject(id)
+      if (operation.id) {
+        uuid(operation.id, 'operationId')
+        const previous = await this.findOperation(current, operation.id)
+        if (previous) {
+          if (previous.requestHash !== operation.requestHash) throw fault('idempotency-conflict', 'This operation ID belongs to different edits.')
+          return { ...projectSummary(current), operation: receipt(previous), replayed: true }
+        }
+      }
       if (expectedDraftRevision === undefined) throw new DirectorInputError('expectedDraftRevision is required for canvas edits')
       this.#checkDraftRevision(current, expectedDraftRevision)
       const draft = await mutate(structuredClone(current.draft ?? {
         name: current.name, graph: current.graph, settings: current.settings, mediaLibrary: current.mediaLibrary,
       }))
       const project = normalizedProject({ ...current, draft, draftRevision: current.draftRevision + 1 }, id)
-      await this.#writeProject(project)
-      return projectSummary(project)
+      const committed = await this.#recordDraft(current, project, operation)
+      return { ...projectSummary(project), operation: receipt(committed) }
     })
+  }
+
+  async #recordDraft(current, project, operation) {
+    const before = draftOf(current)
+    const after = draftOf(project)
+    const changes = changeSummary(before, after)
+    const row = { id: operation.id ?? randomUUID(), parent: current.operationHead ?? null, kind: operation.kind ?? 'agent',
+      createdAt: new Date().toISOString(), beforeRevision: current.draftRevision, draftRevision: project.draftRevision,
+      requestHash: operation.requestHash ?? null, inverse: inverseDraft(before, changes), afterDigest: operationDigest(after, operation.kind), changes,
+      ...(operation.undoOf ? { undoOf: operation.undoOf } : {}) }
+    await mkdir(join(this.projectsDir, current.id, 'operations'), { recursive: true })
+    // Journal first, then publish its head with the draft in one atomic file swap.
+    // An interrupted pre-commit record is unreachable and never appears in history.
+    await this.#atomicJson(join(this.projectsDir, current.id, 'operations', `${row.id}.json`), row)
+    project.operationHead = row.id
+    await this.#writeProject(project)
+    return row
+  }
+
+  async operationHistory(projectId, { before, limit = 20 } = {}) {
+    const project = await this.getProject(projectId)
+    let id = project.operationHead
+    if (before) id = (await this.findOperation(project, uuid(before, 'before')))?.parent
+    const items = []
+    while (id && items.length < Math.max(1, Math.min(50, limit))) {
+      const row = await readJson(join(this.projectsDir, project.id, 'operations', `${id}.json`))
+      if (!row) break
+      items.push(receipt(row)); id = row.parent
+    }
+    return { items, nextBefore: id ? items.at(-1)?.id : null, draftRevision: project.draftRevision }
+  }
+
+  async findOperation(project, operationId) {
+    if (!await readJson(join(this.projectsDir, project.id, 'operations', `${uuid(operationId, 'operationId')}.json`))) return undefined
+    let id = project.operationHead
+    const seen = new Set()
+    while (id && !seen.has(id)) {
+      seen.add(id)
+      const row = await readJson(join(this.projectsDir, project.id, 'operations', `${id}.json`))
+      if (!row) return undefined
+      if (id === operationId) return row
+      id = row.parent
+    }
+  }
+
+  async undoOperation(projectId, operationId, expectedDraftRevision, id = randomUUID()) {
+    uuid(operationId, 'operationId')
+    const current = await this.getProject(projectId)
+    const row = await this.findOperation(current, operationId)
+    if (!row) throw fault('operation-not-found', 'Change record is unavailable.')
+    return this.mutateDraft(projectId, expectedDraftRevision, draft => {
+      if (operationDigest(draft, row.kind) !== row.afterDigest) throw fault('undo-conflict', 'Later edits changed this workflow. Undo those edits first; no changes were overwritten.')
+      return row.inverse ? applyInverse(draft, row.inverse) : row.before
+    }, { id, kind: 'undo', undoOf: operationId, requestHash: digest({ operationId, expectedDraftRevision }) })
   }
 
   async discardDraft(projectId, expectedDraftRevision) {
@@ -362,6 +427,7 @@ export class ProjectStore {
       if (!Number.isSafeInteger(run.startIndex) || !Number.isSafeInteger(run.endIndex) || run.startIndex < 1 || run.endIndex > MAX_BATCH_CASES || run.endIndex - run.startIndex + 1 !== run.batchSize) throw new DirectorInputError('invalid batch range')
     }
     if (run.batchRunId !== undefined) uuid(run.batchRunId, 'batchRunId')
+    if (run.qualityPlanId !== undefined) uuid(run.qualityPlanId, 'qualityPlanId')
     if (run.caseId !== undefined) uuid(run.caseId, 'caseId')
     if (run.caseIndex !== undefined && (!Number.isSafeInteger(run.caseIndex) || run.caseIndex < 1 || run.caseIndex > MAX_BATCH_CASES)) throw new DirectorInputError('invalid caseIndex')
     if (!Array.isArray(run.nodeIds) || run.nodeIds.length > 2000
@@ -374,7 +440,7 @@ export class ProjectStore {
       const path = join(directory, `${runId}.json`)
       const snapshotPath = join(directory, `${runId}.snapshot.json`)
       const previous = await readJson(path, undefined)
-      if (previous !== undefined && ['kind', 'batchRunId', 'caseId', 'caseIndex', 'batchInputNodeId', 'startIndex', 'endIndex'].some(key => previous[key] !== run[key])) throw new DirectorInputError('vd-run identity is immutable')
+      if (previous !== undefined && ['kind', 'qualityPlanId', 'batchRunId', 'caseId', 'caseIndex', 'batchInputNodeId', 'startIndex', 'endIndex'].some(key => previous[key] !== run[key])) throw new DirectorInputError('vd-run identity is immutable')
       if (previous === undefined && submitted === undefined) throw new DirectorInputError('a new vd-run requires a snapshot')
       // Submission contents are write-once, including on a retried RPC.
       await mkdir(directory, { recursive: true })
@@ -611,6 +677,7 @@ export class ProjectStore {
     const candidate = normalizedProject({
       ...value,
       id,
+      operationHead: current.operationHead,
       revision: current.revision + 1,
       draftRevision: current.draftRevision + (commit ? 1 : 0),
       sessionId: preserveSession ? current.sessionId : value.sessionId,

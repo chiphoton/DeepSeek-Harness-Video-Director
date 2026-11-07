@@ -76,6 +76,7 @@ export class WorkflowScheduler {
     try {
       for (const [repeatIndex, id] of ids.entries()) {
         const run = { id, projectId, scheduler: 'host', submissionHash, queueSequence: ++this.sequence,
+          ...(input.qualityPlanId ? { qualityPlanId: uuid(input.qualityPlanId, 'qualityPlanId') } : {}),
           workflowName: source.name, mode: options.mode, batchSize: 1, nodeIds: plan.nodeIds,
           totalJobs: plan.nodeIds.length, completedJobs: 0, status: 'queued', startedAt: now(), queuedAt: now(),
           execution: { selectedNodeIds: options.selectedNodeIds, repeatIndex, sourceRevision: project.revision },
@@ -195,7 +196,7 @@ export class WorkflowScheduler {
           ;({ job: receipt } = await this.call('jobs/start', { projectId: run.projectId, nodeId, clientRunId: randomUUID(),
             snapshot: { version: 1, sourceRevision: run.execution?.sourceRevision ?? source.revision,
               nodeType: prepared.node.data.nodeType, nodeVersion: prepared.node.data.nodeVersion, nodeDigest: prepared.node.data.nodeDigest,
-              request: prepared.request } }))
+              request: { ...prepared.request, ...(run.qualityPlanId ? { qualityPlanId: run.qualityPlanId } : {}) } } }))
         } catch (error) {
           if (row && error.code !== 'video-director/invalid-input') {
             row.uncertain = true

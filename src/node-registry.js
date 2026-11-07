@@ -543,6 +543,38 @@ function workflowDefinition(workflow) {
         minLength: field.schema?.minLength,
         maxLength: field.schema?.maxLength,
       }))
+  const parameterInputs = parameterInputsForWorkflow(workflow, fields)
+  for (const input of parameterInputs) {
+    if (fields.some(field => field.id === input.id)) continue
+    // A bound prompt can have a port even when the workflow has no parameter
+    // row for it. Render the matching field so the canvas can draw that edge.
+    fields.push({
+      ...input,
+      schema: { type: 'string' },
+      default: '',
+      control: 'textarea',
+      placement: input.id === 'prompt' ? 'primary' : 'advanced',
+      order: input.id === 'prompt' ? -1 : 0,
+    })
+  }
+  if (workflow.builtIn && workflow.modelFamily === 'minimax-h3'
+    && typeof workflow.defaults.duration === 'number'
+    && workflow.bindings.some(binding => binding.from === 'duration')
+    && !fields.some(field => field.id === 'duration')) {
+    fields.push({
+      id: 'duration',
+      label: 'Duration (seconds)',
+      type: 'number',
+      schema: { type: 'number', min: 0.1, max: 15, step: 0.1 },
+      default: workflow.defaults.duration,
+      min: 0.1,
+      max: 15,
+      step: 0.1,
+      placement: 'primary',
+      control: 'input',
+      order: 0,
+    })
+  }
   const declaredInputs = clone(manifest.inputs ?? ports.inputs)
   if (!declaredInputs.some(port => port.id === 'flow')) {
     declaredInputs.push({ id: 'flow', label: 'Flow', types: ['flow'], multiple: true })
@@ -563,8 +595,8 @@ function workflowDefinition(workflow) {
     modelFamily: workflow.modelFamily,
     inputs: declaredInputs,
     outputs: clone(manifest.outputs ?? ports.outputs),
-    fields: clone(fields ?? []),
-    parameterInputs: parameterInputsForWorkflow(workflow, fields ?? []),
+    fields: clone(fields),
+    parameterInputs,
   }
 }
 

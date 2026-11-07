@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { build } from 'esbuild'
 import { JSDOM } from 'jsdom'
+import { VdNodeRegistry } from '../src/node-registry.js'
+import { ComfyWorkflowStore } from '../src/workflow-store.js'
 
 const dom = new JSDOM('<div id="root"></div><button id="outside">Outside</button>', { url: 'http://localhost/', pretendToBeVisual: true })
 test.after(() => dom.window.close())
@@ -20,12 +25,13 @@ const bundle = await build({
     import { DirectorNodeView, DirectorRuntimeProvider } from './DirectorNode';
     import { setLanguage } from './i18n';
     export { act, setLanguage };
-    export function mount(calls, field = {}) {
+    export function mount(calls, field = {}, fixture) {
       function Fixture() {
-        const [data, setData] = useState({ kind: 'video-generation', nodeType: 'test.numeric', title: 'Synthetic video', duration: 10 });
+        const [data, setData] = useState(fixture?.data ?? { kind: 'video-generation', nodeType: 'test.numeric', title: 'Synthetic video', duration: 10 });
         const runtime = { providers: [], workflows: [], references: {},
           nodeDefinitions: [{ type: 'test.numeric', version: '1.0.0', behavior: 'workflow', inputs: [], outputs: [],
             fields: [{ id: 'duration', label: 'Duration', type: 'number', default: 10, min: 1, max: 15, placement: 'primary', ...field }] }],
+          ...fixture?.catalog,
           onChange: (_, patch) => { calls.push(patch); setData(current => ({ ...current, ...patch })); } };
         return <ReactFlowProvider><DirectorRuntimeProvider value={runtime}>
           <DirectorNodeView id="video" data={data} />
@@ -129,4 +135,37 @@ test('schema sliders still update the model while dragging', t => {
   assert.equal(input.type, 'range')
   type(input, '8')
   assert.deepEqual(calls, [{ duration: 8 }])
+})
+
+test('a pinned H3 reference-to-video node exposes its saved duration as a primary control', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'vd-duration-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const workflows = new ComfyWorkflowStore(directory)
+  await workflows.init()
+  const nodeDefinitions = new VdNodeRegistry(workflows).list()
+  const workflowId = 'builtin-minimax-h3-reference-to-video-turbo'
+  const definition = nodeDefinitions.find(candidate => candidate.workflowId === workflowId)
+  const data = {
+    kind: 'video-generation', title: 'Animate the reference', providerId: 'comfyui',
+    nodeType: definition.type, nodeVersion: definition.version, workflowId,
+    modelFamily: 'minimax-h3', duration: 5,
+    fieldInputModes: { prompt: { mode: 'input' } },
+  }
+  const catalog = {
+    workflows: workflows.list(), nodeDefinitions,
+    providers: [{ id: 'comfyui', label: 'ComfyUI', kind: 'comfyui', capabilities: ['workflow'], minimaxH3Unlocked: true }],
+  }
+  const calls = []
+  let root
+  ui.act(() => { ui.setLanguage('en'); root = ui.mount(calls, undefined, { data, catalog }) })
+  t.after(() => ui.act(() => root.unmount()))
+  const label = [...document.querySelectorAll('label')].find(candidate => candidate.textContent === 'Duration (seconds)')
+  assert.ok(label, 'the built-in definition must expose duration in the node editor')
+  assert.equal(label.closest('details'), null)
+  const input = label.querySelector('input')
+  assert.equal(input.value, '5')
+  ui.act(() => input.focus())
+  type(input, '7.5')
+  ui.act(() => input.blur())
+  assert.deepEqual(calls, [{ duration: 7.5 }])
 })

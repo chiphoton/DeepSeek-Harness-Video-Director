@@ -2,6 +2,7 @@
   <a href="README_zh.md">简体中文</a> ·
   <a href="docs/INSTALL.md">Agent installation guide</a> ·
   <a href="docs/DEVELOP.md">Developer guide</a> ·
+  <a href="docs/agent-workspace.md">Sidebar agent workspace</a> ·
   <a href="docs/TERMINOLOGY.md">Terminology</a> ·
   <a href="custom_nodes/README.md">vd-node definitions</a> ·
   <a href="examples/README.md">Example Gallery</a>
@@ -87,8 +88,8 @@ Open **Settings → Connections** in Video-Director:
 
 - **Ollama:** defaults to `127.0.0.1:11434`; install a model such as Qwen3.8-27B on the Ollama host, then select it in Video-Director.
 - **ComfyUI:** defaults to `127.0.0.1:8188`; install each comfyui-workflow's required models and ComfyUI custom-node packages on the ComfyUI server.
-- **OpenAI Compatible:** set the Base URL and API key, then refresh to discover the provider's model list.
-- **Codex Coding Plan:** uses the machine's existing Codex sign-in for prompt and image workflows. Models and default reasoning effort come from the installed CLI. **Refresh** reloads the catalog; **Fast (priority)** is optional and off by default. Set `DSH_VIDEO_DIRECTOR_CODEX_PATH` if Codex is not on PATH.
+- **OpenAI Compatible:** the Base URL and API key start blank. Enter your provider's details, then select **Refresh** to discover its models.
+- **Codex Coding Plan:** uses the machine's Codex sign-in for prompt and image workflows. Run `codex login` if needed, then select **Refresh** to load the CLI's model catalog. **Fast (priority)** is optional and off by default. Set `DSH_VIDEO_DIRECTOR_CODEX_PATH` if Codex is not on PATH.
 
 Connection fields save when you leave the field or press Enter. **Refresh** checks the saved connection and displays its model inventory; choose generation models on individual nodes. ComfyUI lists installed files under **checkpoints**, **diffusion_models**, **loras**, and **vae** tabs, with search inside each category. Samplers, schedulers, and other workflow options remain in node controls. **Unload Models** releases loaded Ollama models or requests ComfyUI model/cache cleanup on that card's endpoint. Installed model files remain available. On narrow screens, Refresh and Unload Models use icons. A blank API key field keeps the saved key; **Clear saved key** explicitly removes its settings override.
 
@@ -144,6 +145,7 @@ Useful canvas gestures:
 - **Select (V):** drag empty canvas to pan, click a node to select it, and drag a node to move it. **Hand (H):** drag anywhere to pan, including over nodes and their controls. Hold Space for temporary Hand navigation.
 - The sidebar accepts **Image, Audio, Video, Folder and Node** references. Compact tiles show preview/remove controls on hover or keyboard focus; clicking the body inserts an atomic alias such as `<Image 1>`. Removing an unsent reference renumbers draft aliases; aliases already sent remain stable. Double-click anywhere on a node title bar, drag its editable title into chat, choose **+ → Node**, or right-click the node and choose **Add to Chat References**. Media and folders can be dropped anywhere in the sidebar. Folder previews offer a searchable tree. Aliases belong to the conversation; imported canvas assets retain their original filenames.
 - Sidebar context contains a compact workflow summary. The Host-owned `vd_canvas` tool queries details on demand and can edit/validate/run workflows after tabs close. Conflicting human/agent edits are detected. See [sidebar architecture and validation](docs/sidebar-chat-architecture-2026-09-28.md) for commands, context handling and current limits.
+- Type **$skill-name** in chat or use **$ Skills** below the input. The chatbox gear opens **Manage skills** and dsh’s native **Model settings**; model choices stay shared with dsh. **Gallery** and **Tasks** remain the media and job views. See the [agent workspace guide](docs/agent-workspace.md).
 - **Ctrl-drag** selects a group in either mode; **Ctrl-click** adds or removes a node. On macOS, **Command** also works for these gestures and shortcuts; Ctrl-click selects without opening a context menu. Selected nodes have an expanded border, and draggable node areas use a crosshair cursor in Select mode. **Ctrl+B** freezes or unfreezes the selection.
 - Scroll to zoom over the canvas or nodes. Scrollable fields and panels consume the wheel to scroll their own content.
 - Right-click empty canvas for the **Node catalog**, **Reset VRAM**, or **Paste**. Right-click a node for Run/Cancel, Freeze, **Copy**, Duplicate, Rename, Details, and Delete. Input fields retain their native context menu.

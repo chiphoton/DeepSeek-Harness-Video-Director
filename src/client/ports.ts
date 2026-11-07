@@ -254,13 +254,22 @@ function declaredPort(
   direction: PortDirection,
   handle: string | null | undefined,
 ): { port: VdPortDescriptor; handle: string } | undefined {
-  const definition = nodeDefinition(node.data, definitions)
-  const ports = direction === 'input'
-    ? inputPortsFor(node.data, definition)
-    : definition?.outputs ?? (implicitOutputPort(node) === undefined ? [] : [implicitOutputPort(node)!])
+  const ports = nodePorts(node, definitions, direction)
   const port = portFromPorts(ports, direction, handle)
   if (port === undefined) return undefined
   return { port, handle: portHandleId(direction, port, ports) }
+}
+
+export function nodePorts(
+  node: DirectorNode,
+  definitions: readonly VdNodeDefinitionDescriptor[],
+  direction: PortDirection,
+): readonly VdPortDescriptor[] {
+  const definition = nodeDefinition(node.data, definitions)
+  if (direction === 'input') return inputPortsFor(node.data, definition)
+  if (definition) return definition.outputs
+  const fallback = implicitOutputPort(node)
+  return fallback ? [fallback] : []
 }
 
 export function resolveNodePort(

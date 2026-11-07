@@ -1,9 +1,10 @@
 import { forwardRef, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import type { ClipboardEvent, DragEvent, KeyboardEvent } from 'react'
 import { CHAT_ALIAS_MIME, type ChatAttachment } from './chat-attachments'
+import { skillMentions } from './chat-skills'
 
-export interface ChatPromptEditorHandle { insert(alias: string): void; focus(): void }
-interface Props {
+export interface ChatPromptEditorHandle { insert(alias: string): void; replace(start: number, end: number, text: string): void; focus(): void }
+export interface ChatPromptEditorProps {
   value: string
   attachments: ChatAttachment[]
   placeholder: string
@@ -11,6 +12,10 @@ interface Props {
   onPreview(item: ChatAttachment): void
   onKeyDown(event: KeyboardEvent<HTMLDivElement>): void
   onFiles(files: File[]): void
+  onCaretChange?(offset: number | null, afterSkill?: boolean): void
+  editingSkillStart?: number
+  suggestionsId?: string
+  activeSuggestionId?: string
 }
 
 function content(node: Node): string {
@@ -32,6 +37,13 @@ function selectionOffsets(root: HTMLElement): { start: number; end: number } | n
 }
 function caret(root: HTMLElement): number | null { return selectionOffsets(root)?.end ?? null }
 
+function offsetBefore(root: HTMLElement, node: Node): number {
+  const range = document.createRange()
+  range.selectNodeContents(root)
+  range.setEndBefore(node)
+  return content(range.cloneContents()).length
+}
+
 function positionCaret(root: HTMLElement, offset: number): void {
   const range = document.createRange()
   for (const node of root.childNodes) {
@@ -49,44 +61,68 @@ function positionCaret(root: HTMLElement, offset: number): void {
   window.getSelection()?.removeAllRanges(); window.getSelection()?.addRange(range)
 }
 
-/** Plain text storage with atomic, editable-in-place attachment references. */
-export const ChatPromptEditor = forwardRef<ChatPromptEditorHandle, Props>(function ChatPromptEditor(props, forwardedRef) {
+/** Plain text storage with inline boxes for attachment and skill references. */
+export const ChatPromptEditor = forwardRef<ChatPromptEditorHandle, ChatPromptEditorProps>(function ChatPromptEditor(props, forwardedRef) {
   const ref = useRef<HTMLDivElement>(null)
   const savedCaret = useRef<number | null>(null)
   const savedSelection = useRef<{ start: number; end: number } | null>(null)
   const [compositionVersion, setCompositionVersion] = useState(0)
   const composing = useRef(false)
   const dragged = useRef<{ alias: string; offset: number } | null>(null)
-  const insert = (text: string): void => {
-    const root = ref.current!
-    const selected = selectionOffsets(root) ?? savedSelection.current ?? { start: props.value.length, end: props.value.length }
-    root.focus()
-    savedCaret.current = selected.start + text.length
+  const replace = (start: number, end: number, text: string): void => {
+    ref.current!.focus()
+    savedCaret.current = start + text.length
     savedSelection.current = { start: savedCaret.current, end: savedCaret.current }
-    props.onChange(props.value.slice(0, selected.start) + text + props.value.slice(selected.end))
+    props.onChange(props.value.slice(0, start) + text + props.value.slice(end))
+    props.onCaretChange?.(savedCaret.current)
   }
-  useImperativeHandle(forwardedRef, () => ({ insert, focus: () => ref.current?.focus() }))
+  const insert = (text: string): void => {
+    const selected = selectionOffsets(ref.current!) ?? savedSelection.current ?? { start: props.value.length, end: props.value.length }
+    replace(selected.start, selected.end, text)
+  }
+  useImperativeHandle(forwardedRef, () => ({ insert, replace, focus: () => ref.current?.focus() }))
   useLayoutEffect(() => {
     const root = ref.current!
     if (composing.current) return
     const at = savedCaret.current ?? caret(root)
     const aliases = new Map(props.attachments.map(item => [item.alias, item]))
-    const tokenized = [...root.querySelectorAll<HTMLElement>('[data-alias]')].map(node => node.dataset.alias)
-    const wanted = (props.value.match(/<(?:Image|Audio|Video|Folder|Node) [1-9]\d*>/g) ?? []).filter(alias => aliases.has(alias))
-    if (content(root) === props.value && tokenized.join('\0') === wanted.join('\0')) { savedCaret.current = null; return }
-    const parts = props.value.split(/(<(?:Image|Audio|Video|Folder|Node) [1-9]\d*>)/g)
-    root.replaceChildren(...parts.filter(Boolean).map(part => {
-      const item = aliases.get(part)
-      if (!item) return document.createTextNode(part)
+    const tokens: { start: number; end: number; attachment?: ChatAttachment }[] = skillMentions(props.value)
+      .filter(mention => mention.start !== props.editingSkillStart)
+    for (const match of props.value.matchAll(/<(?:Image|Audio|Video|Folder|Node) [1-9]\d*>/g)) {
+      const attachment = aliases.get(match[0])
+      if (attachment) tokens.push({ start: match.index, end: match.index + match[0].length, attachment })
+    }
+    tokens.sort((a, b) => a.start - b.start)
+    const tokenized = [...root.querySelectorAll<HTMLElement>('[data-alias], [data-skill-mention]')]
+    if (content(root) === props.value && tokenized.length === tokens.length && tokens.every(({ start, end, attachment }, index) => {
+      const token = tokenized[index]!
+      return (attachment ? token.dataset.attachmentId === attachment.id : token.hasAttribute('data-skill-mention'))
+        && token.textContent === props.value.slice(start, end) && offsetBefore(root, token) === start
+    })) { savedCaret.current = null; return }
+    const parts: (string | HTMLElement)[] = []
+    let from = 0
+    for (const { start, end, attachment } of tokens) {
+      if (start > from) parts.push(props.value.slice(from, start))
+      const text = props.value.slice(start, end)
       const token = document.createElement('span')
-      token.className = 'vd-chat-alias'; token.contentEditable = 'false'; token.draggable = true
-      token.dataset.alias = part; token.dataset.attachmentId = item.id; token.tabIndex = 0
-      token.textContent = part; token.setAttribute('role', 'button'); token.title = item.name
-      return token
-    }))
+      token.contentEditable = 'false'
+      token.textContent = text
+      if (attachment) {
+        token.className = 'vd-chat-alias'; token.draggable = true
+        token.dataset.alias = text; token.dataset.attachmentId = attachment.id; token.tabIndex = 0
+        token.setAttribute('role', 'button'); token.title = attachment.name
+      } else {
+        token.className = 'vd-chat-skill-mention'
+        token.dataset.skillMention = text
+      }
+      parts.push(token)
+      from = end
+    }
+    if (from < props.value.length) parts.push(props.value.slice(from))
+    root.replaceChildren(...parts)
     if (at !== null && document.activeElement === root) positionCaret(root, Math.min(at, props.value.length))
     savedCaret.current = null
-  }, [props.value, props.attachments, compositionVersion])
+  }, [props.value, props.attachments, props.editingSkillStart, compositionVersion])
   const clipboard = (event: ClipboardEvent<HTMLDivElement>, cut: boolean): void => {
     const selection = window.getSelection()
     if (!selection?.rangeCount || selection.isCollapsed) return
@@ -110,13 +146,22 @@ export const ChatPromptEditor = forwardRef<ChatPromptEditorHandle, Props>(functi
     props.onChange(text.slice(0, target) + alias + text.slice(target))
     dragged.current = null
   }
+  const reportCaret = (): void => {
+    const root = ref.current!
+    savedSelection.current = selectionOffsets(root)
+    const end = composing.current ? null : savedSelection.current?.end ?? null
+    const afterSkill = end !== null && [...root.querySelectorAll<HTMLElement>('[data-skill-mention]')].some(token => (
+      offsetBefore(root, token) + content(token).length === end
+    ))
+    props.onCaretChange?.(end, afterSkill)
+  }
   return <div ref={ref} className="vd-chat-prompt" role="textbox" aria-label={props.placeholder} aria-multiline="true"
+    aria-autocomplete="list" aria-controls={props.suggestionsId} aria-activedescendant={props.activeSuggestionId}
     contentEditable suppressContentEditableWarning data-placeholder={props.placeholder}
-    onInput={() => { savedCaret.current = caret(ref.current!); props.onChange(content(ref.current!)) }}
+    onInput={() => { savedCaret.current = caret(ref.current!); props.onChange(content(ref.current!)); reportCaret() }}
     onBlur={() => { savedSelection.current = selectionOffsets(ref.current!) ?? savedSelection.current }}
-    onKeyUp={() => { savedSelection.current = selectionOffsets(ref.current!) }}
-    onMouseUp={() => { savedSelection.current = selectionOffsets(ref.current!) }}
-    onCompositionStart={() => { composing.current = true }} onCompositionEnd={() => { composing.current = false; props.onChange(content(ref.current!)); setCompositionVersion(value => value + 1) }}
+    onKeyUp={reportCaret} onMouseUp={reportCaret} onFocus={reportCaret}
+    onCompositionStart={() => { composing.current = true; props.onCaretChange?.(null) }} onCompositionEnd={() => { composing.current = false; props.onChange(content(ref.current!)); setCompositionVersion(value => value + 1); reportCaret() }}
     onClick={event => { const target = (event.target as HTMLElement).closest<HTMLElement>('[data-attachment-id]'); const item = props.attachments.find(item => item.id === target?.dataset.attachmentId); if (item) props.onPreview(item) }}
     onKeyDown={event => {
       const token = (event.target as HTMLElement).closest<HTMLElement>('[data-attachment-id]')
@@ -129,8 +174,7 @@ export const ChatPromptEditor = forwardRef<ChatPromptEditorHandle, Props>(functi
     onDragStart={event => {
       const target = (event.target as HTMLElement).closest<HTMLElement>('[data-alias]')
       if (!target?.dataset.alias) return
-      const range = document.createRange(); range.selectNodeContents(ref.current!); range.setEndBefore(target)
-      dragged.current = { alias: target.dataset.alias, offset: content(range.cloneContents()).length }
+      dragged.current = { alias: target.dataset.alias, offset: offsetBefore(ref.current!, target) }
       event.dataTransfer.setData(CHAT_ALIAS_MIME, target.dataset.alias); event.dataTransfer.setData('text/plain', target.dataset.alias)
       event.dataTransfer.effectAllowed = 'copyMove'
     }} onDragEnd={() => { dragged.current = null }} onDragOver={event => { if (event.dataTransfer.types.includes(CHAT_ALIAS_MIME)) event.preventDefault() }} onDrop={drop} />

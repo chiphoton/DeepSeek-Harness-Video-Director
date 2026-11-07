@@ -214,6 +214,7 @@ test('creating a project rejects a failed durable Session rename before persisti
 
 test('project export and Duplicate preserve canvas assets while resetting active runtime state', async () => {
   const Controller = await DirectorController()
+  const workspaceId = '00000000-0000-4000-8000-000000000042'
   const sourceSessionId = '00000000-0000-4000-8000-000000000043'
   const copySessionId = '00000000-0000-4000-8000-000000000044'
   const copyProjectId = '00000000-0000-4000-8000-000000000045'
@@ -263,7 +264,7 @@ test('project export and Duplicate preserve canvas assets while resetting active
     sessions: {
       list: { getSnapshot: () => list, subscribe: () => () => {} },
       async create(options = {}) {
-        assert.deepEqual(options, {})
+        assert.deepEqual(options, { workspaceId })
         const sessionId = createdSessions.shift()
         assert.notEqual(sessionId, undefined)
         list.ids.push(sessionId)
@@ -279,7 +280,7 @@ test('project export and Duplicate preserve canvas assets while resetting active
     connection: {
       rpc: {
         async call(_channel, endpoint, payload) {
-          if (endpoint === 'projects/list') return { ok: true, value: { projects: [{ ...source, nodeCount: 1 }] } }
+          if (endpoint === 'projects/list') return { ok: true, value: { projects: [{ ...source, nodeCount: 1 }], workspaceId } }
           if (endpoint === 'providers/list') return { ok: true, value: { providers: [] } }
           if (endpoint === 'workflows/list') return { ok: true, value: { workflows: [] } }
           if (endpoint === 'nodes/list') return { ok: true, value: { nodeDefinitions: [] } }
@@ -520,7 +521,10 @@ test('Codex discovery refreshes metadata while an existing node keeps its unavai
   })
   const call = ctx.connection.rpc.call
   ctx.connection.rpc.call = (channel, endpoint, payload) => endpoint === 'providers/list'
-    ? Promise.resolve({ ok: true, value: { providers: [{ id: 'codex-plan', kind: 'codex-plan', configured: true, availableModels: [] }] } })
+    ? Promise.resolve({ ok: true, value: { providers: [{
+      id: 'codex-plan', kind: 'codex-plan', configured: true, availableModels: ['future-model'],
+      codexCatalog: { source: 'cache', fetchedAt: 1000, error: null },
+    }] } })
     : call(channel, endpoint, payload)
   const controller = new Controller(ctx)
   t.after(() => controller.dispose())
@@ -533,6 +537,27 @@ test('Codex discovery refreshes metadata while an existing node keeps its unavai
   await controller.runNode('text')
   assert.equal(requestedModel, 'retired-model', 'Backend must validate the saved model, never silently select the default')
   assert.equal(controller.getSnapshot().project.graph.nodes[0].data.modelId, 'retired-model')
+})
+
+test('a fresh Codex connection waits for an explicit model refresh', async t => {
+  const Controller = await DirectorController()
+  const provider = { id: 'codex-plan', kind: 'codex-plan', configured: true, availableModels: [],
+    codexCatalog: { source: 'unavailable', fetchedAt: null, error: null } }
+  const requests = []
+  const controller = new Controller({
+    sessions: { list: { getSnapshot: () => ({ byId: {} }), subscribe: () => () => {} } },
+    connection: { rpc: { call: async (_channel, endpoint) => {
+      requests.push(endpoint)
+      const value = { 'providers/list': { providers: [provider] }, 'projects/list': { projects: [] },
+        'workflows/list': { workflows: [] }, 'nodes/list': { nodeDefinitions: [] } }[endpoint]
+      return { ok: true, value }
+    } } },
+  })
+  t.after(() => controller.dispose())
+  await controller.start()
+  assert.equal(controller.getSnapshot().phase, 'ready')
+  assert.deepEqual(controller.getSnapshot().providers, [provider])
+  assert.equal(requests.includes('providers/models'), false)
 })
 
 test('project export omits generated Preview artifacts while preserving source assets', async () => {

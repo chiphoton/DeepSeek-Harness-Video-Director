@@ -21,13 +21,13 @@ const bundle = await build({ stdin: { resolveDir: fileURLToPath(new URL('../src/
   export { projectGallery, allProjectGalleries, filterGallery } from './gallery-artifacts';
   export { setLanguage } from './i18n';
   export { act };
-  function Fixture({project, loadProjects}) {
+  function Fixture({project, loadProjects, onAddToChat}) {
     const [open, setOpen] = useState(true);
-    return open ? <ArtifactGallery project={project} loadProjects={loadProjects} onClose={() => setOpen(false)} /> : null;
+    return open ? <ArtifactGallery project={project} loadProjects={loadProjects} onAddToChat={onAddToChat} onClose={() => setOpen(false)} /> : null;
   }
-  export function mount(project, loadProjects) {
+  export function mount(project, loadProjects, onAddToChat) {
     const root = createRoot(document.getElementById('root'));
-    root.render(<Fixture project={project} loadProjects={loadProjects}/>);
+    root.render(<Fixture project={project} loadProjects={loadProjects} onAddToChat={onAddToChat}/>);
     return root;
   }
 ` }, bundle: true, format: 'cjs', platform: 'node', packages: 'external', write: false, define: { 'process.env.NODE_ENV': '"development"' } })
@@ -48,10 +48,10 @@ const project = { id: 'project', name: 'Gallery test', graph: { nodes: [
   { id: 'job-c', nodeId: 'text-node', operation: 'prompt-enhancer', createdAt: '2026-09-17T00:00:00Z', result: { kind: 'text', text: 'CD' } },
 ] }
 
-async function mount(t, value = project, loadProjects = async () => []) {
+async function mount(t, value = project, loadProjects = async () => [], onAddToChat) {
   let root
   document.getElementById('launcher').focus()
-  await ui.act(async () => { ui.setLanguage('en'); root = ui.mount(value, loadProjects) })
+  await ui.act(async () => { ui.setLanguage('en'); root = ui.mount(value, loadProjects, onAddToChat) })
   t.after(() => ui.act(() => root.unmount()))
   return root
 }
@@ -81,6 +81,21 @@ const otherProject = { ...project, id: 'other', name: 'Rain Scene', graph: { nod
   node('Reference lantern', { kind: 'load-image', asset: { ...image, id: 'lantern', name: 'Lantern.PNG', projectId: 'other' } }),
   node('Scene notes', { kind: 'load-text', text: 'Blue moon over the lake' }),
 ] }, jobs: [] }
+
+test('Gallery hands current-workflow images and video frames to the composer action', async t => {
+  const selected = []
+  await mount(t, project, async () => [otherProject], async asset => { selected.push(asset.id) })
+  await click('Preview Lantern.PNG')
+  assert.ok(![...document.querySelectorAll('button')].some(button => button.textContent === 'Add to chat'))
+  await click('Close artifact preview')
+  await click('Preview source.png')
+  await click('Add to chat')
+  await click('Close artifact preview')
+  await ui.act(async () => document.querySelector('[role="tab"][id$="-output"]').click())
+  await click('Preview output.mp4')
+  await click('Add frames to chat')
+  assert.deepEqual(selected, ['image', 'video'])
+})
 
 test('all workflows are visible by default and workflow/search filters combine without changing the active project', async t => {
   const original = structuredClone(project)

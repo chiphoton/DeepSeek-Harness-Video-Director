@@ -25,14 +25,17 @@ try {
     bridge: 'packages/client/connection/src/http-bridge.ts',
     HostConnectionService: 'packages/client/connection/src/rpc-host.ts',
     createWebConnectionRpc: 'packages/client/connection/src/client/rpc.ts',
+    createSettingsShellStore: 'packages/client/ui-settings-general/src/client/shell-store.ts',
+    ModelDirectoryResolver: 'packages/client/ui-model-selection/src/client/service.ts',
   }
   await build({
     stdin: { contents: [
       ...Object.entries(modules).map(([name, path]) => `export { ${name} } from ${JSON.stringify(join(upstream, path))};`),
-      'export { Context } from "@deepseek-ai/cordis";',
+      'export { Context, Service } from "@deepseek-ai/cordis";',
+      `export { inject as directorInject } from ${JSON.stringify(join(root, 'src/client/index.tsx'))};`,
       `export { ProjectChatSource } from ${JSON.stringify(join(root, 'src/client/chat-source.ts'))};`,
     ].join('\n'), resolveDir: upstream, loader: 'ts' },
-    bundle: true, platform: 'node', format: 'esm', target: 'node22',
+    bundle: true, platform: 'node', format: 'esm', target: 'node22', jsx: 'automatic', loader: { '.css': 'text' },
     tsconfig: join(upstream, 'tsconfig.base.json'),
     nodePaths: [join(runtime, 'node_modules'), join(root, 'node_modules')],
     banner: { js: "import { createRequire as __require } from 'node:module'; const require = __require(import.meta.url);" },

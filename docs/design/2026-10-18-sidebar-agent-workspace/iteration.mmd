@@ -1,0 +1,13 @@
+flowchart LR
+  BRIEF[Brief and selected skills] --> READ[Bounded overview and relevant queries]
+  READ --> PLAN[Plan and quality criteria]
+  PLAN --> PATCH[Revision-checked draft patch]
+  PATCH --> VALIDATE[Validate and reserve budget]
+  VALIDATE --> RUN[Run affected nodes]
+  RUN --> EVIDENCE[Inspect selected evidence]
+  EVIDENCE --> DECIDE{Checks and allowance}
+  DECIDE -->|Criteria satisfied| ACCEPT[Accepted checkpoint]
+  DECIDE -->|Revise, budget remains| PATCH
+  DECIDE -->|Budget, no progress, interruption| STOP[Recorded stop or human review]
+  RUN -.-> HISTORY[(Immutable run and skill versions)]
+  EVIDENCE -.-> HISTORY

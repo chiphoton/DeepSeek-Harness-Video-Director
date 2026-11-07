@@ -1079,13 +1079,14 @@ test('Director RPC routes mixed reference media by type and enforces the R2V slo
     nodes,
     providerSettings: { updateProvider: async () => {} },
   })
-  const start = mediaInputs => rpc('jobs/start', {
+  const start = (mediaInputs, duration) => rpc('jobs/start', {
     projectId: project.id,
     operation: 'video-generation',
     providerId: 'comfyui',
     workflowId: 'builtin-minimax-h3-reference-to-video-turbo',
     workflowValues: {},
     mediaInputs,
+    duration,
   })
 
   let result = await start([
@@ -1096,6 +1097,7 @@ test('Director RPC routes mixed reference media by type and enforces the R2V slo
     { portId: 'reference', mediaKind: 'audio', assetId: audioTwo.id },
   ])
   assert.equal(result.ok, true)
+  assert.equal(queued[0].duration, 15, 'use the same workflow default the editor displays')
   const references = queued[0].bindings.filter(binding => binding.referenceKind !== undefined && binding.assetId !== undefined)
   assert.deepEqual(references.map(binding => [binding.nodeId, binding.referenceKind, binding.portIndex, binding.assetId]), [
     ['137', 'image', 0, imageOne.id],
@@ -1109,8 +1111,9 @@ test('Director RPC routes mixed reference media by type and enforces the R2V slo
     { portId: 'reference', mediaKind: 'image', assetId: imageOne.id },
     { portId: 'reference', mediaKind: 'image', assetId: imageTwo.id },
     { portId: 'reference', mediaKind: 'image', assetId: imageThree.id },
-  ])
+  ], 7.5)
   assert.equal(result.ok, true)
+  assert.equal(queued[1].duration, 7.5, 'keep the node duration when preparing the render request')
   assert.equal(queued[1].bindings.find(binding => binding.referenceKind === 'image' && binding.portIndex === 2).assetId, imageThree.id)
 
   const media = (mediaKind, asset, count) => Array.from({ length: count }, () => ({ portId: 'reference', mediaKind, assetId: asset.id }))
